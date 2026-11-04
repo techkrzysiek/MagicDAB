@@ -36,6 +36,9 @@ pub struct PadDecoder {
     apps: Vec<(u8, Assembler)>,
     xpad: Vec<u8>,
     pub errors: u64,
+    /// X-PAD bytes the last field took: with MP2 the frame says nothing of
+    /// the length, `process` gets a longer window (for the PAD rate shown).
+    pub used: usize,
 }
 
 impl PadDecoder {
@@ -65,6 +68,7 @@ impl PadDecoder {
         self.xpad.clear();
         self.xpad.extend(xpad_rev.iter().rev());
         let xpad_len = self.xpad.len();
+        self.used = if exact { xpad_len } else { 0 };
         let fpad_type = fpad[0] >> 6;
         let xpad_ind = (fpad[0] >> 4) & 0x03;
         let ci_flag = fpad[1] & 0x02 != 0;
@@ -121,6 +125,9 @@ impl PadDecoder {
             return;
         }
         let announced: usize = ci_len + cis.iter().map(|c| c.len).sum::<usize>();
+        if !exact {
+            self.used = announced.min(xpad_len);
+        }
         if announced > xpad_len {
             // the subfields do not fit: corrupted
             self.errors += 1;
@@ -287,6 +294,8 @@ mod tests {
         frame(&mut dec, &dg[3..7], false, &mut out);
         frame(&mut dec, &[dg[7], 0, 0, 0], false, &mut out);
         assert!(matches!(out.as_slice(), [PadEvent::Dls(d)] if *d == dg), "errors {}", dec.errors);
+        // (a field of the 40 byte window took 4 bytes of it)
+        assert_eq!(dec.used, 4);
     }
 
     #[test]
@@ -311,5 +320,6 @@ mod tests {
         // without a CI list: the next 10 bytes, not 8
         field(&mut dec, &dg[8..18], false, &mut out);
         assert!(matches!(out.as_slice(), [PadEvent::Dls(d)] if *d == dg), "errors {}", dec.errors);
+        assert_eq!(dec.used, 10);
     }
 }

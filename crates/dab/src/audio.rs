@@ -273,10 +273,11 @@ impl AudioDecoder {
     }
 
     fn handle_pad(&mut self, xpad: &[u8], exact: bool, fpad: [u8; 2], out: &mut Vec<ServiceEvent>) {
-        self.stats.pad_bytes += xpad.len() as u64 + 2;
         self.pad_events.clear();
         let mut events = std::mem::take(&mut self.pad_events);
         self.pad.process(xpad, exact, fpad, &mut events);
+        // (MP2: the X-PAD the field took, not the window it was looked for in)
+        self.stats.pad_bytes += self.pad.used as u64 + 2;
         for ev in events.drain(..) {
             match ev {
                 PadEvent::Dls(dg) => {
