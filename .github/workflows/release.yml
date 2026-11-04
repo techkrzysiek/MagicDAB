@@ -50,7 +50,7 @@ jobs:
           cat notes.md
       - uses: actions/upload-artifact@v7
         with:
-          name: notes
+          name: pkg-notes
           path: notes.md
 
   windows:
@@ -66,7 +66,7 @@ jobs:
         run: build/windows.sh
       - uses: actions/upload-artifact@v7
         with:
-          name: windows
+          name: pkg-windows
           path: |
             dist/windows/MagicDAB-*-windows-x64.zip
             dist/windows/latest.json
@@ -93,7 +93,7 @@ jobs:
         run: build/linux.sh
       - uses: actions/upload-artifact@v7
         with:
-          name: linux-${{ matrix.runner }}
+          name: pkg-linux-${{ matrix.runner }}
           path: |
             dist/linux/MagicDAB-*-linux-*.zip
             dist/linux/latest-linux-*.json
@@ -121,7 +121,7 @@ jobs:
         run: build/macos.sh
       - uses: actions/upload-artifact@v7
         with:
-          name: macos
+          name: pkg-macos
           path: |
             dist/macos/MagicDAB-*-macos.zip
             dist/macos/latest-macos.json
@@ -133,8 +133,10 @@ jobs:
     if: ${{ !cancelled() && needs.windows.result == 'success' }}
     runs-on: ubuntu-26.04
     steps:
+      # (ours only: the Docker job leaves a build record that is no zip)
       - uses: actions/download-artifact@v8
         with:
+          pattern: pkg-*
           path: dist
           merge-multiple: true
       - name: One manifest for every package
@@ -182,6 +184,8 @@ jobs:
         run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/magicdab" >> "$GITHUB_OUTPUT"
       - name: Docker image
         uses: docker/build-push-action@v7
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: .
           push: true
