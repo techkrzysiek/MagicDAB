@@ -168,9 +168,18 @@ jobs:
           gh release create "v$VERSION" --target "$GITHUB_SHA" --title "MagicDAB $VERSION" --notes-file dist/notes.md \
             dist/MagicDAB-$VERSION-*.zip dist/latest.json
 
+  # the image for x64 and arm64 (Raspberry Pi), each built on its own runner,
+  # then one tag for both
   docker:
     needs: version
-    runs-on: ubuntu-26.04
+    strategy:
+      matrix:
+        include:
+          - { platform: linux/amd64, arch: amd64, runner: ubuntu-26.04 }
+          - { platform: linux/arm64, arch: arm64, runner: ubuntu-26.04-arm }
+    runs-on: ${{ matrix.runner }}
+    # (an image without arm64 rather than none)
+    continue-on-error: ${{ matrix.arch == 'arm64' }}
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
@@ -183,15 +192,49 @@ jobs:
         id: img
         run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/magicdab" >> "$GITHUB_OUTPUT"
       - name: Docker image
+        id: build
         uses: docker/build-push-action@v7
         env:
           DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: .
-          push: true
+          platforms: ${{ matrix.platform }}
+          provenance: false
           build-args: |
             VERSION=${{ needs.version.outputs.version }}
             SOURCE_URL=https://github.com/${{ github.repository }}
-          tags: |
-            ${{ steps.img.outputs.image }}:${{ needs.version.outputs.version }}
-            ${{ steps.img.outputs.image }}:latest
+          outputs: type=image,name=${{ steps.img.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+      - name: Digest
+        run: mkdir -p digests && touch "digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digests/*
+          if-no-files-found: error
+
+  docker-tags:
+    needs: [version, docker]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: One tag for every architecture
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/magicdab"
+          test -n "$(ls digests)" || { echo "::error::no image built"; exit 1; }
+          docker buildx imagetools create -t "$image:$VERSION" -t "$image:latest" $(for d in digests/*; do echo "$image@sha256:${d#digests/}"; done)
+          docker buildx imagetools inspect "$image:$VERSION"

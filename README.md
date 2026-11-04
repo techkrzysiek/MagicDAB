@@ -53,10 +53,10 @@ listeners in the browser, each on the station of their choice.
 The Release workflow (each push to main that changes the program, a pushed
 `v*` tag, or the Actions tab) builds the packages for Windows, Linux (x64,
 and arm64 in a public repository) and macOS and the Docker image
-(`ghcr.io/techkrzysiek/magicdab`, the server alone) and publishes them with
-the release notes. Installed copies find new versions in the update
-manifest of the latest release and install them from Settings > Internet >
-Updates.
+(`ghcr.io/techkrzysiek/magicdab`, the server alone, x64 and arm64) and
+publishes them with the release notes. Installed copies find new versions in
+the update manifest of the latest release and install them from Settings >
+Internet > Updates.
 
 ## License
 
