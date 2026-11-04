@@ -20,19 +20,19 @@ RUN rustup target add x86_64-pc-windows-gnu
 # codecs as static libraries
 ARG OPUS_VERSION=1.5.2
 ARG FAAD_VERSION=2.11.2
-RUN curl -fsSL https://downloads.xiph.org/releases/opus/opus-${OPUS_VERSION}.tar.gz | tar xz -C /tmp \
+RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/xiph/opus/releases/download/v${OPUS_VERSION}/opus-${OPUS_VERSION}.tar.gz | tar xz -C /tmp \
     && cmake -S /tmp/opus-${OPUS_VERSION} -B /tmp/opus -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
        -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DOPUS_BUILD_TESTING=OFF -DOPUS_BUILD_PROGRAMS=OFF \
        -DCMAKE_INSTALL_PREFIX=/opt/win \
     && cmake --build /tmp/opus -j"$(nproc)" && cmake --install /tmp/opus
-RUN curl -fsSL https://github.com/knik0/faad2/archive/refs/tags/${FAAD_VERSION}.tar.gz | tar xz -C /tmp \
+RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/knik0/faad2/archive/refs/tags/${FAAD_VERSION}.tar.gz | tar xz -C /tmp \
     && cmake -S /tmp/faad2-${FAAD_VERSION} -B /tmp/faad -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
        -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DFAAD_BUILD_CLI=OFF -DFAAD_APPLY_DRC=OFF -DCMAKE_INSTALL_PREFIX=/opt/win \
     && cmake --build /tmp/faad -j"$(nproc)" && cmake --install /tmp/faad
 
 # RTL-SDR library (rtl-sdr-blog drivers; the dongle needs WinUSB, e.g. via Zadig)
 ARG RTLSDR_RELEASE=V1.4.0
-RUN curl -fsSL -o /tmp/rtlsdr.zip https://github.com/rtlsdrblog/rtl-sdr-blog/releases/download/${RTLSDR_RELEASE}/Release.zip \
+RUN curl -fsSL --retry 5 --retry-all-errors -o /tmp/rtlsdr.zip https://github.com/rtlsdrblog/rtl-sdr-blog/releases/download/${RTLSDR_RELEASE}/Release.zip \
     && mkdir -p /opt/rtlsdr \
     && unzip -j /tmp/rtlsdr.zip x64/rtlsdr.dll x64/msvcr100.dll x64/pthreadVC2.dll x64/rtl_test.exe -d /opt/rtlsdr
 ENV FAAD_LIB_DIR=/opt/win/lib OPUS_LIB_DIR=/opt/win/lib

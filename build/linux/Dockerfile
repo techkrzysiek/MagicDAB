@@ -20,23 +20,23 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake curl ca-certificates pkg-config \
        libusb-1.0-0-dev \
     && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+RUN curl -fsSL --retry 5 --retry-all-errors https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
 ENV PATH=/root/.cargo/bin:$PATH
 # codecs as static libraries (no codec packages needed where it runs)
 ARG OPUS_VERSION=1.5.2
 ARG FAAD_VERSION=2.11.2
-RUN curl -fsSL https://downloads.xiph.org/releases/opus/opus-${OPUS_VERSION}.tar.gz | tar xz -C /tmp \
+RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/xiph/opus/releases/download/v${OPUS_VERSION}/opus-${OPUS_VERSION}.tar.gz | tar xz -C /tmp \
     && cmake -S /tmp/opus-${OPUS_VERSION} -B /tmp/opus -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
        -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DOPUS_BUILD_TESTING=OFF -DOPUS_BUILD_PROGRAMS=OFF -DCMAKE_INSTALL_PREFIX=/opt/static \
     && cmake --build /tmp/opus -j"$(nproc)" && cmake --install /tmp/opus
-RUN curl -fsSL https://github.com/knik0/faad2/archive/refs/tags/${FAAD_VERSION}.tar.gz | tar xz -C /tmp \
+RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/knik0/faad2/archive/refs/tags/${FAAD_VERSION}.tar.gz | tar xz -C /tmp \
     && cmake -S /tmp/faad2-${FAAD_VERSION} -B /tmp/faad -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
        -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DFAAD_BUILD_CLI=OFF -DFAAD_APPLY_DRC=OFF -DCMAKE_INSTALL_PREFIX=/opt/static \
     && cmake --build /tmp/faad -j"$(nproc)" && cmake --install /tmp/faad
 # RTL-SDR library 2.x (the RTL-SDR Blog V4 needs it; distributions often have
 # 0.6); it lets go of the DVB-T kernel driver by itself
 ARG RTLSDR_VERSION=2.0.3
-RUN curl -fsSL https://github.com/osmocom/rtl-sdr/archive/refs/tags/v${RTLSDR_VERSION}.tar.gz | tar xz -C /tmp \
+RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/osmocom/rtl-sdr/archive/refs/tags/v${RTLSDR_VERSION}.tar.gz | tar xz -C /tmp \
     && cmake -S /tmp/rtl-sdr-${RTLSDR_VERSION} -B /tmp/rtlsdr -DCMAKE_BUILD_TYPE=Release -DDETACH_KERNEL_DRIVER=ON \
        -DINSTALL_UDEV_RULES=OFF -DCMAKE_INSTALL_PREFIX=/opt/rtlsdr \
     && cmake --build /tmp/rtlsdr -j"$(nproc)" && cmake --install /tmp/rtlsdr

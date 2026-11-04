@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libo
 # makes of some stations' DRC data (one station: +25 dB) distort them. Debian's
 # libfaad2 applies it.
 ARG FAAD_VERSION=2.11.2
-RUN curl -fsSL https://github.com/knik0/faad2/archive/refs/tags/${FAAD_VERSION}.tar.gz | tar xz -C /tmp \
+RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/knik0/faad2/archive/refs/tags/${FAAD_VERSION}.tar.gz | tar xz -C /tmp \
     && cmake -S /tmp/faad2-${FAAD_VERSION} -B /tmp/faad -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
        -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DFAAD_BUILD_CLI=OFF -DFAAD_APPLY_DRC=OFF -DCMAKE_INSTALL_PREFIX=/opt/static \
     && cmake --build /tmp/faad -j1 && cmake --install /tmp/faad && rm -rf /tmp/faad /tmp/faad2-${FAAD_VERSION}

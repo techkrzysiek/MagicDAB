@@ -5,7 +5,8 @@
 # (JOBS=1 next to a running receiver).
 set -e
 cd "$(dirname "$0")/.."
-VERSION="${VERSION:-0.3.$(git rev-list --count HEAD)}"
+# (the commits less one: the third one was released as 0.3.2)
+VERSION="${VERSION:-0.3.$(($(git rev-list --count HEAD) - 1))}"
 OUT=dist/linux-arm64
 rm -rf "$OUT"
 docker build -f build/linux-arm64/Dockerfile --build-arg VERSION="$VERSION" --build-arg UPDATE_URL="${UPDATE_URL-}" \

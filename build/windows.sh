@@ -14,7 +14,8 @@
 # manifest points next to itself) and NOTES (shown with the update).
 set -e
 cd "$(dirname "$0")/.."
-VERSION="${VERSION:-0.3.$(git rev-list --count HEAD)}"
+# (the commits less one: the third one was released as 0.3.2)
+VERSION="${VERSION:-0.3.$(($(git rev-list --count HEAD) - 1))}"
 # e.g. https://github.com/OWNER/REPO/releases/latest/download/latest.json
 UPDATE_URL="${UPDATE_URL-}"
 SOURCE_URL="${SOURCE_URL-}"

@@ -9,7 +9,8 @@
 # build/windows.sh: VERSION, UPDATE_URL, SOURCE_URL, PACKAGE_URL.
 set -e
 cd "$(dirname "$0")/.."
-VERSION="${VERSION:-0.3.$(git rev-list --count HEAD)}"
+# (the commits less one: the third one was released as 0.3.2)
+VERSION="${VERSION:-0.3.$(($(git rev-list --count HEAD) - 1))}"
 OUT=dist/macos
 DEPS="$PWD/target/macos-deps"
 OPUS_VERSION=1.5.2
@@ -23,9 +24,9 @@ mkdir -p "$OUT/build/MagicDAB" "$DEPS/src"
 (cd web && npm ci --no-audit --no-fund && npm run build)
 
 fetch() {
-    [ -d "$DEPS/src/$2" ] || curl -fsSL "$1" | tar x -C "$DEPS/src" -f -
+    [ -d "$DEPS/src/$2" ] || curl -fsSL --retry 5 --retry-all-errors "$1" | tar x -C "$DEPS/src" -f -
 }
-fetch "https://downloads.xiph.org/releases/opus/opus-$OPUS_VERSION.tar.gz" "opus-$OPUS_VERSION"
+fetch "https://github.com/xiph/opus/releases/download/v$OPUS_VERSION/opus-$OPUS_VERSION.tar.gz" "opus-$OPUS_VERSION"
 fetch "https://github.com/knik0/faad2/archive/refs/tags/$FAAD_VERSION.tar.gz" "faad2-$FAAD_VERSION"
 fetch "https://github.com/libusb/libusb/releases/download/v$LIBUSB_VERSION/libusb-$LIBUSB_VERSION.tar.bz2" "libusb-$LIBUSB_VERSION"
 fetch "https://github.com/osmocom/rtl-sdr/archive/refs/tags/v$RTLSDR_VERSION.tar.gz" "rtl-sdr-$RTLSDR_VERSION"

@@ -7,7 +7,8 @@
 # PACKAGE_URL, JOBS (JOBS=1 next to a running receiver).
 set -e
 cd "$(dirname "$0")/.."
-VERSION="${VERSION:-0.3.$(git rev-list --count HEAD)}"
+# (the commits less one: the third one was released as 0.3.2)
+VERSION="${VERSION:-0.3.$(($(git rev-list --count HEAD) - 1))}"
 case "$(uname -m)" in
     x86_64) ARCH=x64 ;;
     aarch64|arm64) ARCH=arm64 ;;
