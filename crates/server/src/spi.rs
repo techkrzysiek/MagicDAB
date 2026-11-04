@@ -363,7 +363,11 @@ impl SpiStore {
                     }
                     for s in spi::services(&doc) {
                         for b in &s.bearers {
-                            let Some((ecc, _eid, sid, _scids)) = spi::parse_bearer(b) else { continue };
+                            let Some((ecc, _eid, sid, scids)) = spi::parse_bearer(b) else { continue };
+                            // (a secondary component of the service, e.g. .1: not the station itself)
+                            if scids != 0 {
+                                continue;
+                            }
                             let text = ServiceText {
                                 short_name: s.short_name.clone(),
                                 medium_name: s.medium_name.clone(),
@@ -445,7 +449,10 @@ impl SpiStore {
                 let Some(start) = time.attr("time").and_then(parse_iso) else { continue };
                 let duration = time.attr("duration").and_then(parse_duration).unwrap_or(0);
                 let bearer = loc.child("bearer").and_then(|b| b.attr("id")).map(|s| s.to_string()).or_else(|| default_bearer.clone());
-                let Some((_ecc, _eid, sid, _)) = bearer.as_deref().and_then(spi::parse_bearer) else { continue };
+                let Some((_ecc, _eid, sid, scids)) = bearer.as_deref().and_then(spi::parse_bearer) else { continue };
+                if scids != 0 {
+                    continue;
+                }
                 let list = self.index.epg.entry(format!("{sid:X}")).or_default();
                 if list.iter().any(|x| x.start == start && x.name == name) {
                     continue;

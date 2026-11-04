@@ -275,9 +275,10 @@ fn all_dab_logos(xml: &str) -> Vec<(u8, u32, String, u16, u16, Option<String>)> 
             }
             ("bearer", false) => {
                 let id = t.attrs.iter().find(|(k, _)| k == "id").map(|(_, v)| v.to_ascii_lowercase()).unwrap_or_default();
-                // dab:<gcc>.<eid>.<sid>.<scids>, gcc = country digit + ECC
+                // dab:<gcc>.<eid>.<sid>.<scids>, gcc = country digit + ECC; a secondary
+                // component (scids 1, 2...) is not the station itself
                 let parts: Vec<&str> = id.strip_prefix("dab:").unwrap_or("").split('.').collect();
-                if parts.len() == 4 && parts[0].len() == 3 {
+                if parts.len() == 4 && parts[0].len() == 3 && parts[3] == "0" {
                     if let (Ok(ecc), Ok(sid)) = (u8::from_str_radix(&parts[0][1..], 16), u32::from_str_radix(parts[2], 16)) {
                         if !ids.contains(&(ecc, sid)) {
                             ids.push((ecc, sid));
@@ -441,6 +442,13 @@ mod tests {
         let l = logos_for_bearer(xml, "dab:ce1.c7e9.d4a3.0");
         assert_eq!(l.len(), 1);
         assert_eq!(l[0].1, 600);
+        // a secondary component (.1) of a station has its own logo, not the station's
+        let xml = r#"<serviceInformation><services><service><bearer id="dab:ce1.4a1c.5d27.0"/>
+            <mediaDescription><multimedia url="main.png" width="128" height="128"/></mediaDescription></service>
+            <service><bearer id="dab:ce1.4a1c.5d27.1"/><mediaDescription><multimedia url="second.png" width="128" height="128"/></mediaDescription>
+            </service></services></serviceInformation>"#;
+        let all = all_dab_logos(xml);
+        assert_eq!(all.iter().map(|l| (l.1, l.2.as_str())).collect::<Vec<_>>(), vec![(0x5d27, "main.png")]);
     }
     #[test]
     fn txt_data() {
