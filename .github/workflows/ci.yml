@@ -9,9 +9,9 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Libraries
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libfaad-dev libopus-dev
       - uses: dtolnay/rust-toolchain@stable
@@ -24,7 +24,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Tests
         run: cargo test --release --workspace
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -35,9 +35,9 @@ jobs:
 
   msrv:
     # the server builds with the Rust of Debian 13 (rust-version in Cargo.toml)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Libraries
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libfaad-dev libopus-dev
       - uses: dtolnay/rust-toolchain@1.85

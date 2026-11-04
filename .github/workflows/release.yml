@@ -13,8 +13,9 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-    # (texts only: no new version)
-    paths-ignore: ['**.md', 'docs/**', 'LICENSE*']
+    # (texts and the workflows only: no new version; a tag or the Actions tab
+    # releases anyway)
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE*', '.github/**']
 
 permissions:
   contents: write
@@ -31,11 +32,11 @@ env:
 
 jobs:
   version:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       version: ${{ steps.v.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Version and notes
@@ -47,23 +48,23 @@ jobs:
           prev=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)
           git log --no-merges --format='- %s' ${prev:+$prev..}HEAD | head -n 30 > notes.md
           cat notes.md
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: notes
           path: notes.md
 
   windows:
     needs: version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Windows package
         env:
           VERSION: ${{ needs.version.outputs.version }}
           PACKAGE_URL: https://github.com/${{ github.repository }}/releases/download/v${{ needs.version.outputs.version }}
         run: build/windows.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: |
@@ -78,19 +79,19 @@ jobs:
         # arm64: Raspberry Pi 4/5 and other 64-bit ARM boards (GitHub's ARM
         # runners are there for public repositories only; a private one would
         # wait for a runner forever)
-        runner: ${{ github.event.repository.private && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "ubuntu-24.04-arm"]') }}
+        runner: ${{ github.event.repository.private && fromJSON('["ubuntu-26.04"]') || fromJSON('["ubuntu-26.04", "ubuntu-26.04-arm"]') }}
     runs-on: ${{ matrix.runner }}
     # (a release without the arm64 package rather than none)
-    continue-on-error: ${{ matrix.runner == 'ubuntu-24.04-arm' }}
+    continue-on-error: ${{ matrix.runner == 'ubuntu-26.04-arm' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Linux package
         env:
           VERSION: ${{ needs.version.outputs.version }}
           PACKAGE_URL: https://github.com/${{ github.repository }}/releases/download/v${{ needs.version.outputs.version }}
         run: build/linux.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.runner }}
           path: |
@@ -100,12 +101,12 @@ jobs:
 
   macos:
     needs: version
-    runs-on: macos-14
+    runs-on: macos-26
     # (built here only: a broken macOS build does not hold up the others)
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
       - uses: dtolnay/rust-toolchain@stable
@@ -118,7 +119,7 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           PACKAGE_URL: https://github.com/${{ github.repository }}/releases/download/v${{ needs.version.outputs.version }}
         run: build/macos.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos
           path: |
@@ -130,9 +131,9 @@ jobs:
     needs: [version, windows, linux, macos]
     # (the Windows and x64 Linux packages at least)
     if: ${{ !cancelled() && needs.windows.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -167,11 +168,11 @@ jobs:
 
   docker:
     needs: version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -180,7 +181,7 @@ jobs:
         id: img
         run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/magicdab" >> "$GITHUB_OUTPUT"
       - name: Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
