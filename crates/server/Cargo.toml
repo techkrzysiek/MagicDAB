@@ -1,0 +1,51 @@
+[package]
+name = "magicdab"
+description = "MagicDAB - web based DAB/DAB+ receiver"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "magicdab"
+path = "src/main.rs"
+
+[features]
+# the web interface inside the program (Windows: one file)
+embed-web = ["dep:rust-embed"]
+# Windows: the interface in a window of its own (WebView2) with a tray icon
+desktop = ["dep:wry", "dep:tao", "dep:tray-icon"]
+
+[dependencies]
+magicdab-dab = { path = "../dab" }
+magicdab-sdr = { path = "../sdr" }
+magicdab-fm = { path = "../fm" }
+rustfft.workspace = true
+magicdab-codecs = { path = "../codecs" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal", "fs", "io-util"] }
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.7", features = ["fs"] }
+serde.workspace = true
+serde_json.workspace = true
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+log.workspace = true
+num-complex.workspace = true
+sha2 = "0.10"
+rand = "0.10"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+ureq = "3"
+rust-embed = { version = "8", features = ["mime-guess"], optional = true }
+flate2 = "1"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+wry = { version = "0.57", default-features = false, optional = true }
+tao = { version = "0.37", default-features = false, features = ["rwh_06"], optional = true }
+tray-icon = { version = "0.26", default-features = false, optional = true }
+
+[lints]
+workspace = true

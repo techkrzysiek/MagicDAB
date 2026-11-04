@@ -1,0 +1,192 @@
+# A release: the packages for Windows, Linux (x64, arm64) and macOS with one
+# update manifest (latest.json) on the GitHub release page, and the Docker
+# image (the server alone) on ghcr.io.
+#
+# Every push to main that changes the program is a release (version
+# 0.3.<number of commits>); so is a pushed tag like v0.3.0, or a run from the
+# Actions tab. Installed copies look for updates at
+# releases/latest/download/latest.json of this repository.
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+    # (texts only: no new version)
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE*']
+
+permissions:
+  contents: write
+  packages: write
+
+# (one release at a time, in the order of the pushes)
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  UPDATE_URL: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
+  SOURCE_URL: https://github.com/${{ github.repository }}
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Version and notes
+        id: v
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.3.$(git rev-list --count HEAD)"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          # what changed since the previous release
+          prev=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)
+          git log --no-merges --format='- %s' ${prev:+$prev..}HEAD | head -n 30 > notes.md
+          cat notes.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notes
+          path: notes.md
+
+  windows:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Windows package
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          PACKAGE_URL: https://github.com/${{ github.repository }}/releases/download/v${{ needs.version.outputs.version }}
+        run: build/windows.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/windows/MagicDAB-*-windows-x64.zip
+            dist/windows/latest.json
+          if-no-files-found: error
+
+  linux:
+    needs: version
+    strategy:
+      matrix:
+        # arm64: Raspberry Pi 4/5 and other 64-bit ARM boards (GitHub's ARM
+        # runners are there for public repositories only; a private one would
+        # wait for a runner forever)
+        runner: ${{ github.event.repository.private && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "ubuntu-24.04-arm"]') }}
+    runs-on: ${{ matrix.runner }}
+    # (a release without the arm64 package rather than none)
+    continue-on-error: ${{ matrix.runner == 'ubuntu-24.04-arm' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Linux package
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          PACKAGE_URL: https://github.com/${{ github.repository }}/releases/download/v${{ needs.version.outputs.version }}
+        run: build/linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.runner }}
+          path: |
+            dist/linux/MagicDAB-*-linux-*.zip
+            dist/linux/latest-linux-*.json
+          if-no-files-found: error
+
+  macos:
+    needs: version
+    runs-on: macos-14
+    # (built here only: a broken macOS build does not hold up the others)
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Build tools
+        run: brew install pkgconf cmake || true
+      - name: macOS package
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          PACKAGE_URL: https://github.com/${{ github.repository }}/releases/download/v${{ needs.version.outputs.version }}
+        run: build/macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: |
+            dist/macos/MagicDAB-*-macos.zip
+            dist/macos/latest-macos.json
+          if-no-files-found: error
+
+  release:
+    needs: [version, windows, linux, macos]
+    # (the Windows and x64 Linux packages at least)
+    if: ${{ !cancelled() && needs.windows.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: One manifest for every package
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          ls -l dist
+          test -n "$(ls dist/MagicDAB-*-linux-x64.zip 2>/dev/null)" || { echo "::error::no Linux x64 package"; exit 1; }
+          python3 - <<'PY'
+          import glob, json, os
+          version = os.environ["VERSION"]
+          # the Windows manifest first (it has the notes), then the others' entries
+          manifest = json.load(open("dist/latest.json"))
+          manifest["notes"] = open("dist/notes.md").read().strip() or None
+          for f in sorted(glob.glob("dist/latest-*.json")):
+              part = json.load(open(f))
+              assert part.pop("version") == version, f
+              manifest.update(part)
+          manifest = {k: v for k, v in manifest.items() if v is not None}
+          json.dump(manifest, open("dist/latest.json", "w"), indent=2)
+          print(json.dumps(manifest, indent=2))
+          PY
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          gh release create "v$VERSION" --target "$GITHUB_SHA" --title "MagicDAB $VERSION" --notes-file dist/notes.md \
+            dist/MagicDAB-$VERSION-*.zip dist/latest.json
+
+  docker:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Image name
+        id: img
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/magicdab" >> "$GITHUB_OUTPUT"
+      - name: Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            VERSION=${{ needs.version.outputs.version }}
+            SOURCE_URL=https://github.com/${{ github.repository }}
+          tags: |
+            ${{ steps.img.outputs.image }}:${{ needs.version.outputs.version }}
+            ${{ steps.img.outputs.image }}:latest

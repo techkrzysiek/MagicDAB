@@ -1,0 +1,5 @@
+# RTL-SDR dongles for the logged-in user (and the plugdev group), without root:
+#   sudo cp 60-rtl-sdr.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules
+# then plug the dongle in again.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", MODE="0664", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2832", MODE="0664", GROUP="plugdev", TAG+="uaccess"

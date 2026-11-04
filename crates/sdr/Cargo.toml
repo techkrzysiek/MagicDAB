@@ -1,0 +1,16 @@
+[package]
+name = "magicdab-sdr"
+description = "Input devices for MagicDAB: RTL-SDR, RTL-TCP, raw/UFF files, SoapySDR"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+num-complex.workspace = true
+log.workspace = true
+serde.workspace = true
+libloading = "0.8"
+
+[lints]
+workspace = true

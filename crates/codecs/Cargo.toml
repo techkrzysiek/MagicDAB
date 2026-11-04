@@ -1,0 +1,18 @@
+[package]
+name = "magicdab-codecs"
+description = "Audio codecs used by MagicDAB: AAC (faad2), MPEG Layer II (minimp3), Opus and resampling"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+links = "magicdab_codecs"
+
+[dependencies]
+log.workspace = true
+
+[build-dependencies]
+cc = "1"
+pkg-config = "0.3"
+
+[lints]
+workspace = true

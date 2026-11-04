@@ -1,0 +1,13 @@
+/target
+/target-*
+/web/node_modules
+/web/dist
+/web/*.tsbuildinfo
+dist/
+# instance data: settings (passwords, tunnel tokens), recordings
+/data*
+*.uff
+# local configuration
+.env
+frpc.toml
+/docker-compose.*.yml

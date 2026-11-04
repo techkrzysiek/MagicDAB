@@ -1,0 +1,46 @@
+# Formatting, clippy, tests and a build of the web interface for every push
+# and pull request.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Libraries
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libfaad-dev libopus-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Formatting
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests
+        run: cargo test --release --workspace
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Web interface
+        working-directory: web
+        run: npm ci --no-audit --no-fund && npm run build
+
+  msrv:
+    # the server builds with the Rust of Debian 13 (rust-version in Cargo.toml)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Libraries
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libfaad-dev libopus-dev
+      - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
+      - name: Build with Rust 1.85
+        run: cargo check --workspace --all-targets --locked

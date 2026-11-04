@@ -1,0 +1,63 @@
+# MagicDAB with an RTL-SDR stick: `docker compose up -d`, then http://localhost:8080
+# The admin password is logged at the first start (or set MAGICDAB_ADMIN_PASSWORD).
+# Watchtower below keeps the image up to date: it updates only the containers with
+# the label com.centurylinklabs.watchtower.scope=magicdab, so it leaves the other
+# containers of the host (and another Watchtower) alone.
+services:
+  magicdab:
+    image: ghcr.io/techkrzysiek/magicdab:latest
+    # or built from this repository (then without Watchtower): build: .
+    container_name: magicdab
+    restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+      com.centurylinklabs.watchtower.scope: magicdab
+    # the receiver before other work on the host (audio without gaps)
+    cpu_shares: 8192
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+      # USB devices; together with the cgroup rule this survives re-plugging the stick
+      - /dev/bus/usb:/dev/bus/usb
+      # FM tuner (FM-DX-Tuner) for DAB/FM service following: the serial port is
+      # found below /dev/hostdev/serial/by-id, audio in /dev/snd
+      # - /dev:/dev/hostdev
+      # - /dev/snd:/dev/snd
+    device_cgroup_rules:
+      - "c 189:* rmw"
+      # FM tuner: USB serial (ttyACM) and ALSA
+      # - "c 166:* rmw"
+      # - "c 116:* rmw"
+    environment:
+      TZ: Europe/Warsaw
+      MAGICDAB_ADMIN_PASSWORD: ${MAGICDAB_ADMIN_PASSWORD:-}
+    # a log that never blocks the receiver and does not fill the disk
+    logging:
+      driver: json-file
+      options:
+        mode: non-blocking
+        max-buffer-size: 4m
+        max-size: 20m
+        max-file: "5"
+    # without a stick: a remote rtl_tcp server
+    # command: ["--rtltcp", "rtl-tcp.example.org:1234"]
+    # (ETI/EDI streams and IQ recordings are mapped to channels in Settings > Receiver)
+
+  # a new release of the image: pulled and MagicDAB restarted with it, at 4:30 at night
+  # (a restart is a short break for the listeners)
+  watchtower:
+    # the maintained Watchtower (containrrr/watchtower is archived)
+    image: nickfedor/watchtower
+    container_name: watchtower-magicdab
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      com.centurylinklabs.watchtower.scope: magicdab
+    environment:
+      TZ: Europe/Warsaw
+      WATCHTOWER_SCOPE: magicdab
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_SCHEDULE: "0 30 4 * * *"
+      WATCHTOWER_CLEANUP: "true"

@@ -1,0 +1,21 @@
+Copyright (C) 2026 techkrzysiek
+
+MagicDAB is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version (see LICENSE).
+
+Additional permission under GNU AGPL version 3 section 7
+
+If you modify this Program, or any covered work, by linking or combining it
+with the Microsoft Edge WebView2 Loader (WebView2Loader.dll), the Microsoft
+Edge WebView2 Runtime, or the Microsoft Visual C++ Runtime (msvcr100.dll), or
+modified versions of those libraries, containing parts covered by the terms of
+their respective licenses, the licensors of this Program grant you additional
+permission to convey the resulting work. Corresponding Source for a non-source
+form of such a combination need not include the source code of those
+libraries.
+
+The names "MagicDAB" and its logo identify this program and are not licensed
+under the AGPL: a modified version that is distributed or offered to others
+must carry a different name, unless the authors agree otherwise.

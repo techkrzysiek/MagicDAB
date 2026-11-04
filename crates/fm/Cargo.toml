@@ -1,0 +1,25 @@
+[package]
+name = "magicdab-fm"
+description = "FM reception for MagicDAB: FM-DX-Tuner (TEF668x headless USB tuner), RDS decoding with librdsparser, tuner audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+log.workspace = true
+serde.workspace = true
+crossbeam-channel.workspace = true
+libloading = "0.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[build-dependencies]
+cc = "1"
+
+[dev-dependencies]
+env_logger = "0.11"
+
+[lints]
+workspace = true

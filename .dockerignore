@@ -1,0 +1,14 @@
+target
+target-*
+web/node_modules
+web/dist
+web/*.tsbuildinfo
+data
+data-*
+*.uff
+dist
+.git
+.github
+.env
+frpc.toml
+docker-compose.*.yml
