@@ -1,4 +1,4 @@
-import type { Ensemble, Service } from './types'
+import type { AudioFormat, Ensemble, Service } from './types'
 import { saveInApp } from './desktop'
 
 export function mhz(khz: number) {
@@ -7,6 +7,15 @@ export function mhz(khz: number) {
 
 export function fmMhz(khz: number) {
   return (khz / 1000).toFixed(1)
+}
+
+/** How the audio of a station is coded: "AAC 24 kHz + SBR → 48 kHz + PS". */
+export function audioCoding(f: AudioFormat) {
+  const khz = (hz: number) => `${hz / 1000} kHz`
+  // (24 kHz and less: the half rates of MPEG-2)
+  if (f.codec === 'MP2') return `MPEG-${f.sampleRate < 32000 ? 2 : 1} Audio Layer II ${khz(f.sampleRate)}`
+  if (!f.sbr) return `AAC-LC ${khz(f.sampleRate)}`
+  return `AAC ${khz(f.sampleRate / 2)} + SBR → ${khz(f.sampleRate)}${f.ps ? ' + PS' : ''}`
 }
 
 export function hex(v: number | null | undefined, digits = 4) {

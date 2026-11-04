@@ -9,7 +9,7 @@ import { selectService, tune, stepChannel, tuningLocked } from '../actions'
 import { startRecording, stopRecording } from '../audio/recorder'
 import { player } from '../audio/player'
 import { useEffect, useRef } from 'react'
-import { fullSid, hex, mhz, fmMhz, ageShort } from '../util'
+import { audioCoding, fullSid, hex, mhz, fmMhz, ageShort } from '../util'
 import type { Service, Linking, LinkInfo } from '../types'
 import { StationBrowser } from './StationsView'
 import { useSlideLogoUrl } from '../components/logo'
@@ -327,6 +327,7 @@ function ServicePanel({ svc }: { svc?: Service }) {
     [t('host'), tag('PROGRAMME.HOST')],
   ]
   const stereo = fmt ? (fmt.stereo ? 'STEREO' : 'MONO') : null
+  const coding = fmt?.sampleRate ? audioCoding(fmt) : undefined
   const hasLinking = svc.linking.links.length > 0 || svc.linking.frequencies.length > 0 || svc.linking.ensembles.length > 0
   const dlPlus = fields.some(([, v]) => v) && (
     <div className="dlplus">
@@ -355,7 +356,8 @@ function ServicePanel({ svc }: { svc?: Service }) {
       <div className="badges">
         {svc.bitrate ? <span className="badge">{svc.bitrate} kbps</span> : null}
         {stereo && <span className="badge">{stereo}</span>}
-        <span className="badge">{codecLabel(fmt?.codec ?? svc.codec, fmt?.sbr, fmt?.ps)}</span>
+        <span className="badge" title={coding}>{codecLabel(fmt?.codec ?? svc.codec, fmt?.sbr, fmt?.ps)}</span>
+        {fmt?.sampleRate ? <span className="badge" title={`${t('sample_rate')}: ${coding}`}>{fmt.sampleRate / 1000} kHz</span> : null}
         {svc.protection && <span className="badge">{svc.protection}</span>}
         {svc.ca && <span className="badge warn">CA</span>}
         {linkFm && (

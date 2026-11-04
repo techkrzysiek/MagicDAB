@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
 import { ViewHeader, CacheTag, Logo } from '../components/common'
-import { downloadText, fmMhz, formatDuration, hex, mhz } from '../util'
+import { audioCoding, downloadText, fmMhz, formatDuration, hex, mhz } from '../util'
 import { send } from '../ws'
 import type { AudioStats, Ensemble, Service, Subchannel } from '../types'
 
@@ -141,6 +141,7 @@ function NowCard({ svc }: { svc?: Service }) {
   const data = useStore((s) => (svc ? s.services[svc.sid] : undefined))
   const rates = useRates(data?.stats)
   const st = data?.stats
+  const fmt = data?.format
   if (!svc) {
     return (
       <div className="card ens-now">
@@ -161,8 +162,8 @@ function NowCard({ svc }: { svc?: Service }) {
         <Logo label={svc.label} sid={svc.sid} small />
         <div>
           <b>{svc.label}</b>
-          <div className="hint">
-            {svc.codec ?? t('data')} · {total} kbps · {svc.protection ?? ''}
+          <div className="hint" title={fmt?.sampleRate ? audioCoding(fmt) : undefined}>
+            {svc.codec ?? t('data')}{fmt?.sampleRate ? ` · ${fmt.sampleRate / 1000} kHz` : ''} · {total} kbps · {svc.protection ?? ''}
           </div>
         </div>
       </div>
