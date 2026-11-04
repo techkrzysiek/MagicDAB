@@ -2,8 +2,8 @@
 # update manifest (latest.json) on the GitHub release page, and the Docker
 # image (the server alone) on ghcr.io.
 #
-# Every push to main that changes the program is a release (version
-# 0.3.<number of commits less one>); so is a pushed tag like v0.3.0, or a run from the
+# Every push to main that changes the program is a release (version: the
+# last v0.3.* tag plus one, so no numbers are skipped); so is a pushed tag like v0.3.0, or a run from the
 # Actions tab. Installed copies look for updates at
 # releases/latest/download/latest.json of this repository.
 name: Release
@@ -42,7 +42,7 @@ jobs:
       - name: Version and notes
         id: v
         run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.3.$(($(git rev-list --count HEAD) - 1))"; fi
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else last=$(git describe --tags --abbrev=0 --match 'v0.3.*' 2>/dev/null || echo v0.3.0); v="0.3.$((${last##*.} + 1))"; fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           # what changed since the previous release
           prev=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)
