@@ -105,7 +105,9 @@ impl PadDecoder {
             // No CI list: the field continues the application of the last
             // subfield of the previous field. With DAB+ the X-PAD length is
             // known exactly; a short X-PAD field holds 4 bytes then (3 after a
-            // CI); otherwise it equals that subfield's length.
+            // CI); a variable one is as long as the whole previous field, CI
+            // list included (EN 300 401 7.4.2.1, as DABlin reads it: an MP2
+            // encoder sending 32 byte fields lost the rest of each one).
             let len = if exact {
                 xpad_len
             } else if xpad_ind == 1 {
@@ -137,9 +139,7 @@ impl PadDecoder {
         }
         let mut off = ci_len;
         let mut cont_type = 0u8;
-        let mut last_len = 0usize;
         for ci in cis {
-            last_len = ci.len;
             let sub = self.xpad[off..off + ci.len].to_vec();
             match ci.app_type {
                 1 => {
@@ -224,7 +224,7 @@ impl PadDecoder {
             off += ci.len;
         }
         if cont_type != 0 {
-            self.last_ci = Some(Ci { app_type: cont_type, len: last_len });
+            self.last_ci = Some(Ci { app_type: cont_type, len: off });
         }
     }
 }
@@ -286,6 +286,30 @@ mod tests {
         frame(&mut dec, &[0x02, dg[0], dg[1], dg[2]], true, &mut out);
         frame(&mut dec, &dg[3..7], false, &mut out);
         frame(&mut dec, &[dg[7], 0, 0, 0], false, &mut out);
+        assert!(matches!(out.as_slice(), [PadEvent::Dls(d)] if *d == dg), "errors {}", dec.errors);
+    }
+
+    #[test]
+    fn variable_xpad_without_ci_is_as_long_as_the_previous_field() {
+        // a label of 14 characters: 18 bytes with prefix and CRC
+        let mut dg = vec![0x0D, 0x00];
+        dg.extend_from_slice(b"ABCDEFGHIJKLMN");
+        let crc = crc16_ccitt(&dg);
+        dg.extend_from_slice(&crc.to_be_bytes());
+        let mut dec = PadDecoder::new();
+        let mut out = Vec::new();
+        let field = |dec: &mut PadDecoder, logical: &[u8], ci: bool, out: &mut Vec<PadEvent>| {
+            let mut window = logical.to_vec();
+            window.resize(60, 0);
+            window.reverse();
+            dec.process(&window, false, [0x20, if ci { 0x02 } else { 0x00 }], out);
+        };
+        // CI list: DLS start of 8 bytes, end marker; 10 bytes in all
+        let mut first = vec![(2 << 5) | 2, 0x00];
+        first.extend_from_slice(&dg[..8]);
+        field(&mut dec, &first, true, &mut out);
+        // without a CI list: the next 10 bytes, not 8
+        field(&mut dec, &dg[8..18], false, &mut out);
         assert!(matches!(out.as_slice(), [PadEvent::Dls(d)] if *d == dg), "errors {}", dec.errors);
     }
 }
