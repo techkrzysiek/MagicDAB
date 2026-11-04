@@ -28,6 +28,8 @@ pub struct State {
 
 struct Active {
     writer: Writer,
+    /// Frames to record.
+    limit: u64,
     channel: String,
     last_sync: Instant,
     /// For the means while recording: SNR and FIB error ratio sums, samples.
@@ -55,13 +57,14 @@ impl Radio {
         if !self.settings.dx_record.enabled {
             return;
         }
-        if let Err(e) = self.dxrec_start(kind) {
+        if let Err(e) = self.dxrec_start(kind, None) {
             log::info!("no DX recording of {} on {}: {e}", ev.ensemble.trim(), ev.channel);
         }
     }
 
-    /// Starts recording the multiplex of the main receiver.
-    pub(super) fn dxrec_start(&mut self, reason: &str) -> Result<(), String> {
+    /// Starts recording the multiplex of the main receiver, for `seconds` or
+    /// the length of the settings.
+    pub(super) fn dxrec_start(&mut self, reason: &str, seconds: Option<u32>) -> Result<(), String> {
         if self.dxrec.active.is_some() {
             return Err("one is being recorded already".into());
         }
@@ -70,7 +73,11 @@ impl Radio {
         let dir = self.dxrec_dir();
         let cfg = &self.settings.dx_record;
         // room for this one under the cap (a recording of the full length)
-        let expected = cfg.minutes as u64 * FRAMES_PER_MINUTE * ETI_FRAME as u64;
+        let limit = match seconds {
+            Some(s) => (s as u64 * FRAMES_PER_MINUTE).div_ceil(60),
+            None => cfg.minutes.max(1) as u64 * FRAMES_PER_MINUTE,
+        };
+        let expected = limit * ETI_FRAME as u64;
         let max = (cfg.max_mb as u64 * 1024 * 1024).saturating_sub(expected);
         for name in store::enforce_cap(&dir, max, None) {
             log::info!("DX recording {name} removed: the folder is kept under {} MB", cfg.max_mb);
@@ -111,15 +118,15 @@ impl Radio {
         };
         let writer = Writer::start(&dir, meta).map_err(|e| e.to_string())?;
         log::info!(
-            "DX recording of {} ({}, {}) started: {} (up to {} min, {reason})",
+            "DX recording of {} ({}, {}) started: {} (up to {} s, {reason})",
             writer.meta.label,
             writer.meta.eid,
             channel,
             writer.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
-            cfg.minutes
+            limit * 60 / FRAMES_PER_MINUTE
         );
         self.rx.send(RxCommand::RecordEti(true));
-        self.dxrec.active = Some(Active { writer, channel, last_sync: Instant::now(), snr_sum: 0.0, fib_sum: 0.0, samples: 0, tii });
+        self.dxrec.active = Some(Active { writer, limit, channel, last_sync: Instant::now(), snr_sum: 0.0, fib_sum: 0.0, samples: 0, tii });
         self.dxrec_broadcast(false);
         Ok(())
     }
@@ -150,10 +157,9 @@ impl Radio {
 
     /// A frame of the main receiver (RxEvent::Eti).
     pub(super) fn dxrec_on_frame(&mut self, frame: Vec<u8>) {
-        let limit = self.settings.dx_record.minutes.max(1) as u64 * FRAMES_PER_MINUTE;
         let Some(a) = self.dxrec.active.as_mut() else { return };
         a.writer.push(frame);
-        if a.writer.frames >= limit {
+        if a.writer.frames >= a.limit {
             self.dxrec_stop("complete");
         } else if a.writer.failed() {
             self.dxrec_stop("error");
@@ -228,7 +234,7 @@ impl Radio {
                 "eid": a.writer.meta.eid,
                 "reason": a.writer.meta.reason,
                 "seconds": a.writer.seconds(),
-                "limit": cfg.minutes * 60,
+                "limit": a.limit * 60 / FRAMES_PER_MINUTE,
                 "bytes": a.writer.bytes,
                 "synced": self.signal.synced,
             })
@@ -269,7 +275,9 @@ impl Radio {
         match msg["action"].as_str().unwrap_or("") {
             "list" => self.send_dxrec_list(client),
             "record" => {
-                if let Err(e) = self.dxrec_start("manual") {
+                // (the length asked for: the button of the Ensemble view)
+                let seconds = msg["seconds"].as_u64().map(|s| s.clamp(5, 3600) as u32);
+                if let Err(e) = self.dxrec_start("manual", seconds) {
                     log::info!("client {client}: no DX recording: {e}");
                     self.notice(client, "warning", "dxrec_no_start");
                 }

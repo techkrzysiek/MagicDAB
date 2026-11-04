@@ -559,6 +559,9 @@ impl Radio {
                         let p = r.finish();
                         log::info!("raw recording stopped: {}", p.display());
                     }
+                } else if self.eti_input.is_some() || self.dongle_active() {
+                    // (a stream, a recording of ETI or the DTR-100: no IQ samples to record)
+                    self.notice(client, "warning", "raw_unavailable");
                 } else if self.raw_recorder.lock().is_none() {
                     let seconds = msg["seconds"].as_u64().unwrap_or(60).clamp(1, 3600) as u32;
                     let ch = self.channel.clone().unwrap_or_default();

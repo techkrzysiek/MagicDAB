@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
 import { ViewHeader, CacheTag, Logo } from '../components/common'
-import { downloadText, fmMhz, hex, mhz } from '../util'
+import { downloadText, fmMhz, formatDuration, hex, mhz } from '../util'
 import { send } from '../ws'
 import type { AudioStats, Ensemble, Service, Subchannel } from '../types'
 
@@ -470,6 +470,9 @@ export default function InfoView() {
   const [selSubch, setSelSubch] = useState<number | null>(null)
   const admin = useStore((s) => s.admin)
   const raw = useStore((s) => s.rawRecord)
+  const dx = useStore((s) => s.dxrec)
+  // (raw IQ only from a tuner or an IQ recording, not from ETI/EDI or the DTR-100)
+  const iq = useStore((s) => (s.signal?.input ?? 'rf') === 'rf')
   const token = useStore((s) => s.chatToken)
   const [rawSecs, setRawSecs] = useState(60)
   // (the recordings made before, to download)
@@ -511,8 +514,17 @@ export default function InfoView() {
                   ● {raw.position?.toFixed(0)}/{raw.length?.toFixed(0)} s
                 </button>
               ) : (
-                <button className="btn" onClick={() => send({ type: 'rawRecord', action: 'start', seconds: rawSecs })}>
+                <button className="btn" disabled={!iq} title={iq ? undefined : t('raw_unavailable')} onClick={() => send({ type: 'rawRecord', action: 'start', seconds: rawSecs })}>
                   {t('record_raw')}
+                </button>
+              )}
+              {dx?.active ? (
+                <button className="btn rec on" onClick={() => send({ type: 'dxrec', action: 'stopRecording' })} title={t('eti_saved_in')}>
+                  ● ETI {formatDuration(dx.active.seconds)}/{formatDuration(dx.active.limit)}
+                </button>
+              ) : (
+                <button className="btn" disabled={!ens.valid} title={t('eti_saved_in')} onClick={() => send({ type: 'dxrec', action: 'record', seconds: rawSecs })}>
+                  {t('record_eti')}
                 </button>
               )}
               {raw && !raw.active && raw.file === undefined ? null : raw?.file ? <span className="hint">{raw.file}</span> : null}
