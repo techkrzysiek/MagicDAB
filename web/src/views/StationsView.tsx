@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeftRight, ChevronDown, ChevronRight, Lock, Search, X } from 'lucide-react'
-import { useStore, save, useChannelAllowed } from '../store'
+import { useStore, load, save, useChannelAllowed } from '../store'
 import { useT } from '../i18n'
 import { Logo, FavStar, SignalBars, scrollIntoList } from '../components/common'
 import { selectService, tuningLocked } from '../actions'
@@ -31,10 +31,9 @@ const FRESH = 6 * 3600
 const EMPTY: string[] = []
 
 /** Search text and scroll positions survive switching views (the browser unmounts). */
-const memo: { query: Record<string, string>; scroll: Record<string, number>; collapsed: Record<string, Record<string, boolean>> } = {
+const memo: { query: Record<string, string>; scroll: Record<string, number> } = {
   query: {},
   scroll: {},
-  collapsed: {},
 }
 
 function loadFlag(key: string, def: boolean) {
@@ -114,7 +113,9 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
   const where = panel ? 'panel' : 'full'
   const [grouped, setGroupedState] = useState(() => loadFlag('grouped.' + where, false))
   const [query, setQueryState] = useState(memo.query[where] ?? '')
-  const [collapsed, setCollapsedState] = useState<Record<string, boolean>>(memo.collapsed[where] ?? {})
+  // multiplexes folded (true) or unfolded (false) by the listener, also after a
+  // reload; the others are folded except the one playing
+  const [collapsed, setCollapsedState] = useState<Record<string, boolean>>(() => load('muxFolds.' + where, {}))
   const setMode = (m: StationMode) => {
     setModeState(m)
     save(storeKey, m)
@@ -129,7 +130,7 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
   }
   const setCollapsed = (c: Record<string, boolean>) => {
     setCollapsedState(c)
-    memo.collapsed[where] = c
+    save('muxFolds.' + where, c)
   }
   // keep the place in the list when coming back to it
   const listRef = useRef<HTMLUListElement>(null)
@@ -307,10 +308,10 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
         <ul className="st-list" ref={listRef} onScroll={onScroll}>
           {serviceList.map((e) => {
             const key = e.channel + e.eid
-            const open = !collapsed[key] || !!q
             const rows = e.services.filter((s) => match(s.label, s.sid))
             if (q && !rows.length) return null
             const isCur = e.channel === current && ensemble.eid === e.eid
+            const open = !!q || (key in collapsed ? !collapsed[key] : isCur)
             if (!allowed(e.channel) && !isCur) return null
             const now = Date.now() / 1000
             const fresh = now - e.lastSeen < FRESH
