@@ -3,7 +3,9 @@
 //! RxCommand::RecordEti) into data/dxrec, a JSON file beside each saying
 //! what it is. The admin plays one back later on a side receiver of its own
 //! (radio/slots.rs), downloads or deletes it, and may load an .eti file of
-//! its own for a day. radio/dxrec.rs decides when to record.
+//! its own, or an .edi one (an EDI stream over TCP as saved, e.g.
+//! `nc mux 9201 > mux.edi`), for a day. radio/dxrec.rs decides when to
+//! record.
 
 use crossbeam_channel::{bounded, Sender};
 use magicdab_dab::eti::{StreamParser, ETI_FRAME};
@@ -146,23 +148,30 @@ pub fn write_meta(path: &Path, meta: &Meta) {
     }
 }
 
-/// A file name of the folder as a client may give it: no path, an .eti.
+/// A file name of the folder as a client may give it: no path, an .eti or
+/// an .edi.
 pub fn safe_name(name: &str) -> Option<String> {
     let n = name.trim();
     let ok = (5..=160).contains(&n.len())
-        && n.ends_with(".eti")
+        && (n.ends_with(".eti") || n.ends_with(".edi"))
         && !n.starts_with('.')
         && !n.contains("..")
         && n.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '+'));
     ok.then(|| n.to_string())
 }
 
-/// The name an uploaded file gets: "upload_<time>_<its name>.eti".
-pub fn upload_name(original: &str) -> String {
-    let stem = original.rsplit(['/', '\\']).next().unwrap_or("").trim_end_matches(".eti");
+/// The name an uploaded file gets: "upload_<time>_<its name>.eti" (or .edi).
+pub fn upload_name(original: &str, edi: bool) -> String {
+    let file = original.rsplit(['/', '\\']).next().unwrap_or("");
+    let stem = file.strip_suffix(".eti").or_else(|| file.strip_suffix(".edi")).unwrap_or(file);
     let stem: String = stem.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).take(40).collect();
     let stem = if stem.is_empty() { "file".to_string() } else { stem };
-    format!("upload_{}_{stem}.eti", crate::localtime::now().format("%Y-%m-%d_%H%M%S"))
+    format!("upload_{}_{stem}.{}", crate::localtime::now().format("%Y-%m-%d_%H%M%S"), if edi { "edi" } else { "eti" })
+}
+
+/// An .edi file: EDI AF packets, not ETI frames.
+pub fn is_edi(path: &Path) -> bool {
+    path.extension().is_some_and(|x| x == "edi")
 }
 
 pub fn is_upload(name: &str) -> bool {
@@ -174,6 +183,13 @@ pub fn is_upload(name: &str) -> bool {
 pub fn looks_like_eti(head: &[u8]) -> bool {
     let mut found = false;
     StreamParser::new(false).push(head, |_| found = true);
+    found
+}
+
+/// Whether a start of a file holds an EDI AF packet with an ETI frame.
+pub fn looks_like_edi(head: &[u8]) -> bool {
+    let mut found = false;
+    StreamParser::new(true).push(head, |_| found = true);
     found
 }
 
@@ -192,7 +208,8 @@ fn entry(path: &Path) -> Option<Value> {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
     }
-    if meta.frames == 0 {
+    // (an .edi file says nothing of its length by its size)
+    if meta.frames == 0 && !is_edi(path) {
         meta.frames = len / ETI_FRAME as u64;
         meta.duration = meta.frames as f32 / FRAMES_PER_SECOND as f32;
     }
@@ -209,10 +226,10 @@ pub fn list(dir: &Path) -> Vec<Value> {
     v
 }
 
-/// The .eti files of the folder.
+/// The .eti and .edi files of the folder.
 fn files(dir: &Path) -> Vec<PathBuf> {
     let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
-    rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "eti") && p.is_file()).collect()
+    rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "eti" || x == "edi") && p.is_file()).collect()
 }
 
 /// Bytes of the recordings.
@@ -392,13 +409,14 @@ impl Drop for Writer {
 
 // ---------------------------------------------------------------- playing
 
-/// Plays an .eti file into a receiver (its ETI frame channel) at the pace
-/// of the air, in a loop, on a thread of its own.
+/// Plays an .eti or .edi file into a receiver (its ETI frame channel) at
+/// the pace of the air, in a loop, on a thread of its own.
 pub struct Player {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     pub name: String,
-    /// Frames of the file (its size: padded frames).
+    /// Frames of the file (an .eti: its size, padded frames; an .edi: as
+    /// counted when it was loaded).
     pub frames: u64,
     /// Frames played of this pass, and passes done.
     position: Arc<AtomicU64>,
@@ -408,6 +426,8 @@ pub struct Player {
 impl Player {
     pub fn start(path: &Path, tx: Sender<EtiFrame>) -> std::io::Result<Player> {
         let len = std::fs::metadata(path)?.len();
+        let edi = is_edi(path);
+        let frames = if edi { read_meta(path).map_or(0, |m| m.frames) } else { len / ETI_FRAME as u64 };
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let stop = Arc::new(AtomicBool::new(false));
         let position = Arc::new(AtomicU64::new(0));
@@ -417,7 +437,7 @@ impl Player {
             let mut buf = vec![0u8; 64 * 1024];
             loop {
                 let Ok(mut f) = File::open(&p) else { return };
-                let mut parser = StreamParser::new(false);
+                let mut parser = StreamParser::new(edi);
                 let mut pending: std::collections::VecDeque<EtiFrame> = Default::default();
                 let start = Instant::now();
                 let mut n = 0u64;
@@ -447,13 +467,13 @@ impl Player {
                     }
                 }
                 if n == 0 {
-                    log::warn!("{}: no ETI frames in the file", p.display());
+                    log::warn!("{}: no {} in the file", p.display(), if edi { "EDI packets" } else { "ETI frames" });
                     return;
                 }
                 lp.fetch_add(1, Ordering::Relaxed);
             }
         })?;
-        Ok(Player { stop, thread: Some(thread), name, frames: len / ETI_FRAME as u64, position, loops })
+        Ok(Player { stop, thread: Some(thread), name, frames, position, loops })
     }
 
     /// Seconds into the file, seconds of the file, passes done.
@@ -494,13 +514,19 @@ mod tests {
     }
 
     use super::*;
-    use magicdab_dab::eti::{build_eti, parse_eti, Stream};
+    use magicdab_dab::eti::{build_af, build_eti, parse_eti, Stream};
 
     fn dir(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("magicdab-dxrec-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    fn af(n: u8) -> Vec<u8> {
+        let fic = vec![n; 96];
+        let data: Vec<u8> = (0..144).map(|i| i as u8 ^ n).collect();
+        build_af(n as u16, n, &fic, &[Stream { scid: 2, sad: 0, tpl: 0x22, data: &data }])
     }
 
     fn frame(n: u8) -> Vec<u8> {
@@ -513,16 +539,20 @@ mod tests {
     fn names_of_the_folder_only() {
         assert_eq!(safe_name(" 2026-10-30_061512_8C_6D2B.eti "), Some("2026-10-30_061512_8C_6D2B.eti".into()));
         assert_eq!(safe_name("upload_2026-10-30_061512_odr-mux.eti"), Some("upload_2026-10-30_061512_odr-mux.eti".into()));
+        assert_eq!(safe_name("upload_2026-10-30_061512_odr-mux.edi"), Some("upload_2026-10-30_061512_odr-mux.edi".into()));
         for bad in
             ["../x.eti", "a/b.eti", "x.uff", "", ".eti", ".hidden.eti", "a b.eti", "x\n.eti", "ą.eti", &format!("{}.eti", "a".repeat(200))]
         {
             assert_eq!(safe_name(bad), None, "{bad:?}");
         }
-        let up = upload_name("C:\\Users\\k\\Desktop\\mój mux (1).eti");
+        let up = upload_name("C:\\Users\\k\\Desktop\\mój mux (1).eti", false);
         assert!(up.starts_with("upload_") && up.ends_with("_mjmux1.eti"), "{up}");
         assert!(is_upload(&up));
         assert!(!is_upload("2026-10-30_061512_8C_6D2B.eti"));
-        assert!(upload_name("").ends_with("_file.eti"));
+        assert!(upload_name("", false).ends_with("_file.eti"));
+        // (the format is what the file holds, whatever its name says)
+        assert!(upload_name("mux.eti", true).ends_with("_mux.edi"));
+        assert!(upload_name("mux.edi", false).ends_with("_mux.eti"));
     }
 
     #[test]
@@ -533,6 +563,11 @@ mod tests {
         assert!(looks_like_eti(&bytes));
         assert!(!looks_like_eti(&vec![0x55u8; 20000]));
         assert!(!looks_like_eti(b"<?xml version=\"1.0\"?><SDR>"));
+        assert!(!looks_like_edi(&bytes));
+        let mut edi = vec![0u8; 100];
+        edi.extend(af(1));
+        assert!(looks_like_edi(&edi));
+        assert!(!looks_like_eti(&edi));
     }
 
     #[test]
@@ -635,6 +670,27 @@ mod tests {
         // the raw frames parse as the ETI input does
         let bytes = std::fs::read(&path).unwrap();
         assert!(parse_eti(&bytes[ETI_FRAME * 7..ETI_FRAME * 8]).is_some_and(|f| f.fic[0] == 7));
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn an_edi_file_plays_back_its_packets() {
+        let d = dir("edi");
+        let path = d.join("upload_2026-10-30_061512_mux.edi");
+        let bytes: Vec<u8> = (0..20u8).flat_map(af).collect();
+        std::fs::write(&path, &bytes).unwrap();
+        // (its length is not its size: counted when it was loaded)
+        assert_eq!(list(&d)[0]["frames"], 0);
+        write_meta(&path, &Meta { reason: "upload".into(), frames: 20, ..Default::default() });
+        assert_eq!(list(&d)[0]["frames"], 20);
+        let (tx, rx) = bounded::<EtiFrame>(50);
+        let p = Player::start(&path, tx).unwrap();
+        assert_eq!(p.frames, 20);
+        for n in 0..25 {
+            let f = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert_eq!((f.fic[0] as usize, f.streams[0].0), (n % 20, 2));
+        }
+        drop(p);
         let _ = std::fs::remove_dir_all(d);
     }
 }

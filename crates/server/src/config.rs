@@ -70,6 +70,7 @@ impl Default for IdleCheck {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DxRecordConfig {
+    /// Off unless the admin switches it on: a minute is about 15 MB.
     pub enabled: bool,
     /// Longest recording.
     pub minutes: u32,
@@ -79,7 +80,7 @@ pub struct DxRecordConfig {
 
 impl Default for DxRecordConfig {
     fn default() -> Self {
-        DxRecordConfig { enabled: true, minutes: 5, max_mb: 2048 }
+        DxRecordConfig { enabled: false, minutes: 1, max_mb: 2048 }
     }
 }
 

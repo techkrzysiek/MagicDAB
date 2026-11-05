@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
 import { send } from '../ws'
+import { selectService, startAudio } from '../actions'
 import { formatDuration, whenShort } from '../util'
 import type { DxRecording } from '../types'
 
@@ -14,8 +15,9 @@ function mb(bytes: number) {
 
 /**
  * DX recordings (admins): multiplexes heard for the first time, recorded as
- * ETI files; each can be played back on a receiver of this admin's own,
- * downloaded or deleted, and an .eti file of one's own can be loaded.
+ * ETI files; each can be played back on a receiver of this admin's own (one
+ * click on a station of it plays that one), downloaded or deleted, and an
+ * .eti or .edi file of one's own can be loaded.
  */
 export default function DxRecordings() {
   const t = useT()
@@ -24,6 +26,8 @@ export default function DxRecordings() {
   const token = useStore((s) => s.chatToken)
   const ensemble = useStore((s) => s.ensemble)
   const notify = useStore((s) => s.notify)
+  const audioOn = useStore((s) => s.audioEnabled)
+  const selected = useStore((s) => s.selected?.sid)
   const [uploading, setUploading] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
 
@@ -53,6 +57,13 @@ export default function DxRecordings() {
     }
   }
 
+  // (the sound starts within the click: browsers allow it only there)
+  const play = (r: DxRecording, sid?: number) => {
+    if (!audioOn) startAudio()
+    if (sid != null && playback === r.name) selectService(sid)
+    else send({ type: 'dxrec', action: 'play', name: r.name, sid })
+  }
+
   const list = dx?.recordings ?? []
   const active = dx?.active ?? null
   const reason = (r: string) => (r ? t('dxrec_reason_' + r) : '')
@@ -75,7 +86,7 @@ export default function DxRecordings() {
             max={30}
             style={{ width: 64 }}
             key={dx?.minutes}
-            defaultValue={dx?.minutes ?? 5}
+            defaultValue={dx?.minutes ?? 1}
             onBlur={(e) => {
               const v = parseInt(e.target.value)
               if (v && v !== dx?.minutes) send({ type: 'dxrec', action: 'settings', minutes: v })
@@ -149,12 +160,32 @@ export default function DxRecordings() {
                       {ended(r.ended) ? ` · ${ended(r.ended)}` : ''}
                     </div>
                   </td>
-                  <td title={r.services.map((s) => s.label).join(', ')}>{r.services.length || ''}</td>
+                  <td style={{ whiteSpace: 'normal' }}>
+                    <div style={{ minWidth: 160, maxWidth: 440 }}>
+                      {r.services
+                        .filter((s) => s.codec !== 'data')
+                        .sort((a, b) => a.label.localeCompare(b.label))
+                        .map((s) => {
+                          const sid = parseInt(s.sid, 16)
+                          const on = playback === r.name && selected === sid
+                          return (
+                            <button
+                              key={s.sid}
+                              className={'chip chip-btn' + (on ? ' hard' : '')}
+                              title={`${s.sid} · ${s.codec} ${s.bitrate} kbps`}
+                              onClick={() => play(r, sid)}
+                            >
+                              {s.label || s.sid}
+                            </button>
+                          )
+                        })}
+                    </div>
+                  </td>
                   <td>{r.snr ? `${r.snr.toFixed(1)} dB` : ''}</td>
                   <td>{formatDuration(r.duration)}</td>
                   <td>{mb(r.size)} MB</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
-                    <button className="btn primary" disabled={playback === r.name} onClick={() => send({ type: 'dxrec', action: 'play', name: r.name })}>
+                    <button className="btn primary" disabled={playback === r.name} onClick={() => play(r)}>
                       {t('dxrec_play')}
                     </button>{' '}
                     <button className="btn" onClick={() => download(r)}>
@@ -174,7 +205,7 @@ export default function DxRecordings() {
         <input
           ref={fileInput}
           type="file"
-          accept=".eti"
+          accept=".eti,.edi"
           style={{ display: 'none' }}
           onChange={(e) => {
             const f = e.target.files?.[0]

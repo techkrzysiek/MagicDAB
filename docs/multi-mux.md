@@ -36,10 +36,12 @@ that channel (made if needed) instead of retuning slot 0. A slot without
 listeners is closed after a minute (no flapping when someone hops around).
 
 A fourth kind of slot plays a **DX recording** (`dxrec.rs`, `radio/dxrec.rs`):
-a multiplex heard on a channel for the first time is recorded from slot 0 as
-ETI(NI) frames (the FIC and every sub-channel decoded, `etirec.rs` in the
-DAB crate; about 15 MB a minute, up to 5 minutes) into `data/dxrec`, and an
-admin plays such a file back on a slot of its own (`Kind::Playback`): the file
+once an admin switches it on, a multiplex heard on a channel for the first
+time is recorded from slot 0 as ETI(NI) frames (the FIC and every sub-channel
+decoded, `etirec.rs` in the DAB crate; about 15 MB a minute, a minute unless
+set longer) into `data/dxrec`, and an admin plays such a file, or an .eti or
+.edi file of its own, back on a slot of its own (`Kind::Playback`; a click on
+a station of the list plays that one): the file
 is fed to the receiver's ETI channel at the pace of the air, in a loop, nobody
 else is moved, and the slot closes a few seconds after the admin leaves it. A
 playback is not a channel listeners join and takes no place of theirs.

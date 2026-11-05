@@ -271,7 +271,8 @@ impl Slot {
                     connected: true,
                     frequency: self.frequency * 1000,
                     position: Some(position),
-                    duration: Some(duration),
+                    // (unknown for an .edi copied into the folder by hand)
+                    duration: (duration > 0.0).then_some(duration),
                     ..Default::default()
                 }
             }

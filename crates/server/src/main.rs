@@ -758,8 +758,9 @@ async fn stream_handler(
     r.body(axum::body::Body::from_stream(body)).unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-/// An .eti file of the admin's to play back for a day (dxrec.rs): the file
-/// as the body, `?token=&name=`; checked to hold ETI frames, capped.
+/// An .eti or .edi file of the admin's to play back for a day (dxrec.rs):
+/// the file as the body, `?token=&name=`; checked to hold ETI frames or EDI
+/// packets (the name gets the extension of what it holds), capped.
 async fn dxrec_upload_handler(
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -772,9 +773,11 @@ async fn dxrec_upload_handler(
         return StatusCode::FORBIDDEN.into_response();
     }
     let original = query.get("name").cloned().unwrap_or_default();
-    let name = dxrec::upload_name(&original);
+    // (the extension of the name until the first bytes say what it is)
+    let mut edi = original.to_ascii_lowercase().ends_with(".edi");
+    let name = dxrec::upload_name(&original, edi);
     let dir = state.data_dir.join(dxrec::DIR);
-    let path = dir.join(&name);
+    let mut path = dir.join(&name);
     let file = match tokio::fs::create_dir_all(&dir).await {
         Ok(()) => tokio::fs::File::create(&path).await,
         Err(e) => Err(e),
@@ -785,22 +788,38 @@ async fn dxrec_upload_handler(
         (status, why).into_response()
     };
     let mut stream = body.into_data_stream();
-    // the first frames, checked once there are enough bytes for one
+    // the first frames, checked once there are enough bytes for a few; the
+    // packets of an .edi are counted (its size does not tell its length)
     let mut head: Vec<u8> = Vec::new();
     let mut checked = false;
+    let mut edi_packets: Option<magicdab_dab::eti::StreamParser> = None;
+    let mut packets = 0u64;
     let mut size = 0u64;
+    let format = |head: &[u8]| {
+        if dxrec::looks_like_eti(head) {
+            Some(false)
+        } else {
+            dxrec::looks_like_edi(head).then_some(true)
+        }
+    };
     while let Some(chunk) = stream.next().await {
         let Ok(chunk) = chunk else { return fail(path, StatusCode::BAD_REQUEST, "the upload broke off").await };
         size += chunk.len() as u64;
         if size > dxrec::UPLOAD_MAX {
             return fail(path, StatusCode::PAYLOAD_TOO_LARGE, "the file is too big").await;
         }
-        if !checked {
+        if let Some(parser) = edi_packets.as_mut() {
+            parser.push(&chunk, |_| packets += 1);
+        } else if !checked {
             head.extend_from_slice(&chunk);
             if head.len() >= 3 * magicdab_dab::eti::ETI_FRAME {
                 checked = true;
-                if !dxrec::looks_like_eti(&head) {
-                    return fail(path, StatusCode::BAD_REQUEST, "not an ETI file").await;
+                let Some(f) = format(&head) else { return fail(path, StatusCode::BAD_REQUEST, "not an ETI or EDI file").await };
+                edi = f;
+                if edi {
+                    let mut parser = magicdab_dab::eti::StreamParser::new(true);
+                    parser.push(&head, |_| packets += 1);
+                    edi_packets = Some(parser);
                 }
             }
         }
@@ -808,13 +827,28 @@ async fn dxrec_upload_handler(
             return fail(path, StatusCode::INTERNAL_SERVER_ERROR, "cannot write the file").await;
         }
     }
-    if !checked && !dxrec::looks_like_eti(&head) {
-        return fail(path, StatusCode::BAD_REQUEST, "not an ETI file").await;
+    if !checked {
+        let Some(f) = format(&head) else { return fail(path, StatusCode::BAD_REQUEST, "not an ETI or EDI file").await };
+        edi = f;
+        if edi {
+            magicdab_dab::eti::StreamParser::new(true).push(&head, |_| packets += 1);
+        }
     }
     if file.flush().await.is_err() {
         return fail(path, StatusCode::INTERNAL_SERVER_ERROR, "cannot write the file").await;
     }
-    let frames = size / magicdab_dab::eti::ETI_FRAME as u64;
+    drop(file);
+    let name = if dxrec::is_edi(&path) == edi {
+        name
+    } else {
+        let to = path.with_extension(if edi { "edi" } else { "eti" });
+        if tokio::fs::rename(&path, &to).await.is_err() {
+            return fail(path, StatusCode::INTERNAL_SERVER_ERROR, "cannot write the file").await;
+        }
+        path = to;
+        path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+    };
+    let frames = if edi { packets } else { size / magicdab_dab::eti::ETI_FRAME as u64 };
     let meta = dxrec::Meta {
         time: servicelist::now(),
         started: localtime::now().format("%Y-%m-%d %H:%M:%S %:z").to_string(),

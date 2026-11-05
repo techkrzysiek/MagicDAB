@@ -303,7 +303,8 @@ impl Radio {
             }
             "play" => {
                 if let Some(name) = name {
-                    self.dxrec_play(client, &name);
+                    let sid = msg["sid"].as_u64().map(|s| s as u32);
+                    self.dxrec_play(client, &name, sid);
                 }
             }
             "stopPlayback" => {
@@ -332,8 +333,9 @@ impl Radio {
         }
     }
 
-    /// Plays a recording back to an admin on a side receiver of its own.
-    fn dxrec_play(&mut self, client: u64, name: &str) {
+    /// Plays a recording back to an admin on a side receiver of its own: the
+    /// station `sid`, else the first one of its ensemble (slots.rs).
+    fn dxrec_play(&mut self, client: u64, name: &str, sid: Option<u32>) {
         let path = self.dxrec_dir().join(name);
         if !path.is_file() {
             self.notice(client, "warning", "dxrec_missing");
@@ -356,12 +358,16 @@ impl Radio {
             .filter(|c| channel_frequency(c).is_some())
             .or_else(|| name.split('_').nth(2).filter(|c| channel_frequency(c).is_some()).map(|c| c.to_string()))
             .unwrap_or_else(|| "5A".into());
+        let key = sid.map(|sid| ServiceKey { sid, scids: 0 });
         let id = self.slots.next_id();
         match self.open_playback_slot(&channel, id, &path) {
             Ok(slot) => {
                 self.slots.open(&channel, Kind::Playback, slot);
                 log::info!("client {client} ({}) plays the DX recording {name} on a receiver of its own", self.client_ip(client));
-                self.move_client(client, id, None);
+                self.move_client(client, id, key);
+                if let Some(k) = key {
+                    self.hub.send(client, text(&json!({"type": "select", "sid": k.sid, "scids": k.scids, "reason": "playback"})));
+                }
             }
             Err(e) => {
                 log::warn!("cannot play the DX recording {name}: {e}");
