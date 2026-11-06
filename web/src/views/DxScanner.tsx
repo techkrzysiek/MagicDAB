@@ -3,7 +3,7 @@ import L from 'leaflet'
 import { useStore, useChannelAllowed } from '../store'
 import { useT } from '../i18n'
 import { send } from '../ws'
-import { downloadText, mhz } from '../util'
+import { downloadText, kw, mhz } from '../util'
 import { Flag, esc } from '../components/common'
 
 function levelColor(level: number | null) {
@@ -179,7 +179,7 @@ export default function DxScanner() {
                     <td>{r.main !== null ? `${r.main}-${r.sub}` : ''}</td>
                     <td>{r.level !== null ? `${r.level.toFixed(1)} dB` : ''}</td>
                     <td>{r.location ?? ''}</td>
-                    <td>{r.power !== null ? `${r.power} kW` : ''}</td>
+                    <td>{r.power !== null ? `${kw(r.power)} kW` : ''}</td>
                     <td>{r.distance !== null ? `${r.distance.toFixed(1)} km` : ''}</td>
                     <td>{r.azimuth !== null ? `${r.azimuth.toFixed(0)}°` : ''}</td>
                   </tr>

@@ -3,7 +3,7 @@ import L from 'leaflet'
 import { useStore } from '../store'
 import { useT } from '../i18n'
 import { ViewHeader, esc } from '../components/common'
-import { mhz } from '../util'
+import { kw, mhz } from '../util'
 import type { TiiCode } from '../types'
 
 // A transmitter's own signal: the SNR of the multiplex plus its TII level
@@ -307,7 +307,7 @@ export default function TiiView() {
               </div>
               {sel.power !== null && (
                 <div>
-                  ERP: <b>{sel.power} kW</b>
+                  ERP: <b>{kw(sel.power)} kW</b>
                 </div>
               )}
               {sel.altitude !== null && (

@@ -3,6 +3,7 @@ import { useStore } from '../store'
 import { useT } from '../i18n'
 import { saveSettings, startAudio } from '../actions'
 import { send } from '../ws'
+import { kw } from '../util'
 import type { Change, ChangeReport } from '../types'
 
 function describe(t: (k: string) => string, c: Change) {
@@ -37,7 +38,7 @@ function Report({ t, r, admin }: { t: (k: string) => string; r: ChangeReport; ad
           <span className="change-kind">TII {x.code}</span>{' '}
           {x.location ? <b>{x.location + (x.country ? ` (${x.country})` : '')}</b> : <span className="hint">{t('chg_report_unknown_tx')}</span>}
           {x.distance != null && x.azimuth != null ? ` · ${x.distance.toFixed(0)} km, ${x.azimuth.toFixed(0)}°` : ''}
-          {x.powerKw ? ` · ${x.powerKw} kW` : ''} · ≈{(r.snrMean + x.level).toFixed(1)} dB
+          {x.powerKw ? ` · ${kw(x.powerKw)} kW` : ''} · ≈{(r.snrMean + x.level).toFixed(1)} dB
         </div>
       ))}
       {admin && r.recording && (

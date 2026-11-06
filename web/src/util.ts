@@ -5,6 +5,11 @@ export function mhz(khz: number) {
   return (khz / 1000).toFixed(3)
 }
 
+/** Power in kW as the database has it: 7.94, not 7.940000057220459 (a 32-bit float). */
+export function kw(v: number) {
+  return String(Math.round(v * 1000) / 1000)
+}
+
 export function fmMhz(khz: number) {
   return (khz / 1000).toFixed(1)
 }
