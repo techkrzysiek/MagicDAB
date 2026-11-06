@@ -868,13 +868,14 @@ pub fn post_discord(webhook: &str, station: &str, ev: &ChangeEvent) -> DiscordMs
 
 /// The report of a new multiplex onto its message (post_discord), edited
 /// in; as a message of its own when that one did not go or the whole would
-/// be too long.
-pub fn discord_report(webhook: &str, station: &str, ev: &ChangeEvent, posted: DiscordMsg) {
+/// be too long. `base`: the public address of this server, for the link to
+/// the recording.
+pub fn discord_report(webhook: &str, station: &str, base: Option<&str>, ev: &ChangeEvent, posted: DiscordMsg) {
     let Some(report) = ev.report.as_ref() else { return };
     if webhook.is_empty() || !webhook.starts_with("https://") {
         return;
     }
-    let lines = report_lines(report).join("\n");
+    let lines = report_lines(report, base).join("\n");
     let head = discord_header(station, ev);
     let webhook = webhook.to_string();
     std::thread::spawn(move || {
@@ -910,8 +911,9 @@ fn flag(iso: &str) -> String {
         .collect()
 }
 
-/// A report in a few lines: the signal, then the transmitters.
-fn report_lines(r: &Report) -> Vec<String> {
+/// A report in a few lines: the signal, then the transmitters, then the
+/// recording (a link that plays it to an admin, the web's ?dxrec=).
+fn report_lines(r: &Report, base: Option<&str>) -> Vec<String> {
     let mut head = format!("📶 SNR śr. {:.1} dB, max {:.1} dB przez {} s", r.snr_mean, r.snr_max, r.seconds);
     match r.ended.as_str() {
         "lost" => head.push_str(", potem zanik"),
@@ -948,8 +950,11 @@ fn report_lines(r: &Report) -> Vec<String> {
     if r.transmitters.len() > SHOWN {
         lines.push(format!("📡 … i {} więcej", r.transmitters.len() - SHOWN));
     }
-    if let Some(n) = &r.recording {
-        lines.push(format!("🎙 nagranie: {n}"));
+    match (&r.recording, base) {
+        // (in <>: Discord shows no preview of it)
+        (Some(n), Some(b)) => lines.push(format!("🎙 nagranie: <{}/?dxrec={n}>", b.trim_end_matches('/'))),
+        (Some(n), None) => lines.push(format!("🎙 nagranie: {n}")),
+        _ => {}
     }
     lines
 }
@@ -1276,13 +1281,14 @@ mod tests {
                 },
                 ReportTx { code: "7-1".into(), level: -6.0, ..Default::default() },
             ],
-            recording: None,
+            recording: Some("2026-01-02_030405_12C_1234.eti".into()),
         };
-        let l = report_lines(&r);
+        let l = report_lines(&r, Some("https://rx.example.org/"));
         assert_eq!(l[0], "📶 SNR śr. 6.0 dB, max 9.5 dB przez 23 s, potem zanik · błędy FIC 2% · 🇨🇿 CZ");
         assert_eq!(l[1], "📡 TII 5-2 · 🇨🇿 Hill A · 123 km, 250° · 5 kW · ≈6.0 dB");
         assert_eq!(l[2], "📡 TII 7-1 · nie ma w bazie · ≈0.0 dB");
-        assert_eq!(l.len(), 3);
+        assert_eq!(l[3], "🎙 nagranie: <https://rx.example.org/?dxrec=2026-01-02_030405_12C_1234.eti>");
+        assert_eq!(l.len(), 4);
     }
 
     #[test]

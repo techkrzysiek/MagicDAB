@@ -1,7 +1,8 @@
 import { BellOff, X } from 'lucide-react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
-import { saveSettings } from '../actions'
+import { saveSettings, startAudio } from '../actions'
+import { send } from '../ws'
 import type { Change, ChangeReport } from '../types'
 
 function describe(t: (k: string) => string, c: Change) {
@@ -12,6 +13,12 @@ function describe(t: (k: string) => string, c: Change) {
 
 // the first minute of a new multiplex: its signal and its transmitters by TII
 function Report({ t, r, admin }: { t: (k: string) => string; r: ChangeReport; admin: boolean }) {
+  const audioOn = useStore((s) => s.audioEnabled)
+  // (the sound starts within the click: browsers allow it only there)
+  const play = (name: string) => {
+    if (!audioOn) startAudio()
+    send({ type: 'dxrec', action: 'play', name })
+  }
   return (
     <>
       <div className="change-item">
@@ -35,7 +42,10 @@ function Report({ t, r, admin }: { t: (k: string) => string; r: ChangeReport; ad
       ))}
       {admin && r.recording && (
         <div className="change-item">
-          <span className="change-kind">ETI</span> {r.recording}
+          <span className="change-kind">ETI</span>{' '}
+          <button className="chip chip-btn" title={t('dxrec_play')} onClick={() => play(r.recording!)}>
+            ▶ {r.recording}
+          </button>
         </div>
       )}
     </>

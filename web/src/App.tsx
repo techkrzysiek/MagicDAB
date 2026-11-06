@@ -21,6 +21,7 @@ import { LogView, AboutView } from './views/MiscViews'
 import StatsView from './views/StatsView'
 import { LogoDialog } from './components/logo'
 import { LoginDialog } from './components/LoginDialog'
+import { RecordingLink } from './components/RecordingLink'
 import GuideView from './views/GuideView'
 import SlidesView from './views/SlidesView'
 import { DesktopClose } from './components/DesktopClose'
@@ -596,6 +597,7 @@ export default function App() {
       {chatOpen && <ChatPopup />}
       <DesktopClose />
       <LoginDialog />
+      <RecordingLink />
       <TuneDialog />
       <ListenersDialog />
       <Shortcuts />
