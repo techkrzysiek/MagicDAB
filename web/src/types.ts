@@ -593,6 +593,29 @@ export interface ChangeEvent {
   eid: string
   ensemble: string
   changes: Change[]
+  report?: ChangeReport
+}
+
+// the first minute of a new multiplex (radio/newmux.rs)
+export interface ChangeReport {
+  seconds: number
+  ended?: string
+  snrMean: number
+  snrMax: number
+  fibErrors: number
+  country?: string
+  transmitters: ChangeReportTx[]
+  recording?: string
+}
+
+export interface ChangeReportTx {
+  code: string
+  level: number
+  location: string | null
+  country: string | null
+  distance: number | null
+  azimuth: number | null
+  powerKw: number | null
 }
 
 export interface SpiDoc {

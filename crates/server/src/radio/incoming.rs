@@ -626,6 +626,7 @@ impl Radio {
                             from: Some("MagicDAB".into()),
                             to: Some("test webhooka".into()),
                         }],
+                        report: None,
                     };
                     changes::post_discord(&self.settings.discord_webhook, &self.settings.station_name, &ev);
                 }

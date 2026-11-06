@@ -2,12 +2,44 @@ import { BellOff, X } from 'lucide-react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
 import { saveSettings } from '../actions'
-import type { Change } from '../types'
+import type { Change, ChangeReport } from '../types'
 
 function describe(t: (k: string) => string, c: Change) {
   const svc = c.service ? `${c.service}${c.sid ? ` (${c.sid})` : ''}` : ''
   const arrow = c.from !== null && c.to !== null ? `${c.from} → ${c.to}` : c.to ?? c.from ?? ''
   return { title: t('chg_' + c.kind), svc, arrow }
+}
+
+// the first minute of a new multiplex: its signal and its transmitters by TII
+function Report({ t, r, admin }: { t: (k: string) => string; r: ChangeReport; admin: boolean }) {
+  return (
+    <>
+      <div className="change-item">
+        <span className="change-kind">{t('chg_report_signal')}</span> SNR {r.snrMean.toFixed(1)} dB (max {r.snrMax.toFixed(1)} dB) · {r.seconds} s
+        {r.ended ? `, ${t('chg_report_' + r.ended)}` : ''}
+        {r.fibErrors >= 0.005 ? ` · FIC ${(r.fibErrors * 100).toFixed(0)}%` : ''}
+        {r.country ? ` · ${r.country}` : ''}
+      </div>
+      {r.transmitters.length === 0 && (
+        <div className="change-item">
+          <span className="change-kind">TII</span> <span className="hint">{t('chg_report_no_tii')}</span>
+        </div>
+      )}
+      {r.transmitters.map((x) => (
+        <div key={x.code} className="change-item">
+          <span className="change-kind">TII {x.code}</span>{' '}
+          {x.location ? <b>{x.location + (x.country ? ` (${x.country})` : '')}</b> : <span className="hint">{t('chg_report_unknown_tx')}</span>}
+          {x.distance != null && x.azimuth != null ? ` · ${x.distance.toFixed(0)} km, ${x.azimuth.toFixed(0)}°` : ''}
+          {x.powerKw ? ` · ${x.powerKw} kW` : ''} · ≈{(r.snrMean + x.level).toFixed(1)} dB
+        </div>
+      ))}
+      {admin && r.recording && (
+        <div className="change-item">
+          <span className="change-kind">ETI</span> {r.recording}
+        </div>
+      )}
+    </>
+  )
 }
 
 interface Muted {
@@ -75,6 +107,7 @@ export default function ChangesView() {
               </div>
             )
           })}
+          {ev.report && <Report t={t} r={ev.report} admin={admin} />}
         </div>
       ))}
     </div>

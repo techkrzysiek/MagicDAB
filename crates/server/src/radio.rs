@@ -42,6 +42,7 @@ mod device;
 mod dxrec;
 mod gate;
 mod incoming;
+mod newmux;
 mod outgoing;
 mod presence;
 mod rx;
@@ -376,6 +377,8 @@ pub struct Radio {
     stats: stats::State,
     /// ETI recordings of multiplexes heard for the first time (radio/dxrec.rs).
     dxrec: dxrec::State,
+    /// A multiplex never heard here, listened to for its report (radio/newmux.rs).
+    newmux: Option<newmux::Probe>,
 }
 
 /// Round to one decimal for display.
@@ -546,6 +549,7 @@ impl Radio {
             slots: slots::Table::new(),
             stats: stats::State::new(),
             dxrec: dxrec::State::new(),
+            newmux: None,
         }
     }
 
@@ -993,12 +997,17 @@ impl Radio {
             self.hub.broadcast_all(text(&json!({"type": "change", "event": ev})));
             // (Discord gets the changes of the multiplex together, 5 minutes later
             // - tick - but a new multiplex at once: an opening may not last)
-            if ev.changes.iter().any(|c| c.kind == "ensembleNew") {
-                changes::post_discord(&self.settings.discord_webhook, &self.settings.station_name, &ev);
+            let discord = if ev.changes.iter().any(|c| c.kind == "ensembleNew") {
+                Some(changes::post_discord(&self.settings.discord_webhook, &self.settings.station_name, &ev))
             } else {
                 self.changes.defer(&ev);
-            }
+                None
+            };
             self.dxrec_on_changes(&ev);
+            // (its signal and transmitters a minute later, into that message)
+            if let Some(d) = discord {
+                self.newmux_start(&ev, d);
+            }
             // (the server map: multiplexes received on air only)
             if crate::servermap::source(&self.settings, &ch) == "air" {
                 self.server_map.send_changes([&ev]);
@@ -1076,6 +1085,7 @@ impl Radio {
         self.check_services();
         self.side_tick();
         self.dxrec_tick();
+        self.newmux_tick();
         let due: Vec<ServiceKey> =
             self.pending_clears.iter().filter(|(_, t)| t.elapsed() > Duration::from_secs(3)).map(|(k, _)| *k).collect();
         for key in due {

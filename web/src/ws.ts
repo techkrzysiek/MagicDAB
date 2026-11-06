@@ -223,6 +223,12 @@ function handleText(m: any) {
     case 'change':
       st.set({ changeLog: [m.event, ...st.changeLog].slice(0, 500) })
       break
+    case 'changeReport': {
+      // (the report of a new multiplex onto its event)
+      const e = m.event
+      st.set({ changeLog: st.changeLog.map((x) => (x.time === e.time && x.channel === e.channel && x.eid === e.eid ? e : x)) })
+      break
+    }
     case 'dlsAll':
       st.set({ dlsAll: { ...st.dlsAll, [m.sid]: m.text } })
       break

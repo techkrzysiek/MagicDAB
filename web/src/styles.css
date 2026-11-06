@@ -2003,6 +2003,13 @@ table.table {
   transform: translate(-50%, -100%) scale(1.15);
 }
 
+/* heard before, not now: readable on both maps, plainly not a level colour */
+.tii-marker.off {
+  background: #fff;
+  color: #3a3f47;
+  border: 2px solid #4a4f57;
+}
+
 .tii-marker b,
 .tii-marker .db {
   display: block;

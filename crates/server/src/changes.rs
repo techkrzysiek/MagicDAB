@@ -65,6 +65,48 @@ pub struct ChangeEvent {
     pub eid: String,
     pub ensemble: String,
     pub changes: Vec<Change>,
+    /// A new multiplex: what its first minute brought (radio/newmux.rs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<Report>,
+}
+
+/// The first minute of a multiplex never heard here: how long and how strong
+/// it came, and its transmitters by TII.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Report {
+    /// Seconds with synchronisation.
+    pub seconds: u32,
+    /// Why it ended before the minute: lost (no signal) or retuned.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ended: String,
+    pub snr_mean: f32,
+    pub snr_max: f32,
+    /// Share of the FIBs with a bad CRC, mean.
+    pub fib_errors: f32,
+    /// ISO code of the country of its ECC and EId.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    /// The strongest first.
+    pub transmitters: Vec<ReportTx>,
+    /// The DX recording made of it (radio/dxrec.rs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportTx {
+    /// TII main-sub.
+    pub code: String,
+    /// Mean level against the strongest transmitter (0 dB).
+    pub level: f32,
+    /// From the transmitter database, when it has the code.
+    pub location: Option<String>,
+    pub country: Option<String>,
+    pub distance: Option<f64>,
+    pub azimuth: Option<f64>,
+    pub power_kw: Option<f32>,
 }
 
 /// A new service name is reported once it has lasted this long: a label
@@ -166,8 +208,17 @@ impl ChangeTracker {
         let log = dir.join("changes.jsonl");
         let snapshots: HashMap<String, Snapshot> =
             std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-        let mut recent: Vec<ChangeEvent> =
-            std::fs::read_to_string(&log).map(|s| s.lines().filter_map(|l| serde_json::from_str(l).ok()).collect()).unwrap_or_default();
+        let mut recent: Vec<ChangeEvent> = Vec::new();
+        for ev in std::fs::read_to_string(&log).unwrap_or_default().lines().filter_map(|l| serde_json::from_str::<ChangeEvent>(l).ok()) {
+            // (a report has a line of its own after its event: attach_report)
+            if ev.changes.is_empty() && ev.report.is_some() {
+                if let Some(e) = recent.iter_mut().rev().find(|e| e.time == ev.time && e.channel == ev.channel && e.eid == ev.eid) {
+                    e.report = ev.report;
+                }
+                continue;
+            }
+            recent.push(ev);
+        }
         if recent.len() > 500 {
             recent.drain(..recent.len() - 500);
         }
@@ -201,6 +252,20 @@ impl ChangeTracker {
             self.discord.save(&self.pending_path());
         }
         due
+    }
+
+    /// The report of a new multiplex onto its event, which it returns; in
+    /// the log as a line of its own (the log is only appended to).
+    pub fn attach_report(&mut self, time: i64, channel: &str, eid: &str, report: Report) -> Option<ChangeEvent> {
+        let ev = self.recent.iter_mut().rev().find(|e| e.time == time && e.channel == channel && e.eid == eid)?;
+        ev.report = Some(report);
+        let line = ChangeEvent { changes: Vec::new(), ..ev.clone() };
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&self.log) {
+            if let Ok(l) = serde_json::to_string(&line) {
+                let _ = writeln!(f, "{l}");
+            }
+        }
+        Some(ev.clone())
     }
 
     /// The batches waiting for Discord survive a restart (an update installs
@@ -530,6 +595,7 @@ impl ChangeTracker {
             eid: ens_id,
             ensemble: ens.label.as_ref().map(|l| l.text.clone()).unwrap_or_default(),
             changes,
+            report: None,
         };
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&self.log) {
             if let Ok(l) = serde_json::to_string(&ev) {
@@ -719,17 +785,52 @@ fn discord_lines(ev: &ChangeEvent) -> Vec<String> {
     lines
 }
 
+/// The Discord message of a new multiplex, for its report (discord_report).
+#[derive(Default)]
+pub struct Posted {
+    /// The posting is over (sent or failed).
+    done: bool,
+    /// The id and text of the last message posted.
+    last: Option<(String, String)>,
+}
+
+pub type DiscordMsg = std::sync::Arc<parking_lot::Mutex<Posted>>;
+
+fn discord_header(station: &str, ev: &ChangeEvent) -> String {
+    format!("**{} · {}** · {} ({})", station, ev.channel, ev.ensemble.trim(), ev.eid)
+}
+
+/// The webhook's URL with `path` after it and `query` among its parameters
+/// (that of a thread has ?thread_id=...).
+fn webhook_url(webhook: &str, path: &str, query: &str) -> String {
+    let (base, q) = webhook.split_once('?').unwrap_or((webhook, ""));
+    let q: Vec<&str> = [q, query].into_iter().filter(|x| !x.is_empty()).collect();
+    format!("{}{path}{}{}", base.trim_end_matches('/'), if q.is_empty() { "" } else { "?" }, q.join("&"))
+}
+
+/// Sends a message (or its new text); the id of the message when Discord
+/// gives it (?wait=true).
+fn discord_send(req: ureq::RequestBuilder<ureq::typestate::WithBody>, body: serde_json::Value) -> Result<Option<String>, ureq::Error> {
+    let mut resp = req
+        .header("Content-Type", "application/json")
+        .config()
+        .timeout_global(Some(std::time::Duration::from_secs(20)))
+        .build()
+        .send(body.to_string())?;
+    let data = resp.body_mut().with_config().limit(1 << 20).read_to_vec().unwrap_or_default();
+    Ok(serde_json::from_slice::<serde_json::Value>(&data).ok().and_then(|v| v["id"].as_str().map(str::to_string)))
+}
+
 /// Post a change event to a Discord webhook (in a background thread).
-pub fn post_discord(webhook: &str, station: &str, ev: &ChangeEvent) {
-    if webhook.is_empty() || !webhook.starts_with("https://") {
-        return;
-    }
+pub fn post_discord(webhook: &str, station: &str, ev: &ChangeEvent) -> DiscordMsg {
+    let posted = DiscordMsg::default();
     let body = discord_lines(ev);
     // (only sub-channels or capacity: the Changes view has them)
-    if body.is_empty() {
-        return;
+    if webhook.is_empty() || !webhook.starts_with("https://") || body.is_empty() {
+        posted.lock().done = true;
+        return posted;
     }
-    let mut lines = vec![format!("**{} · {}** · {} ({})", station, ev.channel, ev.ensemble.trim(), ev.eid)];
+    let mut lines = vec![discord_header(station, ev)];
     lines.extend(body);
     // Discord limits messages to 2000 characters
     let mut messages = Vec::new();
@@ -744,24 +845,113 @@ pub fn post_discord(webhook: &str, station: &str, ev: &ChangeEvent) {
     if !cur.is_empty() {
         messages.push(cur);
     }
-    let url = webhook.to_string();
+    let url = webhook_url(webhook, "", "wait=true");
+    let msg = posted.clone();
     std::thread::spawn(move || {
         for m in messages {
             // labels come from the air: "@everyone" in one must not ping the server
             let body = serde_json::json!({"username": "MagicDAB", "content": m, "allowed_mentions": {"parse": []}});
-            if let Err(e) = ureq::post(&url)
-                .header("Content-Type", "application/json")
-                .config()
-                .timeout_global(Some(std::time::Duration::from_secs(20)))
-                .build()
-                .send(body.to_string())
-            {
-                log::warn!("Discord webhook failed: {e}");
-                break;
+            match discord_send(ureq::post(&url), body) {
+                Ok(id) => msg.lock().last = id.map(|id| (id, m)),
+                Err(e) => {
+                    log::warn!("Discord webhook failed: {e}");
+                    msg.lock().last = None;
+                    break;
+                }
             }
             std::thread::sleep(std::time::Duration::from_millis(700));
         }
+        msg.lock().done = true;
     });
+    posted
+}
+
+/// The report of a new multiplex onto its message (post_discord), edited
+/// in; as a message of its own when that one did not go or the whole would
+/// be too long.
+pub fn discord_report(webhook: &str, station: &str, ev: &ChangeEvent, posted: DiscordMsg) {
+    let Some(report) = ev.report.as_ref() else { return };
+    if webhook.is_empty() || !webhook.starts_with("https://") {
+        return;
+    }
+    let lines = report_lines(report).join("\n");
+    let head = discord_header(station, ev);
+    let webhook = webhook.to_string();
+    std::thread::spawn(move || {
+        // (a report of a few seconds may come while its message is on its way)
+        for _ in 0..30 {
+            if posted.lock().done {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        let last = posted.lock().last.clone();
+        let sent = match last {
+            Some((id, text)) if text.len() + lines.len() < 1900 => discord_send(
+                ureq::patch(&webhook_url(&webhook, &format!("/messages/{id}"), "")),
+                serde_json::json!({"content": format!("{text}{lines}"), "allowed_mentions": {"parse": []}}),
+            ),
+            _ => discord_send(
+                ureq::post(&webhook_url(&webhook, "", "")),
+                serde_json::json!({"username": "MagicDAB", "content": format!("{head}\n{lines}"), "allowed_mentions": {"parse": []}}),
+            ),
+        };
+        if let Err(e) = sent {
+            log::warn!("Discord webhook failed: {e}");
+        }
+    });
+}
+
+/// The flag of an ISO country code (regional indicator letters).
+fn flag(iso: &str) -> String {
+    iso.chars()
+        .filter(char::is_ascii_alphabetic)
+        .filter_map(|c| char::from_u32(0x1F1E6 + (c.to_ascii_uppercase() as u32 - 'A' as u32)))
+        .collect()
+}
+
+/// A report in a few lines: the signal, then the transmitters.
+fn report_lines(r: &Report) -> Vec<String> {
+    let mut head = format!("📶 SNR śr. {:.1} dB, max {:.1} dB przez {} s", r.snr_mean, r.snr_max, r.seconds);
+    match r.ended.as_str() {
+        "lost" => head.push_str(", potem zanik"),
+        "retuned" => head.push_str(", potem przestrojony"),
+        _ => {}
+    }
+    if r.fib_errors >= 0.005 {
+        head.push_str(&format!(" · błędy FIC {:.0}%", r.fib_errors * 100.0));
+    }
+    if let Some(c) = &r.country {
+        head.push_str(&format!(" · {} {c}", flag(c)));
+    }
+    let mut lines = vec![head];
+    if r.transmitters.is_empty() {
+        lines.push("📡 TII: nic nie odebrano".into());
+    }
+    const SHOWN: usize = 10;
+    for t in r.transmitters.iter().take(SHOWN) {
+        let mut l = format!("📡 TII {}", t.code);
+        match &t.location {
+            Some(loc) => l.push_str(&format!(" · {}{loc}", t.country.as_deref().map(|c| format!("{} ", flag(c))).unwrap_or_default())),
+            None => l.push_str(" · nie ma w bazie"),
+        }
+        if let (Some(d), Some(a)) = (t.distance, t.azimuth) {
+            l.push_str(&format!(" · {d:.0} km, {a:.0}°"));
+        }
+        if let Some(p) = t.power_kw.filter(|p| *p > 0.0) {
+            l.push_str(&format!(" · {p} kW"));
+        }
+        // (its own signal: the multiplex' SNR plus its TII level, as in the TII view)
+        l.push_str(&format!(" · ≈{:.1} dB", r.snr_mean + t.level));
+        lines.push(l);
+    }
+    if r.transmitters.len() > SHOWN {
+        lines.push(format!("📡 … i {} więcej", r.transmitters.len() - SHOWN));
+    }
+    if let Some(n) = &r.recording {
+        lines.push(format!("🎙 nagranie: {n}"));
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -882,6 +1072,7 @@ mod tests {
                 from: None,
                 to: None,
             }],
+            report: None,
         };
         t.defer(&ev);
         let again = ChangeTracker::load(&dir);
@@ -956,7 +1147,7 @@ mod tests {
     }
 
     fn event(channel: &str, changes: Vec<Change>) -> ChangeEvent {
-        ChangeEvent { time: 0, channel: channel.into(), eid: "E21234".into(), ensemble: "MUX A".into(), changes }
+        ChangeEvent { time: 0, channel: channel.into(), eid: "E21234".into(), ensemble: "MUX A".into(), changes, report: None }
     }
 
     /// The net effect of the events of a multiplex, as Discord gets it.
@@ -1040,5 +1231,70 @@ mod tests {
             vec![sub("subchAdded", "SubCh 3 (S-3)", None, Some("start 0, 48 CU, EEP 2-A, 48 kbps"))],
         ]);
         assert_eq!(subs.iter().map(|c| c.kind.as_str()).collect::<Vec<_>>(), vec!["subchChanged"]);
+    }
+
+    #[test]
+    fn a_report_stays_with_its_event_after_a_restart() {
+        let (mut t, dir) = tracker();
+        let mute = crate::config::NotifyMute::default();
+        let ev = t.observe("12D", &ensemble(5), true, &[], &mute).expect("a new multiplex");
+        let report = Report {
+            seconds: 60,
+            snr_mean: 8.4,
+            snr_max: 11.2,
+            transmitters: vec![ReportTx { code: "3-1".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let got = t.attach_report(ev.time, &ev.channel, &ev.eid, report.clone()).expect("its event");
+        assert_eq!(got.report.as_ref(), Some(&report));
+        // (one event again, with its changes and its report)
+        let again = ChangeTracker::load(&dir);
+        assert_eq!(again.recent.len(), 1);
+        assert_eq!(again.recent[0].changes.len(), ev.changes.len());
+        assert_eq!(again.recent[0].report.as_ref(), Some(&report));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_report_in_a_few_lines() {
+        let r = Report {
+            seconds: 23,
+            ended: "lost".into(),
+            snr_mean: 6.0,
+            snr_max: 9.5,
+            fib_errors: 0.02,
+            country: Some("CZ".into()),
+            transmitters: vec![
+                ReportTx {
+                    code: "5-2".into(),
+                    level: 0.0,
+                    location: Some("Hill A".into()),
+                    country: Some("CZ".into()),
+                    distance: Some(123.4),
+                    azimuth: Some(250.0),
+                    power_kw: Some(5.0),
+                },
+                ReportTx { code: "7-1".into(), level: -6.0, ..Default::default() },
+            ],
+            recording: None,
+        };
+        let l = report_lines(&r);
+        assert_eq!(l[0], "📶 SNR śr. 6.0 dB, max 9.5 dB przez 23 s, potem zanik · błędy FIC 2% · 🇨🇿 CZ");
+        assert_eq!(l[1], "📡 TII 5-2 · 🇨🇿 Hill A · 123 km, 250° · 5 kW · ≈6.0 dB");
+        assert_eq!(l[2], "📡 TII 7-1 · nie ma w bazie · ≈0.0 dB");
+        assert_eq!(l.len(), 3);
+    }
+
+    #[test]
+    fn webhook_urls_keep_their_thread() {
+        assert_eq!(webhook_url("https://x/api/webhooks/1/abc", "", "wait=true"), "https://x/api/webhooks/1/abc?wait=true");
+        assert_eq!(
+            webhook_url("https://x/api/webhooks/1/abc?thread_id=9", "/messages/5", ""),
+            "https://x/api/webhooks/1/abc/messages/5?thread_id=9"
+        );
+        assert_eq!(
+            webhook_url("https://x/api/webhooks/1/abc?thread_id=9", "", "wait=true"),
+            "https://x/api/webhooks/1/abc?thread_id=9&wait=true"
+        );
     }
 }

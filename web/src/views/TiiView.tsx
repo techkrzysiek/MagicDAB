@@ -8,8 +8,8 @@ import type { TiiCode } from '../types'
 
 // A transmitter's own signal: the SNR of the multiplex plus its TII level
 // (against the strongest, 0 dB), coloured with the SNR thresholds of the
-// signal bars (below 7 dB weak, below 10 dB fair, from 10 dB good); grey:
-// known but not heard.
+// signal bars (below 7 dB weak, below 10 dB fair, from 10 dB good); white
+// with a grey rim: known but not heard now (a layer of its own, to hide).
 function cssColor(name: string, fallback: string) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
   return v || fallback
@@ -75,6 +75,7 @@ export default function TiiView() {
   const mapDiv = useRef<HTMLDivElement>(null)
   const map = useRef<L.Map | null>(null)
   const layer = useRef<L.LayerGroup | null>(null)
+  const unheard = useRef<L.LayerGroup | null>(null)
   const fitted = useRef<string>('')
   const [selected, setSelected] = useState<string | null>(null)
   const [seen, setSeen] = useState<Record<string, TiiCode>>({})
@@ -144,8 +145,17 @@ export default function TiiView() {
       // (no stored choice)
     }
     ;(chosen === 'plain' ? osm : topo).addTo(m)
+    // the transmitters not heard now, shown unless hidden
+    const off = L.layerGroup()
+    let hide = false
+    try {
+      hide = localStorage.getItem('magicdab-tii-unheard') === 'hide'
+    } catch {
+      // (no stored choice)
+    }
+    if (!hide) off.addTo(m)
     // (top left under the zoom: the right side holds the transmitters' panel)
-    L.control.layers(base, undefined, { position: 'topleft' }).addTo(m)
+    L.control.layers(base, { [t('tii_unheard')]: off }, { position: 'topleft' }).addTo(m)
     m.on('baselayerchange', (e: L.LayersControlEvent) => {
       try {
         localStorage.setItem('magicdab-tii-map', e.layer === osm ? 'plain' : 'topo')
@@ -153,7 +163,17 @@ export default function TiiView() {
         // (not kept)
       }
     })
+    const keep = (v: string) => () => {
+      try {
+        localStorage.setItem('magicdab-tii-unheard', v)
+      } catch {
+        // (not kept)
+      }
+    }
+    m.on('overlayadd', keep('show'))
+    m.on('overlayremove', keep('hide'))
     layer.current = L.layerGroup().addTo(m)
+    unheard.current = off
     map.current = m
     setTimeout(() => m.invalidateSize(), 50)
     return () => {
@@ -166,20 +186,22 @@ export default function TiiView() {
   useEffect(() => {
     const m = map.current
     const lg = layer.current
-    if (!m || !lg) return
+    const off = unheard.current
+    if (!m || !lg || !off) return
     lg.clearLayers()
+    off.clearLayers()
     const pts: L.LatLngExpression[] = []
     const loc = hello?.location
     if (loc) {
       L.circleMarker([loc.lat, loc.lon], { radius: 7, color: '#ffffff', fillColor: '#6d3fd8', fillOpacity: 1, weight: 3 }).addTo(lg)
       pts.push([loc.lat, loc.lon])
     }
-    // known but not detected transmitters of this ensemble: small grey dots
+    // known but not detected transmitters of this ensemble: white dots, a dark rim
     for (const k of tii?.known ?? []) {
       if (rows.some((r) => r.code === k.code)) continue
-      L.circleMarker([k.lat, k.lon], { radius: 3, color: '#9e9e9e', weight: 1, fillOpacity: 0.6 })
+      L.circleMarker([k.lat, k.lon], { radius: 5, color: '#4a4f57', weight: 2, fillColor: '#ffffff', fillOpacity: 0.95 })
         .bindTooltip(esc(`${k.code} ${k.location}`))
-        .addTo(lg)
+        .addTo(off)
     }
     // lines from the receiver to the transmitters heard, in the colour of their level
     if (loc) {
@@ -201,10 +223,14 @@ export default function TiiView() {
       const db = est !== null ? `<span class="db">${est.toFixed(1)} dB</span>` : r.detected && r.level !== null ? `<span class="db">${r.level.toFixed(1)} dB</span>` : ''
       const icon = L.divIcon({
         className: '',
-        html: `<div class="tii-marker${selected === r.code ? ' sel' : ''}" style="background:${r.detected ? levelColor(est) : '#9e9e9e'}"><b>${esc(r.code)}</b>${db}</div>`,
+        html: r.detected
+          ? `<div class="tii-marker${selected === r.code ? ' sel' : ''}" style="background:${levelColor(est)}"><b>${esc(r.code)}</b>${db}</div>`
+          : `<div class="tii-marker off${selected === r.code ? ' sel' : ''}"><b>${esc(r.code)}</b></div>`,
         iconSize: [0, 0],
       })
-      L.marker([r.lat, r.lon], { icon }).on('click', () => setSelected(r.code)).addTo(lg)
+      L.marker([r.lat, r.lon], { icon })
+        .on('click', () => setSelected(r.code))
+        .addTo(r.detected ? lg : off)
       pts.push([r.lat, r.lon])
     }
     const key = (tii?.eid ?? '') + rows.filter((r) => r.lat !== null).length

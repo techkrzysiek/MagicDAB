@@ -1613,6 +1613,10 @@ impl Worker {
 /// the EId ("E25B7A"), the map has them apart.
 fn change_event(ev: &ChangeEvent) -> Option<Value> {
     let mut v = serde_json::to_value(ev).ok()?;
+    // (the report of a new multiplex is not in the contract: docs/server-map-api.md)
+    if let Some(o) = v.as_object_mut() {
+        o.remove("report");
+    }
     if ev.eid.len() == 6 && ev.eid.is_ascii() {
         v["ecc"] = json!(&ev.eid[..2]);
         v["eid"] = json!(&ev.eid[2..]);
@@ -2239,7 +2243,8 @@ mod tests {
 
     #[test]
     fn change_events_have_the_eid_and_the_ecc_apart() {
-        let ev = ChangeEvent { time: 1, channel: "12A".into(), eid: "E25B7A".into(), ensemble: "MUX TWO".into(), changes: vec![] };
+        let ev =
+            ChangeEvent { time: 1, channel: "12A".into(), eid: "E25B7A".into(), ensemble: "MUX TWO".into(), changes: vec![], report: None };
         let v = change_event(&ev).unwrap();
         assert_eq!((v["eid"].as_str(), v["ecc"].as_str()), (Some("5B7A"), Some("E2")));
     }

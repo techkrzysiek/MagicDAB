@@ -166,9 +166,16 @@ impl Radio {
         }
     }
 
-    /// The band scan stays on the channel of a recording (radio.rs).
-    pub(super) fn dxrec_holds_scan(&self) -> bool {
-        self.dxrec.active.as_ref().is_some_and(|a| self.channel.as_deref() == Some(a.channel.as_str()))
+    /// The band scan stays on the channel of a recording or of the report
+    /// of a new multiplex (radio/newmux.rs).
+    pub(super) fn holds_scan(&self) -> bool {
+        self.dxrec.active.as_ref().is_some_and(|a| self.channel.as_deref() == Some(a.channel.as_str())) || self.newmux_holds_scan()
+    }
+
+    /// The file being recorded on `channel`.
+    pub(super) fn dxrec_file(&self, channel: &str) -> Option<String> {
+        let a = self.dxrec.active.as_ref().filter(|a| a.channel == channel)?;
+        a.writer.path.file_name().map(|n| n.to_string_lossy().to_string())
     }
 
     /// From the tick: a retune or no synchronisation ends the recording,

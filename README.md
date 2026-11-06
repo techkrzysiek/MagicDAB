@@ -8,7 +8,8 @@ listeners in the browser, each on the station of their choice.
   slideshow, DLS/DL+, SPI/EPG, TII.
 - **DX:** band scan and DX scan, TII with a transmitter database and map, a
   change log of the multiplexes (also to Discord), ETI recordings of
-  multiplexes heard for the first time.
+  multiplexes heard for the first time and a report of their first minute
+  (mean and peak SNR, transmitters by TII with distance and bearing).
 - **Extras:** RadioDNS and RadioVIS, DAB/FM service following with an
   FM-DX-Tuner (TEF668x), loudness meter (EBU R128), public tunnel.
 - **Packages:** Docker, Linux, Windows application with updates, macOS

@@ -139,7 +139,7 @@ impl Radio {
                 }
             }
             ScanPhase::Hold => {
-                if !self.dxrec_holds_scan() {
+                if !self.holds_scan() {
                     next = true;
                 }
             }
@@ -218,8 +218,9 @@ impl Radio {
                     scan.found += 1;
                     next = true;
                     self.observe_changes();
-                    // a multiplex never heard here: recorded first (radio/dxrec.rs)
-                    if self.dxrec_holds_scan() {
+                    // a multiplex never heard here: recorded first (radio/dxrec.rs) and
+                    // listened to for its report (radio/newmux.rs)
+                    if self.holds_scan() {
                         self.scan.as_mut().unwrap().phase = ScanPhase::Hold;
                         next = false;
                     } else if self.scan.as_ref().is_some_and(|s| s.silent) && self.clips_start(&ch) {
