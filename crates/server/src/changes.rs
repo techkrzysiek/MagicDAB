@@ -318,7 +318,18 @@ impl ChangeTracker {
             return None;
         }
         let key = format!("{channel}:{eid:04X}");
-        let new = snapshot_of(ens);
+        let mut new = snapshot_of(ens);
+        // a service whose sub-channel is not known yet keeps the one it had: a packet
+        // one waits for FIG 0/3, which a weak signal brings late (unknown is no change)
+        if let Some(o) = self.snapshots.get(&key) {
+            for (sid, s) in new.services.iter_mut() {
+                if let Some(os) = o.services.get(sid).filter(|os| s.subch.is_none() && os.subch.is_some()) {
+                    s.bitrate = os.bitrate;
+                    s.protection = os.protection.clone();
+                    s.subch = os.subch;
+                }
+            }
+        }
         let mut changes = Vec::new();
         let mut keep_label: Vec<String> = Vec::new();
         let mut keep_pty: Vec<String> = Vec::new();
@@ -1030,6 +1041,26 @@ mod tests {
         for (_, since) in t.pending_structure.values_mut() {
             *since -= STRUCTURE_CONFIRM;
         }
+    }
+
+    #[test]
+    fn a_packet_service_waiting_for_its_sub_channel_is_no_change() {
+        let (mut t, dir) = tracker();
+        let mute = crate::config::NotifyMute::default();
+        // the last service carries packet data (an EPG) in its sub-channel
+        let mut full = ensemble(4);
+        let epg = &mut full.services.get_mut(&0x7C43).unwrap().components[0];
+        epg.tmid = 3;
+        epg.ctype = 60;
+        t.observe("11B", &full, true, &[], &mute);
+        // weak signal: FIG 0/3 not here yet, the service without its sub-channel
+        let mut waiting = full.clone();
+        waiting.services.get_mut(&0x7C43).unwrap().components[0].subch_id = None;
+        assert!(t.observe("11B", &waiting, true, &[], &mute).is_none());
+        age(&mut t);
+        assert!(t.observe("11B", &waiting, true, &[], &mute).is_none());
+        assert!(t.observe("11B", &full, true, &[], &mute).is_none());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
