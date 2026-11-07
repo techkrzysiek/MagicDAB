@@ -5,6 +5,7 @@ import { useT } from '../i18n'
 import { Logo, FavStar, SignalBars, scrollIntoList } from '../components/common'
 import { selectService, tuningLocked } from '../actions'
 import { ageShort, fullSid, hex } from '../util'
+import type { EnsembleEntry } from '../types'
 
 export type StationMode = 'mux' | 'all' | 'fav'
 
@@ -155,16 +156,34 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
   }, [selected?.sid, current, mode, grouped])
 
   const stations = useMemo(() => {
+    // one multiplex on several channels (same EId and name): its newest
+    // reception tells what it carries now, an older one may still have a
+    // station that has left it since
+    const ident = (e: EnsembleEntry) => `${e.ecc}:${e.eid}:${e.label.trim().toLowerCase()}`
+    const newest = new Map<string, EnsembleEntry>()
+    for (const e of serviceList) {
+      const n = newest.get(ident(e))
+      if (!n || e.lastSeen > n.lastSeen) newest.set(ident(e), e)
+    }
     const map = new Map<string, Station>()
+    // (when the name of each station was received)
+    const named = new Map<string, number>()
     for (const e of serviceList) {
       if (!allowed(e.channel) && e.channel !== ensemble.channel) continue
+      const latest = newest.get(ident(e))
       for (const s of e.services) {
+        if (latest && latest !== e && !latest.services.some((x) => x.sid === s.sid)) continue
         const ecc = s.ecc ?? e.ecc ?? null
         const key = `${ecc ?? ''}:${s.sid}`
         let st = map.get(key)
         if (!st) {
           st = { key, sid: s.sid, ecc, label: s.label, muxes: [] }
           map.set(key, st)
+        }
+        // the name as last received (a renamed station, wherever it was before)
+        if (e.lastSeen > (named.get(key) ?? -Infinity)) {
+          st.label = s.label
+          named.set(key, e.lastSeen)
         }
         if (!st.muxes.some((m) => m.channel === e.channel && m.eid === e.eid)) {
           st.muxes.push({ channel: e.channel, eid: e.eid, label: e.label, snr: e.snr, lastSeen: e.lastSeen })
