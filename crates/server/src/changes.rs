@@ -495,8 +495,23 @@ impl ChangeTracker {
                             match self.pending_labels.get(&pkey) {
                                 Some((l, sh, t)) if *l == s.label && *sh == s.short => {
                                     if t.elapsed() >= LABEL_CONFIRM {
-                                        diff("label", o.label.clone(), s.label.clone());
-                                        diff("shortLabel", o.short.clone(), s.short.clone());
+                                        // a name it has had before: a slot shared by the time of
+                                        // day (one station by day, another at night) goes back and
+                                        // forth every day, news the first time only
+                                        let mux = format!("{:02X}{eid:04X}", ens.ecc.unwrap_or(0));
+                                        let had = self
+                                            .recent
+                                            .iter()
+                                            .filter(|e| e.channel == channel && e.eid == mux)
+                                            .flat_map(|e| &e.changes)
+                                            .filter(|c| c.kind == "label" && c.sid.as_deref() == Some(sid.as_str()))
+                                            .any(|c| {
+                                                c.from.as_deref() == Some(s.label.as_str()) || c.to.as_deref() == Some(s.label.as_str())
+                                            });
+                                        if !(had && o.label != s.label) {
+                                            diff("label", o.label.clone(), s.label.clone());
+                                            diff("shortLabel", o.short.clone(), s.short.clone());
+                                        }
                                         self.pending_labels.remove(&pkey);
                                     } else {
                                         keep_label.push(sid.clone());
@@ -1236,6 +1251,34 @@ mod tests {
         assert!(b.due(t0 + s(399)).is_empty());
         assert_eq!(b.due(t0 + s(400)).len(), 1);
         assert!(b.pending.is_empty());
+    }
+
+    #[test]
+    fn a_station_back_under_a_name_it_had_is_no_news() {
+        let (mut t, dir) = tracker();
+        let mute = crate::config::NotifyMute::default();
+        let named = |name: &str| {
+            let mut e = ensemble(3);
+            e.services.get_mut(&0x7C41).unwrap().label = Some(Label { text: name.into(), short: name.into() });
+            e
+        };
+        // (a name is told once it has lasted LABEL_CONFIRM)
+        let rename = |t: &mut ChangeTracker, name: &str| {
+            assert!(t.observe("12A", &named(name), true, &[], &mute).is_none());
+            for (_, _, since) in t.pending_labels.values_mut() {
+                *since -= LABEL_CONFIRM;
+            }
+            t.observe("12A", &named(name), true, &[], &mute)
+        };
+        t.observe("12A", &named("Day"), true, &[], &mute);
+        let ev = rename(&mut t, "Night").expect("a new name is news");
+        assert_eq!(ev.changes.iter().map(|c| c.kind.as_str()).collect::<Vec<_>>(), vec!["label", "shortLabel"]);
+        // the time-shared slot every day: back and forth without a word
+        assert!(rename(&mut t, "Day").is_none());
+        assert!(rename(&mut t, "Night").is_none());
+        // a name never seen is news again
+        assert!(rename(&mut t, "Other").is_some());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
