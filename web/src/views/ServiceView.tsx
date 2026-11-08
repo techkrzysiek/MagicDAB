@@ -284,6 +284,7 @@ function ServicePanel({ svc }: { svc?: Service }) {
   const audioPlaying = useStore((s) => s.audioPlaying)
   const buffer = useStore((s) => s.audioBuffer)
   const underruns = useStore((s) => s.audioUnderruns)
+  const lost = useStore((s) => s.audioLost)
   const codec = useStore((s) => s.codec)
   const useRadioDns = useStore((s) => s.useRadioDns)
   const [preferVis, setPreferVis] = useState(false)
@@ -440,7 +441,14 @@ function ServicePanel({ svc }: { svc?: Service }) {
           audioPlaying ? (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
               ▶ {codec.toUpperCase()} · {t('buffer')} {buffer.toFixed(2)} s
-              {underruns > 0 && <span className="hint"> · {t('underruns')}: {underruns}</span>} <LevelMeter />
+              {underruns > 0 && <span className="hint"> · {t('underruns')}: {underruns}</span>}
+              {lost > 0 && (
+                <span className="hint" title={t('audio_lost_help')}>
+                  {' '}
+                  · {t('audio_lost')}: {lost}
+                </span>
+              )}{' '}
+              <LevelMeter />
             </span>
           ) : (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>

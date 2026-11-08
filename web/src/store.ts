@@ -240,6 +240,8 @@ export interface Store {
   serverMapStatus: ServerMapStatus | null
   loginError: boolean
   audioUnderruns: number
+  /** Audio frames the server dropped for this browser (player.ts). */
+  audioLost: number
   /** the player's buffer now: the one chosen plus what dropouts added */
   audioTarget: number
   spiDocXml: Record<string, string | null>
@@ -343,6 +345,7 @@ export const useStore = create<Store>((set, get) => ({
   serverMapStatus: null,
   loginError: false,
   audioUnderruns: 0,
+  audioLost: 0,
   audioTarget: 0,
   spiDocXml: {},
   tuner: false,

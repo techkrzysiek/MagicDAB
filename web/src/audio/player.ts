@@ -4,36 +4,114 @@ import { useStore, load, isLocal } from '../store'
 import { recordOpus } from './recorder'
 
 const WORKLET = `
+// The buffer is steered to its target by playing a hair faster or slower
+// (at most 0.3 %, about 5 cents: nobody hears it), not by cutting or
+// repeating samples: the read position moves by "ratio" frames per frame
+// played and the sound between two samples comes from a Kaiser-windowed sinc
+// (32 taps, 256 phases and a straight line between them).
+const HALF = 16, TAPS = 32, PHASES = 256
+// frames needed after the read position
+const AHEAD = HALF + 1
+const MAX_ADJUST = 0.003
+// fades: a start, a skip ahead, both sides of frames the server dropped
+const FADE_START = 2048, FADE_SKIP = 256, FADE_GAP = 96
+
+function i0(x) {
+  let s = 1, t = 1
+  for (let k = 1; k < 40; k++) { t *= (x / (2 * k)) * (x / (2 * k)); s += t }
+  return s
+}
+
+function kernel() {
+  const beta = 8, h = new Float32Array((PHASES + 1) * TAPS), norm = i0(beta)
+  for (let p = 0; p <= PHASES; p++) {
+    let sum = 0
+    for (let t = 0; t < TAPS; t++) {
+      // the tap's distance from the read position
+      const d = t - (HALF - 1) - p / PHASES
+      const u = d / HALF
+      const w = Math.abs(u) >= 1 ? 0 : i0(beta * Math.sqrt(1 - u * u)) / norm
+      const v = (d === 0 ? 1 : Math.sin(Math.PI * d) / (Math.PI * d)) * w
+      h[p * TAPS + t] = v
+      sum += v
+    }
+    for (let t = 0; t < TAPS; t++) h[p * TAPS + t] /= sum
+  }
+  return h
+}
+
 class MagicDabPlayer extends AudioWorkletProcessor {
   constructor() {
     super()
-    this.size = 48000 * 2 * 6
-    this.buf = new Float32Array(this.size)
+    this.size = 48000 * 8
+    this.bl = new Float32Array(this.size)
+    this.br = new Float32Array(this.size)
+    this.h = kernel()
+    // read position (a frame and the part of the next one), write position,
+    // frames from the one to the other
     this.r = 0
+    this.frac = 0
     this.w = 0
     this.count = 0
     this.playing = false
     this.target = 48000 * 0.35
+    // a new station starts with less and the buffer grows to its target
+    // while it plays; after a dropout it fills up first
+    this.startAt = this.target
+    this.fresh = true
+    this.level = 0
+    this.ratio = 1
+    this.fade = FADE_START
+    this.fadeLen = FADE_START
+    this.fadeOut = 0
+    this.skip = 0
     this.tick = 0
-    this.fade = 0
     this.underruns = 0
     this.port.onmessage = (e) => {
       const d = e.data
-      if (d === 'flush') { this.r = this.w = this.count = 0; this.playing = false; return }
+      if (d === 'flush') { this.flush(); return }
       if (d && d.target) { this.target = d.target; return }
-      const n = d.length >> 1
-      if (this.count + n > this.size / 2) {
-        // overflow: drop the oldest audio
-        const drop = this.count + n - this.size / 2
-        this.r = (this.r + drop * 2) % this.size
-        this.count -= drop
-      }
-      for (let i = 0; i < d.length; i++) {
-        this.buf[this.w] = d[i]
-        this.w = (this.w + 1) % this.size
-      }
-      this.count += n
+      if (d instanceof Float32Array) this.write(d, false)
+      else if (d && d.pcm) this.write(d.pcm, !!d.gap)
     }
+  }
+  flush() {
+    this.r = this.w = this.count = 0
+    this.frac = 0
+    this.playing = false
+    this.fresh = true
+    this.fadeOut = this.skip = 0
+    this.bl.fill(0)
+    this.br.fill(0)
+  }
+  // (gap: frames before these were lost: what is before fades out, these in)
+  write(d, gap) {
+    const n = d.length >> 1
+    const size = this.size, bl = this.bl, br = this.br
+    if (this.count + n > size / 2) {
+      // overflow: drop the oldest audio
+      const drop = this.count + n - size / 2
+      this.r = (this.r + drop) % size
+      this.count -= drop
+    }
+    if (gap && this.count > FADE_GAP + AHEAD) {
+      let j = (this.w - FADE_GAP + size) % size
+      for (let k = 0; k < FADE_GAP; k++) {
+        const g = 1 - (k + 1) / FADE_GAP
+        bl[j] *= g
+        br[j] *= g
+        if (++j === size) j = 0
+      }
+    }
+    let w = this.w
+    for (let i = 0; i < n; i++) {
+      const g = gap && i < FADE_GAP ? i / FADE_GAP : 1
+      bl[w] = d[2 * i] * g
+      br[w] = d[2 * i + 1] * g
+      if (++w === size) w = 0
+    }
+    this.w = w
+    this.count += n
   }
   process(inputs, outputs) {
     const out = outputs[0]
@@ -41,28 +119,72 @@ class MagicDabPlayer extends AudioWorkletProcessor {
     const n = L.length
     if (++this.tick % 100 === 0) this.port.postMessage({ level: this.count / 48000, playing: this.playing, underruns: this.underruns })
     if (!this.playing) {
-      if (this.count >= this.target) { this.playing = true; this.fade = 0 }
-      else { L.fill(0); if (R !== L) R.fill(0); return true }
+      const at = this.fresh ? Math.min(this.target, Math.max(0.2 * 48000, this.target / 2)) : this.target
+      if (this.count >= at + AHEAD) {
+        this.playing = true
+        this.fresh = false
+        this.fade = 0
+        this.fadeLen = FADE_START
+        this.level = this.count
+        this.ratio = 1
+      } else { L.fill(0); if (R !== L) R.fill(0); return true }
     }
-    if (this.count < n) { this.playing = false; this.underruns++; L.fill(0); if (R !== L) R.fill(0); return true }
-    // drift compensation: skip or repeat one sample frame per quantum
-    let skip = 0, repeat = false
-    if (this.count > this.target * 2 + 4800) skip = 1
-    else if (this.count < this.target * 0.5 && this.count > n * 2) repeat = true
+    if (this.count < Math.ceil(n * this.ratio + this.frac) + AHEAD) {
+      this.playing = false
+      this.underruns++
+      L.fill(0); if (R !== L) R.fill(0)
+      return true
+    }
+    // the level over about a second (audio comes in bursts of a DAB+
+    // superframe, 120 ms) against the target
+    this.level += (this.count - this.level) * (n / 48000)
+    const err = (this.level - this.target) / 48000
+    // far too much (a stall of the network and all of it at once): skip
+    // ahead, faded out and in
+    if (err > 1 && !this.fadeOut && !this.skip) {
+      this.skip = Math.round(this.count - this.target)
+      this.fadeOut = FADE_SKIP
+    }
+    this.ratio = 1 + Math.max(-MAX_ADJUST, Math.min(MAX_ADJUST, err * 0.03))
+    const h = this.h, bl = this.bl, br = this.br, size = this.size, ratio = this.ratio
+    let r = this.r, f = this.frac, count = this.count
     for (let i = 0; i < n; i++) {
-      if (repeat && i === n >> 1) {
-        const pr = (this.r - 2 + this.size) % this.size
-        L[i] = this.buf[pr]; R[i] = this.buf[pr + 1]
-        continue
+      const p = f * PHASES, pi = p | 0, a = p - pi
+      const b0 = pi * TAPS, b1 = b0 + TAPS
+      let j = r - (HALF - 1)
+      if (j < 0) j += size
+      let yl = 0, yr = 0
+      for (let t = 0; t < TAPS; t++) {
+        const c = h[b0 + t] + (h[b1 + t] - h[b0 + t]) * a
+        yl += c * bl[j]
+        yr += c * br[j]
+        if (++j === size) j = 0
       }
       let g = 1
-      if (this.fade < 2048) { g = this.fade / 2048; this.fade++ }
-      L[i] = this.buf[this.r] * g
-      R[i] = this.buf[this.r + 1] * g
-      this.r = (this.r + 2) % this.size
-      this.count--
+      if (this.fade < this.fadeLen) g = this.fade++ / this.fadeLen
+      if (this.fadeOut > 0) {
+        g *= this.fadeOut / FADE_SKIP
+        if (--this.fadeOut === 0) {
+          r = (r + this.skip) % size
+          count -= this.skip
+          this.level -= this.skip
+          this.skip = 0
+          this.fade = 0
+          this.fadeLen = FADE_SKIP
+        }
+      }
+      L[i] = yl * g
+      R[i] = yr * g
+      f += ratio
+      while (f >= 1) {
+        f -= 1
+        if (++r === size) r = 0
+        count--
+      }
     }
-    if (skip) { this.r = (this.r + 2) % this.size; this.count-- }
+    this.r = r
+    this.frac = f
+    this.count = count
     return true
   }
 }
@@ -161,7 +283,8 @@ class MagicDabMeter extends AudioWorkletProcessor {
 registerProcessor('magicdab-meter', MagicDabMeter)
 `
 
-type Decoder = { decode(data: Uint8Array): void; close(): void }
+/** `gap`: frames before this one were lost (the worklet fades across). */
+type Decoder = { decode(data: Uint8Array, gap: boolean): void; close(): void }
 
 /**
  * Fallback output for insecure contexts (plain http on a LAN IP) and browsers
@@ -243,6 +366,12 @@ class Player {
   decoderKind: 'webcodecs' | 'wasm' | null = null
   currentSid: number | null = null
   ts = 0
+  /** Timestamp of the first frame decoded after a gap (WebCodecs). */
+  gapTs = -1
+  /** Sequence number of the last audio frame and frames the server could
+   *  not send to this browser (its queue was full: audio.rs, hub.rs). */
+  private lastSeq = -1
+  private lost = 0
   starting: Promise<void> | null = null
   levelTimer: number | null = null
   /** The buffer chosen (Settings), what dropouts added to it, and when it
@@ -357,19 +486,19 @@ class Player {
     window.addEventListener('focus', resume)
   }
 
-  private post(interleaved: Float32Array) {
+  private post(interleaved: Float32Array, gap = false) {
     let p = 0
     for (let i = 0; i < interleaved.length; i += 4) {
       const v = Math.abs(interleaved[i])
       if (v > p) p = v
     }
     this.peak = Math.max(p, this.peak * 0.9)
-    if (this.node) this.node.port.postMessage(interleaved, [interleaved.buffer])
+    if (this.node) this.node.port.postMessage(gap ? { pcm: interleaved, gap } : interleaved, [interleaved.buffer])
     else this.fallback?.push(interleaved)
   }
 
   private async createDecoder() {
-    const post = (interleaved: Float32Array) => this.post(interleaved)
+    const post = (interleaved: Float32Array, gap = false) => this.post(interleaved, gap)
     const AD = window.isSecureContext ? (window as any).AudioDecoder : undefined
     if (AD) {
       try {
@@ -399,8 +528,11 @@ class Player {
                   out[2 * i + 1] = tmp[i * ch + (ch > 1 ? 1 : 0)]
                 }
               }
+              // (the first frame after a gap: decoding is asynchronous)
+              const gap = ad.timestamp === this.gapTs
+              if (gap) this.gapTs = -1
               ad.close()
-              post(out)
+              post(out, gap)
             },
             error: (e: any) => {
               // a closed decoder never decodes again: start a new one
@@ -412,9 +544,10 @@ class Player {
           })
           dec.configure(cfg)
           this.decoder = {
-            decode: (data) => {
+            decode: (data, gap) => {
               if (dec.state !== 'configured') return
               this.ts += 20000
+              if (gap) this.gapTs = this.ts
               dec.decode(new (window as any).EncodedAudioChunk({ type: 'key', timestamp: this.ts, data }))
             },
             close: () => dec.close(),
@@ -430,7 +563,7 @@ class Player {
     const dec = new OpusDecoder({ channels: 2 })
     await dec.ready
     this.decoder = {
-      decode: (data) => {
+      decode: (data, gap) => {
         const r = dec.decodeFrame(data)
         const n = r.samplesDecoded
         const out = new Float32Array(n * 2)
@@ -440,7 +573,7 @@ class Player {
           out[2 * i] = l[i]
           out[2 * i + 1] = rr[i]
         }
-        post(out)
+        post(out, gap)
       },
       close: () => dec.free(),
     }
@@ -452,6 +585,7 @@ class Player {
     if ((!this.node && !this.fallback) || !this.ctx) return
     const dv = new DataView(b.buffer, b.byteOffset, b.byteLength)
     const codec = b[1]
+    const seq = dv.getUint16(2, true)
     const sid = dv.getUint32(4, true)
     const sel = useStore.getState().selected
     if (!sel || sel.sid !== sid) return
@@ -459,20 +593,30 @@ class Player {
       this.currentSid = sid
       this.flush()
     }
+    // frames missing in between: counted, faded across; a big jump is
+    // another stream (the receiver started the station anew, another slot)
+    const missing = this.lastSeq < 0 ? 0 : (seq - this.lastSeq - 1) & 0xffff
+    this.lastSeq = seq
+    const gap = missing > 0
+    if (gap && missing < 250) {
+      this.lost += missing
+      useStore.getState().set({ audioLost: this.lost })
+    }
     const payload = b.subarray(8)
     if (codec === 1) {
       recordOpus(sid, payload)
-      this.decoder?.decode(payload)
+      this.decoder?.decode(payload, gap)
     } else if (codec === 2) {
       const n = payload.byteLength >> 1
       const out = new Float32Array(n)
       const pv = new DataView(payload.buffer, payload.byteOffset, payload.byteLength)
       for (let i = 0; i < n; i++) out[i] = pv.getInt16(2 * i, true) / 32768
-      this.post(out)
+      this.post(out, gap)
     }
   }
 
   flush() {
+    this.lastSeq = -1
     // the meter starts anew with the next station
     this.meter?.port.postMessage('reset')
     this.node?.port.postMessage('flush')
