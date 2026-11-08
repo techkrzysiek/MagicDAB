@@ -290,12 +290,18 @@ impl SpiStore {
         let id = format!("{ecc:02x}{sid:04x}-{w}x{h}-{}", source.to_lowercase());
         let file = format!("{id}.{}", ext_for(&mime));
         if let Some(v) = self.index.logos.iter().find(|v| v.id == id) {
-            if v.size == data.len() && v.url == url {
+            // the same picture again (a new one under the same name and size
+            // replaces it)
+            if v.size == data.len() && v.url == url && std::fs::read(self.dir.join(&v.file)).is_ok_and(|d| d == data) {
                 return false;
             }
         }
         if std::fs::write(self.dir.join(&file), data).is_err() {
             return false;
+        }
+        // (a replaced picture of another type leaves no file behind)
+        for v in self.index.logos.iter().filter(|v| v.id == id && v.file != file) {
+            let _ = std::fs::remove_file(self.dir.join(&v.file));
         }
         self.index.logos.retain(|v| v.id != id);
         self.index.logos.push(LogoVariant {
@@ -316,6 +322,25 @@ impl SpiStore {
             log::info!("SPI logo {ecc:02X}{sid:04X} {w}x{h} ({} bytes, {url})", data.len());
         }
         true
+    }
+
+    /// The logos of a station its SPI no longer lists (`listed`: the ones it
+    /// has now) are gone, also those still waiting for their picture.
+    fn drop_unlisted_logos(&mut self, ecc: u8, sid: u32, listed: &[LogoRef]) -> bool {
+        let has = |url: &str| listed.iter().any(|l| l.url == url);
+        self.pending.retain(|(ps, pe, pl)| *ps != sid || *pe != ecc || has(&pl.url));
+        let (gone, keep): (Vec<LogoVariant>, Vec<LogoVariant>) = std::mem::take(&mut self.index.logos)
+            .into_iter()
+            .partition(|v| v.source == "SPI" && v.sid == sid && v.ecc == ecc && !has(&v.url));
+        self.index.logos = keep;
+        for v in &gone {
+            let _ = std::fs::remove_file(self.dir.join(&v.file));
+            log::info!("SPI logo {ecc:02X}{sid:04X} {}x{} is no longer sent ({})", v.width, v.height, v.url);
+        }
+        if !gone.is_empty() {
+            self.index_changed();
+        }
+        !gone.is_empty()
     }
 
     /// The name of a service from SPI / RadioDNS (medium, long or short name).
@@ -376,6 +401,7 @@ impl SpiStore {
                                 links: s.links.clone(),
                             };
                             changed |= self.set_text(ecc, sid, text);
+                            changed |= self.drop_unlisted_logos(ecc, sid, &s.logos);
                             for l in &s.logos {
                                 if !self.pending.iter().any(|(ps, _, pl)| *ps == sid && pl == l) {
                                     self.pending.push((sid, ecc, l.clone()));
@@ -604,6 +630,28 @@ impl SpiStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn logo_ref(url: &str) -> LogoRef {
+        LogoRef { url: url.into(), mime: Some("image/png".into()), width: 128, height: 128, kind: None }
+    }
+
+    #[test]
+    fn a_new_logo_replaces_the_old_and_one_no_longer_sent_is_gone() {
+        let dir = std::env::temp_dir().join(format!("magicdab-spi-{}", std::process::id()));
+        let mut s = SpiStore::load(&dir);
+        let add = |s: &mut SpiStore, data: &[u8], url: &str| s.add_logo(0x1234, 0xE1, 128, 128, data, "SPI", url, Some("image/png"));
+        assert!(add(&mut s, b"old picture", "/logo128.png"));
+        assert!(!add(&mut s, b"old picture", "/logo128.png"));
+        // (the same name and size, another picture)
+        assert!(add(&mut s, b"new picture", "/logo128.png"));
+        let v = s.index.logos.iter().find(|v| v.sid == 0x1234).unwrap();
+        assert_eq!(std::fs::read(s.logo_path(v)).unwrap(), b"new picture");
+        let file = s.logo_path(v);
+        assert!(!s.drop_unlisted_logos(0xE1, 0x1234, &[logo_ref("/logo128.png")]));
+        assert!(s.drop_unlisted_logos(0xE1, 0x1234, &[logo_ref("/logo600.png")]));
+        assert!(s.index.logos.is_empty() && !file.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn iso_times() {

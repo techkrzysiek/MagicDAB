@@ -1,6 +1,6 @@
 // WebSocket connection to the MagicDAB server.
 import { useStore, save, sessionGet, sessionSet } from './store'
-import type { Stats, StatsPoint } from './types'
+import type { LogoVariant, Stats, StatsPoint } from './types'
 import { desktopToken } from './desktop'
 import { restartChat } from './chat'
 import { player } from './audio/player'
@@ -178,12 +178,16 @@ function handleText(m: any) {
       break
     }
     case 'logos': {
-      const logos: Record<string, { id: string }[]> = m.logos ?? {}
-      // pictures of logos no longer listed are released
-      const listed = new Set(Object.values(logos).flatMap((l) => l.map((v) => v.id)))
+      const logos: Record<string, LogoVariant[]> = m.logos ?? {}
+      // pictures of logos no longer listed, or received anew (a station's new
+      // logo keeps the place of the old one), are released
+      const version = (l: Record<string, LogoVariant[]>) =>
+        new Map(Object.values(l).flatMap((vs) => vs.map((v) => [v.id, `${v.received}:${v.size}`] as const)))
+      const listed = version(logos)
+      const before = version(st.logos)
       const logoUrls = { ...st.logoUrls }
       for (const [id, url] of Object.entries(logoUrls)) {
-        if (!listed.has(id)) {
+        if (!listed.has(id) || listed.get(id) !== before.get(id)) {
           URL.revokeObjectURL(url)
           delete logoUrls[id]
           requested.delete(id)
