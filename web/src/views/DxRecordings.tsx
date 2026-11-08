@@ -157,6 +157,7 @@ export default function DxRecordings() {
                     <div className="hint">
                       {reason(r.reason)}
                       {r.tii.length ? ` · TII ${r.tii.join(', ')}` : ''}
+                      {r.side ? ` · ${t('dxrec_side')}` : ''}
                       {ended(r.ended) ? ` · ${ended(r.ended)}` : ''}
                     </div>
                   </td>

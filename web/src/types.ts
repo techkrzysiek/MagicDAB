@@ -117,8 +117,23 @@ export interface RadioState {
   slot?: number
   /** channel of the main receiver */
   mainChannel?: string | null
-  /** the DX recording played back on this receiver (admins) */
+  /** the DX recording played back on this receiver */
   playback?: string | null
+  playbackInfo?: PlaybackInfo | null
+}
+
+/** A DX recording played back: what it is (radio/slots.rs). */
+export interface PlaybackInfo {
+  name: string
+  label: string
+  channel: string
+  ecc: string
+  eid: string
+  /** start of the recording (unix) */
+  time: number
+  duration: number | null
+  /** TII, spectrum and signal were recorded with it */
+  side: boolean
 }
 
 /** A DX recording (an ETI file of a multiplex heard for the first time), admins */
@@ -139,6 +154,8 @@ export interface DxRecording {
   frames: number
   reason: string
   ended: string
+  /** TII, spectrum and signal recorded with it */
+  side?: boolean
 }
 
 export interface DxRecState {
@@ -152,7 +169,10 @@ export interface DxRecState {
 }
 
 export interface Signal {
+  /** 'file': a DX recording played back */
   input?: string
+  /** a DX recording: the signal is the one recorded with it */
+  recorded?: boolean
   /** DTR-100: reception as the dongle reports it (0..4) and its channel error rate. */
   bars?: number
   cer?: number | null

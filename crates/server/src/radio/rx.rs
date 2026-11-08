@@ -29,7 +29,9 @@ impl Radio {
                 }
                 self.follower.on_signal(s.synced, s.snr);
                 self.signal = s;
-                self.hub.broadcast_main(text(&self.signal_json()));
+                let v = self.signal_json();
+                self.dxrec_signal(&v);
+                self.hub.broadcast_main(text(&v));
             }
             RxEvent::Ensemble(e, labels) => {
                 if self.awaiting_retune {
@@ -87,6 +89,10 @@ impl Radio {
                 self.tii_codes = codes;
                 self.tii = self.tii_json();
                 self.hub.broadcast_main(text(&self.tii));
+                if self.dxrec_recording() {
+                    let rec = self.tii_for_dxrec(&pairs);
+                    self.dxrec_side(crate::dxrec::SideKind::Tii, rec);
+                }
                 let pm = json!({"type": "tiiPairs", "pairs": pairs.iter().map(|p| r1(*p)).collect::<Vec<_>>()});
                 self.hub.broadcast(text(&pm), |c| c.subs.tii_pairs && c.on_main());
                 if let Some(scan) = self.scan.as_mut() {
@@ -131,6 +137,7 @@ impl Radio {
                     "noise": r1(10.0 * noise.max(1e-20).log10()),
                 });
                 self.hub.broadcast(binary(BIN_SPECTRUM, &h, &payload), |c| c.subs.spectrum && c.on_main());
+                self.dxrec_spectrum(h, payload);
             }
             RxEvent::Audio { key, pcm } => {
                 if self.clips.contains_key(&key) {
@@ -338,42 +345,20 @@ impl Radio {
     }
 
     pub(super) fn tii_json(&self) -> Value {
-        let eid = self.ensemble.eid.unwrap_or(0);
-        let ecc = self.ensemble.ecc;
-        let loc = self.settings.location.clone();
-        let codes: Vec<Value> = self
-            .tii_codes
-            .iter()
-            .map(|c| {
-                let tx = self.txdb.find(eid, ecc, c.main, c.sub, self.frequency);
-                let (dist, az) = match (&loc, tx) {
-                    (Some(l), Some(t)) => {
-                        let (d, a) = distance_azimuth(l.lat, l.lon, t.lat, t.lon);
-                        (Some((d * 10.0).round() / 10.0), Some((a * 10.0).round() / 10.0))
-                    }
-                    _ => (None, None),
-                };
-                json!({
-                    "main": c.main,
-                    "sub": c.sub,
-                    "code": format!("{}-{}", c.main, c.sub),
-                    "level": r1(c.level_db),
-                    "margin": r1(c.margin_db),
-                    "tx": tx,
-                    "distance": dist,
-                    "azimuth": az,
-                })
-            })
-            .collect();
-        // all known transmitters of this ensemble (for the map)
-        let known: Vec<Value> = self
-            .txdb
-            .ensemble(eid)
-            .into_iter()
-            .filter(|t| ecc.map(|e| t.ecc == 0 || t.ecc == e).unwrap_or(true))
-            .map(|t| json!({"code": format!("{}-{}", t.main, t.sub), "location": t.location, "lat": t.lat, "lon": t.lon, "power": t.power_kw, "frequency": t.frequency}))
-            .collect();
-        json!({"type": "tii", "codes": codes, "known": known, "eid": format!("{eid:04X}"), "frequency": self.frequency})
+        tii_view(
+            &self.txdb,
+            self.settings.location.as_ref(),
+            &self.tii_codes,
+            self.ensemble.eid.unwrap_or(0),
+            self.ensemble.ecc,
+            self.frequency,
+        )
+    }
+
+    /// TII heard while a DX recording runs goes into it (dxrec.rs).
+    fn tii_for_dxrec(&self, pairs: &[f32]) -> Vec<u8> {
+        let codes: Vec<Value> = self.tii_codes.iter().map(|c| json!([c.main, c.sub, r1(c.level_db), r1(c.margin_db)])).collect();
+        serde_json::to_vec(&json!({"codes": codes, "pairs": pairs.iter().map(|p| r1(*p)).collect::<Vec<_>>()})).unwrap_or_default()
     }
 
     fn log_tii(&self) {
@@ -408,6 +393,59 @@ impl Radio {
             }
         }
     }
+}
+
+/// The TII message: the codes heard with their transmitters (distance and
+/// azimuth from the receiver), all known transmitters of the ensemble (the map).
+pub(super) fn tii_view(txdb: &TxDb, loc: Option<&config::Location>, tii: &[TiiCode], eid: u16, ecc: Option<u8>, frequency: u32) -> Value {
+    let codes: Vec<Value> = tii
+        .iter()
+        .map(|c| {
+            let tx = txdb.find(eid, ecc, c.main, c.sub, frequency);
+            let (dist, az) = match (loc, tx) {
+                (Some(l), Some(t)) => {
+                    let (d, a) = distance_azimuth(l.lat, l.lon, t.lat, t.lon);
+                    (Some((d * 10.0).round() / 10.0), Some((a * 10.0).round() / 10.0))
+                }
+                _ => (None, None),
+            };
+            json!({
+                "main": c.main,
+                "sub": c.sub,
+                "code": format!("{}-{}", c.main, c.sub),
+                "level": r1(c.level_db),
+                "margin": r1(c.margin_db),
+                "tx": tx,
+                "distance": dist,
+                "azimuth": az,
+            })
+        })
+        .collect();
+    let known: Vec<Value> = txdb
+        .ensemble(eid)
+        .into_iter()
+        .filter(|t| ecc.map(|e| t.ecc == 0 || t.ecc == e).unwrap_or(true))
+        .map(|t| json!({"code": format!("{}-{}", t.main, t.sub), "location": t.location, "lat": t.lat, "lon": t.lon, "power": t.power_kw, "frequency": t.frequency}))
+        .collect();
+    json!({"type": "tii", "codes": codes, "known": known, "eid": format!("{eid:04X}"), "frequency": frequency})
+}
+
+/// The codes as a DX recording keeps them: [main, sub, level dB, margin dB].
+pub(super) fn tii_codes_from(v: &Value) -> Vec<TiiCode> {
+    let n = |x: &Value| x.as_f64().unwrap_or(0.0) as f32;
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            Some(TiiCode {
+                main: u8::try_from(c[0].as_u64()?).ok()?,
+                sub: u8::try_from(c[1].as_u64()?).ok()?,
+                level_db: n(&c[2]),
+                strength: 0.0,
+                margin_db: n(&c[3]),
+            })
+        })
+        .collect()
 }
 
 /// UA type of the X-PAD application `app_type` of a service.

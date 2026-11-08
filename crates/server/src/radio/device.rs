@@ -355,7 +355,8 @@ impl Radio {
             self.rx.send(RxCommand::RecordEncoded(*k, false));
         }
         self.recording = rec;
-        let spectrum = self.hub.any(|c| c.subs.spectrum && c.on_main());
+        // (also while a DX recording keeps it: dxrec.rs)
+        let spectrum = self.hub.any(|c| c.subs.spectrum && c.on_main()) || self.dxrec_recording();
         if spectrum != self.spectrum_on {
             self.spectrum_on = spectrum;
             self.rx.send(RxCommand::Spectrum(spectrum));

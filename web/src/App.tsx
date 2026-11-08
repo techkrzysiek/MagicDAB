@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Headphones, Layers, CalendarClock, GalleryVerticalEnd, MapPinned, ScanSearch, AudioWaveform, SlidersHorizontal,
   Ellipsis, Volume2, VolumeX, ScrollText, Info as InfoIcon, LogIn, LogOut, Play, Square, Users, Radio, FileCode2, X, RadioReceiver, Link2,
-  MessagesSquare, LockKeyhole, Activity, Keyboard, Gauge,
+  MessagesSquare, LockKeyhole, Activity, Keyboard, Gauge, History,
 } from 'lucide-react'
 import { useStore, type View } from './store'
 import { desktop, desktopToken } from './desktop'
@@ -22,6 +22,7 @@ import StatsView from './views/StatsView'
 import { LogoDialog } from './components/logo'
 import { LoginDialog } from './components/LoginDialog'
 import { RecordingLink } from './components/RecordingLink'
+import { PlaybackBar } from './components/PlaybackBar'
 import GuideView from './views/GuideView'
 import SlidesView from './views/SlidesView'
 import { DesktopClose } from './components/DesktopClose'
@@ -239,10 +240,21 @@ function dongleLevel(s: Signal): 0 | 1 | 2 | 3 {
 }
 
 function signalText(signal: Signal | null | undefined, t: (k: string) => string) {
+  // a DX recording: the signal as recorded, when the recording kept it
+  if (signal?.input === 'file') return signal.recorded && signal.synced ? `${signal.snr.toFixed(1)} dB` : t('playback_file')
   if (signal?.input === 'eti' && signal.synced) return 'ETI/EDI'
   // (no I/Q, so no SNR: the chip's own channel error rate, 0 = perfect)
   if (signal?.input === 'dongle' && signal.synced) return signal.cer != null ? `CER ${signal.cer}` : 'DTR-100'
   return signal?.synced ? `${signal.snr.toFixed(1)} dB` : signal?.signal ? t('searching') : t('no_signal')
+}
+
+/** The bars: an ETI/EDI stream is perfect, a DX recording without its
+ *  signal too; a recording with it shows the signal of then. */
+function barsOf(signal: Signal | null | undefined, protection: string | null | undefined) {
+  if (!signal) return 0
+  if ((signal.input === 'eti' || (signal.input === 'file' && !signal.recorded)) && signal.synced) return 3
+  if (signal.input === 'dongle') return dongleLevel(signal)
+  return signalLevel(signal.synced, signal.signal, signal.snr, protection)
 }
 
 /** Phone player bar: station, signal and a big play/stop button. */
@@ -254,14 +266,16 @@ function MiniPlayer() {
   const signal = useStore((s) => s.signal)
   const audioEnabled = useStore((s) => s.audioEnabled)
   const audioPlaying = useStore((s) => s.audioPlaying)
-  const lvl = signal ? (signal.input === 'eti' && signal.synced ? 3 : signal.input === 'dongle' ? dongleLevel(signal) : signalLevel(signal.synced, signal.signal, signal.snr, svc?.protection)) : 0
+  const lvl = barsOf(signal, svc?.protection)
+  const playback = useStore((s) => !!s.state?.playbackInfo)
   return (
-    <div className="miniplayer">
+    <div className={'miniplayer' + (playback ? ' playback' : '')}>
       <button className="mp-main" onClick={() => set({ view: 'service' })}>
         {svc ? <Logo label={svc.label} sid={svc.sid} small /> : <span className="mp-logo-empty" />}
         <span className="mp-txt">
           <span className="mp-name">{svc ? svc.label : t('no_service')}</span>
           <span className="mp-sub">
+            {playback && <History size={13} className="pb-mark" />}
             <SignalBars level={lvl} synced={!!signal?.synced} />
             {signalText(signal, t)}
             {dls ? <span className="mp-dls"> · {dls}</span> : null}
@@ -367,11 +381,13 @@ function StatusBar() {
   const admin = useStore((s) => s.admin)
   const protection = useStore((s) => findService(s.ensemble, s.selected?.sid)?.protection)
   const ensLabel = useStore((s) => (s.ensemble.valid ? `${s.ensemble.label} · ${s.ensemble.channel}` : s.state?.channel ?? ''))
-  const lvl = signal ? (signal.input === 'eti' && signal.synced ? 3 : signal.input === 'dongle' ? dongleLevel(signal) : signalLevel(signal.synced, signal.signal, signal.snr, protection)) : 0
+  const lvl = barsOf(signal, protection)
+  const playback = useStore((s) => !!s.state?.playbackInfo)
   return (
-    <footer className="statusbar">
+    <footer className={'statusbar' + (playback ? ' playback' : '')}>
+      {playback && <History size={15} className="pb-mark" aria-label={t('playback_title')} />}
       <SignalBars level={lvl} synced={!!signal?.synced} />
-      <span title={signal?.input === 'dongle' ? 'DTR-100' : t('snr')}>{signalText(signal, t)}</span>
+      <span title={signal?.input === 'dongle' ? 'DTR-100' : playback ? t('playback_signal_help') : t('snr')}>{signalText(signal, t)}</span>
       <span className="ens-chip">{ensLabel}</span>
       <div className="center">
         <Clock />
@@ -574,6 +590,7 @@ export default function App() {
         )}
         <UpdateBanner />
         <ScanBanner />
+        <PlaybackBar />
         <OverloadBanner />
         {view === 'service' && <ServiceView />}
         {view === 'stations' && <StationsView />}

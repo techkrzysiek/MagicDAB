@@ -1084,6 +1084,7 @@ impl Radio {
         self.spi.save_if_due();
         self.check_services();
         self.side_tick();
+        self.playback_tick();
         self.dxrec_tick();
         self.newmux_tick();
         let due: Vec<ServiceKey> =

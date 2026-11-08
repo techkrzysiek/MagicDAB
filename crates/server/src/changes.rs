@@ -938,7 +938,7 @@ fn flag(iso: &str) -> String {
 }
 
 /// A report in a few lines: the signal, then the transmitters, then the
-/// recording (a link that plays it to an admin, the web's ?dxrec=).
+/// recording (a link that plays it, the web's ?dxrec=).
 fn report_lines(r: &Report, base: Option<&str>) -> Vec<String> {
     let mut head = format!("📶 SNR śr. {:.1} dB, max {:.1} dB przez {} s", r.snr_mean, r.snr_max, r.seconds);
     match r.ended.as_str() {

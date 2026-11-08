@@ -1,21 +1,28 @@
 //! DX recordings (dxrec.rs) on the radio thread: a multiplex heard on a
 //! channel for the first time (changes.rs: ensembleNew, ensembleId) is
 //! recorded from the main receiver for up to a few minutes, also while
-//! listeners listen; the background scan stays on it meanwhile (radio.rs:
+//! listeners listen, with its TII, spectrum and signal (the spectrum is
+//! computed meanwhile); the background scan stays on it meanwhile (radio.rs:
 //! ScanPhase::Hold) and a listener who turns the sound on still takes the
 //! tuner back (the recording so far is kept). Admins see the recordings,
-//! play one back on a side receiver of their own (slots.rs: Kind::Playback),
-//! delete them, and load .eti files of their own.
+//! delete them, and load .eti files of their own; anyone with the link of
+//! one (the report of a new multiplex) plays it back on a side receiver of
+//! its own (slots.rs: Kind::Playback) and moves through it, uploads only
+//! the admins.
 
 use super::slots::Kind;
 use super::*;
-use crate::dxrec::{self as store, Meta, MetaService, Writer, FRAMES_PER_MINUTE};
+use crate::dxrec::{self as store, Meta, MetaService, SideKind, Writer, FRAMES_PER_MINUTE};
 use magicdab_dab::eti::ETI_FRAME;
 
 /// A recording ends after this long without synchronisation.
 const NO_SYNC: Duration = Duration::from_secs(30);
-/// Playbacks at once (a receiver each).
-const MAX_PLAYBACKS: usize = 2;
+/// Playbacks at once (a receiver each: no OFDM, a few % of a core).
+const MAX_PLAYBACKS: usize = 4;
+/// A listener starts a playback at most this often (each one is a receiver).
+const PLAY_EVERY: Duration = Duration::from_secs(2);
+/// The signal goes into a recording this often.
+const SIGNAL_EVERY: Duration = Duration::from_secs(1);
 
 pub struct State {
     active: Option<Active>,
@@ -24,6 +31,8 @@ pub struct State {
     list_due: Option<Instant>,
     last_progress: Instant,
     last_prune: Instant,
+    /// When each client last started a playback.
+    played: HashMap<u64, Instant>,
 }
 
 struct Active {
@@ -37,11 +46,12 @@ struct Active {
     fib_sum: f32,
     samples: u32,
     tii: Vec<String>,
+    last_signal: Option<Instant>,
 }
 
 impl State {
     pub fn new() -> Self {
-        State { active: None, list_due: None, last_progress: Instant::now(), last_prune: Instant::now() }
+        State { active: None, list_due: None, last_progress: Instant::now(), last_prune: Instant::now(), played: HashMap::new() }
     }
 }
 
@@ -126,7 +136,19 @@ impl Radio {
             limit * 60 / FRAMES_PER_MINUTE
         );
         self.rx.send(RxCommand::RecordEti(true));
-        self.dxrec.active = Some(Active { writer, limit, channel, last_sync: Instant::now(), snr_sum: 0.0, fib_sum: 0.0, samples: 0, tii });
+        self.dxrec.active = Some(Active {
+            writer,
+            limit,
+            channel,
+            last_sync: Instant::now(),
+            snr_sum: 0.0,
+            fib_sum: 0.0,
+            samples: 0,
+            tii,
+            last_signal: None,
+        });
+        // (the receiver computes the spectrum for it)
+        self.update_decoding();
         self.dxrec_broadcast(false);
         Ok(())
     }
@@ -152,7 +174,36 @@ impl Radio {
             if dropped > 0 { format!(", {dropped} frames lost (disk too slow)") } else { String::new() }
         );
         self.dxrec.list_due = Some(Instant::now() + Duration::from_millis(1500));
+        self.update_decoding();
         self.dxrec_broadcast(false);
+    }
+
+    /// A recording runs (the receiver computes the spectrum for it).
+    pub(super) fn dxrec_recording(&self) -> bool {
+        self.dxrec.active.is_some()
+    }
+
+    /// What the main receiver heard beside the frames (rx.rs).
+    pub(super) fn dxrec_side(&mut self, kind: SideKind, bytes: Vec<u8>) {
+        if let Some(a) = self.dxrec.active.as_mut() {
+            a.writer.side(kind, bytes);
+        }
+    }
+
+    pub(super) fn dxrec_spectrum(&mut self, h: Value, payload: Vec<u8>) {
+        if let Some(a) = self.dxrec.active.as_mut() {
+            a.writer.spectrum(h, payload);
+        }
+    }
+
+    /// The signal message of the main receiver, once a second.
+    pub(super) fn dxrec_signal(&mut self, v: &Value) {
+        let Some(a) = self.dxrec.active.as_mut() else { return };
+        if a.last_signal.is_some_and(|t| t.elapsed() < SIGNAL_EVERY) {
+            return;
+        }
+        a.last_signal = Some(Instant::now());
+        a.writer.side(SideKind::Signal, serde_json::to_vec(v).unwrap_or_default());
     }
 
     /// A frame of the main receiver (RxEvent::Eti).
@@ -211,6 +262,7 @@ impl Radio {
         }
         if self.dxrec.last_prune.elapsed() > Duration::from_secs(60) {
             self.dxrec.last_prune = Instant::now();
+            self.dxrec.played.retain(|_, t| t.elapsed() < PLAY_EVERY);
             let in_use = self.dxrec_in_use();
             for name in store::prune_uploads(&self.dxrec_dir(), &in_use) {
                 log::info!("uploaded recording {name} removed after a day");
@@ -224,7 +276,7 @@ impl Radio {
         self.slots.iter().filter_map(|e| e.slot.playback_name()).map(|n| n.to_string()).collect()
     }
 
-    /// The playback an admin listens to.
+    /// The playback a client listens to.
     fn playback_slot_of(&self, client: u64) -> Option<u32> {
         let id = self.hub.slot_of(client);
         self.slots.get(id).filter(|e| id != 0 && e.kind == Kind::Playback).map(|e| e.id)
@@ -272,14 +324,17 @@ impl Radio {
     }
 
     /// Messages of the admins: the list, a recording of the multiplex now,
-    /// its end, a playback and its end, deleting, the setting.
+    /// its end, deleting, the setting; of anyone: a playback, a move in it,
+    /// its end.
     pub(super) fn on_dxrec_message(&mut self, client: u64, msg: &Value) {
-        if !self.hub.is_admin(client) {
+        let action = msg["action"].as_str().unwrap_or("");
+        let admin = self.hub.is_admin(client);
+        if !admin && !matches!(action, "play" | "seek" | "stopPlayback") {
             self.notice(client, "warning", "admin_required");
             return;
         }
         let name = msg["name"].as_str().and_then(store::safe_name);
-        match msg["action"].as_str().unwrap_or("") {
+        match action {
             "list" => self.send_dxrec_list(client),
             "record" => {
                 // (the length asked for: the button of the Ensemble view)
@@ -309,14 +364,35 @@ impl Radio {
                 self.dxrec_broadcast(true);
             }
             "play" => {
-                if let Some(name) = name {
-                    let sid = msg["sid"].as_u64().map(|s| s as u32);
-                    self.dxrec_play(client, &name, sid);
+                let Some(name) = name else { return };
+                // (a loaded file is the admin's own, not off the air)
+                if !admin && store::is_upload(&name) {
+                    self.notice(client, "warning", "admin_required");
+                    return;
+                }
+                let sid = msg["sid"].as_u64().map(|s| s as u32);
+                // the station of the recording played now: no new receiver
+                if let (Some(id), Some(sid)) = (self.playback_slot_of(client), sid) {
+                    if self.slots.get(id).is_some_and(|e| e.slot.playback_name() == Some(name.as_str())) {
+                        self.move_client(client, id, Some(ServiceKey { sid, scids: 0 }));
+                        return;
+                    }
+                }
+                if !admin && self.dxrec.played.get(&client).is_some_and(|t| t.elapsed() < PLAY_EVERY) {
+                    return;
+                }
+                self.dxrec.played.insert(client, Instant::now());
+                self.dxrec_play(client, &name, sid);
+            }
+            "seek" => {
+                let Some(seconds) = msg["seconds"].as_f64().filter(|s| s.is_finite()) else { return };
+                if let Some(e) = self.playback_slot_of(client).and_then(|id| self.slots.get(id)) {
+                    e.slot.seek(seconds);
                 }
             }
             "stopPlayback" => {
                 if let Some(id) = self.playback_slot_of(client) {
-                    self.close_slot(id, "the admin stopped the playback", false);
+                    self.close_slot(id, "its listener stopped the playback", false);
                 }
             }
             "settings" => {
@@ -340,8 +416,8 @@ impl Radio {
         }
     }
 
-    /// Plays a recording back to an admin on a side receiver of its own: the
-    /// station `sid`, else the first one of its ensemble (slots.rs).
+    /// Plays a recording back to a listener on a side receiver of its own:
+    /// the station `sid`, else the first one of its ensemble (slots.rs).
     fn dxrec_play(&mut self, client: u64, name: &str, sid: Option<u32>) {
         let path = self.dxrec_dir().join(name);
         if !path.is_file() {
@@ -349,7 +425,7 @@ impl Radio {
             self.dxrec_broadcast(true);
             return;
         }
-        // one playback per admin
+        // one playback per listener
         if let Some(id) = self.playback_slot_of(client) {
             self.close_slot(id, "another recording plays", false);
         }

@@ -39,12 +39,20 @@ A fourth kind of slot plays a **DX recording** (`dxrec.rs`, `radio/dxrec.rs`):
 once an admin switches it on, a multiplex heard on a channel for the first
 time is recorded from slot 0 as ETI(NI) frames (the FIC and every sub-channel
 decoded, `etirec.rs` in the DAB crate; about 15 MB a minute, a minute unless
-set longer) into `data/dxrec`, and an admin plays such a file, or an .eti or
-.edi file of its own, back on a slot of its own (`Kind::Playback`; a click on
-a station of the list plays that one): the file
-is fed to the receiver's ETI channel at the pace of the air, in a loop, nobody
-else is moved, and the slot closes a few seconds after the admin leaves it. A
-playback is not a channel listeners join and takes no place of theirs.
+set longer) into `data/dxrec`. The frames carry no TII, spectrum or signal
+(those come from the I/Q samples), so what slot 0 heard of them goes into a
+`.side` file beside it (the spectrum is computed while a recording runs,
+packed to i16 and deflated: about an eighth of the ETI file). Anyone with the
+link of a recording (the report of a new multiplex) plays it back on a slot
+of its own (`Kind::Playback`, at most 4 at once; a click on a station of the
+list plays that one), an admin also an .eti or .edi file of its own: the file
+is fed to the receiver's ETI channel at the pace of the air, in a loop, and
+the `.side` records go out at the time of the frames they came with (the TII
+and spectrum views and the signal show the recording, the interface marks it
+as one). The listener moves through it (a seek: the frames from there, and
+what was shown then), nobody else is moved, and the slot closes a few seconds
+after its listener leaves it. A playback is not a channel listeners join and
+takes no place of theirs.
 
 ### State split
 

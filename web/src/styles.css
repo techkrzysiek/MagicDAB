@@ -2357,6 +2357,52 @@ table.table {
   justify-content: center;
 }
 
+.playback-bar {
+  background: var(--highlight);
+  color: var(--accent);
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.playback-bar .pb-what {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playback-bar .pb-seek {
+  flex: 1;
+  min-width: 120px;
+  max-width: 480px;
+  accent-color: var(--accent);
+}
+
+.playback-bar .pb-time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* a recording plays: the receiver's bars look a little different */
+.statusbar.playback {
+  background: color-mix(in srgb, var(--accent) 10%, var(--statusbar));
+  border-top-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.miniplayer.playback {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-light));
+  border-top-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.pb-mark {
+  color: var(--accent);
+  flex: none;
+}
+
 .progress {
   height: 4px;
   background: var(--divider-soft);

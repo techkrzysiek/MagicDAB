@@ -13,10 +13,11 @@ use super::{
     ServiceState,
 };
 use crate::audio::AudioHub;
+use crate::dxrec::Side;
 use crate::etiinput::EtiInput;
 use crate::figcache::{self, FigCache};
 use crate::fmradio::FM_SID;
-use crate::hub::{binary, text, Out, BIN_ENCODED, BIN_IMAGE};
+use crate::hub::{binary, text, Out, BIN_ENCODED, BIN_IMAGE, BIN_SPECTRUM};
 use crate::view::{self, LongLabels};
 use crossbeam_channel::Receiver;
 use magicdab_dab::consts::{channel_frequency, BAND_III};
@@ -43,7 +44,7 @@ pub const LINGER: Duration = Duration::from_secs(60);
 /// start and stop receivers all the time).
 pub const SPARE_AFTER: Duration = Duration::from_secs(10);
 
-/// A playback of a DX recording ends soon after its admin left it (a
+/// A playback of a DX recording ends soon after its listener left it (a
 /// temporary thing; a reload of the page comes back to the main receiver).
 pub const PLAYBACK_LINGER: Duration = Duration::from_secs(5);
 
@@ -53,8 +54,8 @@ pub enum Kind {
     Stream,
     /// IQ recording: OFDM demodulation too.
     Recording,
-    /// A DX recording (an .eti file, dxrec.rs) an admin plays back for a
-    /// while; not a channel listeners join.
+    /// A DX recording (an .eti file, dxrec.rs) a listener plays back for a
+    /// while; not a channel others join.
     Playback,
 }
 
@@ -237,6 +238,11 @@ pub struct Slot {
     data_progress: DataProgress,
     pending_clears: HashMap<ServiceKey, Instant>,
     opened: Instant,
+    /// A playback: what was heard beside the frames (dxrec.rs), the signal
+    /// and TII of then.
+    side: Option<Receiver<Side>>,
+    side_signal: Option<Value>,
+    tii: Option<Value>,
 }
 
 impl Slot {
@@ -279,8 +285,54 @@ impl Slot {
         }
     }
 
+    /// A playback shows the signal as it was recorded (the receiver of the
+    /// frames has none), with its place in the file.
     fn signal_json(&self) -> Value {
-        signal_json(&self.signal, &self.device())
+        let dev = self.device();
+        match (&self.input, &self.side_signal) {
+            (Input::File(_), Some(then)) => {
+                let mut v = then.clone();
+                v["position"] = json!(dev.position);
+                v["duration"] = json!(dev.duration);
+                v["input"] = json!("file");
+                v["recorded"] = json!(true);
+                v
+            }
+            (Input::File(_), None) => {
+                let mut v = signal_json(&self.signal, &dev);
+                v["input"] = json!("file");
+                v
+            }
+            _ => signal_json(&self.signal, &dev),
+        }
+    }
+
+    /// What a playback is: the recording's name, multiplex, time, length.
+    fn playback_info(&self) -> Option<Value> {
+        let Input::File(p) = &self.input else { return None };
+        let m = p.meta.clone().unwrap_or_default();
+        let (_, duration, _) = p.progress();
+        Some(json!({
+            "name": p.name,
+            "label": m.label,
+            "channel": m.channel,
+            "ecc": m.ecc,
+            "eid": m.eid,
+            "time": m.time,
+            "duration": (duration > 0.0).then_some(duration),
+            "side": p.side,
+        }))
+    }
+
+    /// Plays a recording on from `seconds` into it.
+    pub fn seek(&self, seconds: f64) -> bool {
+        match &self.input {
+            Input::File(p) => {
+                p.seek(seconds);
+                true
+            }
+            _ => false,
+        }
     }
 
     fn ensemble_message(&mut self, channel: &str, fig: &FigCache) -> Out {
@@ -543,8 +595,9 @@ impl Radio {
         let Some(e) = self.slots.get_mut(id) else { return };
         let ens = e.slot.ensemble_message(&e.channel, &self.fig_cache);
         let s = &e.slot;
-        let tii =
-            json!({"type": "tii", "codes": [], "known": [], "eid": s.ensemble.eid.map(|e| format!("{e:04X}")), "frequency": s.frequency});
+        let tii = s.tii.clone().unwrap_or_else(|| {
+            json!({"type": "tii", "codes": [], "known": [], "eid": s.ensemble.eid.map(|e| format!("{e:04X}")), "frequency": s.frequency})
+        });
         for m in [
             text(&state),
             ens,
@@ -608,10 +661,13 @@ impl Radio {
             data_progress: DataProgress::new(),
             pending_clears: HashMap::new(),
             opened: Instant::now(),
+            side: None,
+            side_signal: None,
+            tii: None,
         })
     }
 
-    /// A receiver playing a DX recording (an .eti file) for an admin, with
+    /// A receiver playing a DX recording (an .eti file) for a listener, with
     /// the settings of the main one; `ch` is the channel it was recorded on.
     pub(super) fn open_playback_slot(&self, ch: &str, id: u32, path: &std::path::Path) -> Result<Slot, String> {
         let frequency = channel_frequency(ch).ok_or("unknown channel")?;
@@ -621,7 +677,9 @@ impl Radio {
         rx.send(RxCommand::BackgroundPad(false));
         rx.set_eti_mode(true);
         rx.queue.reset();
-        let player = crate::dxrec::Player::start(path, rx.eti.clone()).map_err(|e| e.to_string())?;
+        let (side_tx, side_rx) = crossbeam_channel::bounded(64);
+        let player = crate::dxrec::Player::start(path, rx.eti.clone(), Some(side_tx)).map_err(|e| e.to_string())?;
+        let side = player.side.then_some(side_rx);
         Ok(Slot {
             url: player.name.clone(),
             frequency,
@@ -641,6 +699,9 @@ impl Radio {
             data_progress: DataProgress::new(),
             pending_clears: HashMap::new(),
             opened: Instant::now(),
+            side,
+            side_signal: None,
+            tii: None,
         })
     }
 
@@ -750,6 +811,7 @@ impl Radio {
         };
         // the DX recording played back here (dxrec.rs)
         v["playback"] = json!(s.playback_name());
+        v["playbackInfo"] = json!(s.playback_info());
         // (a scan moves only the main receiver)
         v["scan"] = Value::Null;
         v["slot"] = json!(e.id);
@@ -825,6 +887,46 @@ impl Radio {
         }
         if changed {
             self.update_decoding();
+        }
+    }
+
+    /// Playbacks: what was heard beside the frames comes at its time (TII,
+    /// the spectrum, the signal), to the playback's listener.
+    pub(super) fn playback_tick(&mut self) {
+        let mut due: Vec<(u32, Side)> = Vec::new();
+        for e in self.slots.iter() {
+            if let Some(r) = &e.slot.side {
+                due.extend(r.try_iter().map(|x| (e.id, x)));
+            }
+        }
+        for (id, side) in due {
+            let Some(e) = self.slots.get_mut(id) else { continue };
+            let s = &mut e.slot;
+            match side {
+                Side::Signal(v) => {
+                    s.side_signal = Some(v);
+                    self.hub.broadcast(text(&s.signal_json()), |c| c.slot == id);
+                }
+                Side::Spectrum(h, payload) => {
+                    self.hub.broadcast(binary(BIN_SPECTRUM, &h, &payload), |c| c.subs.spectrum && c.slot == id);
+                }
+                Side::Tii(v) => {
+                    let codes = super::rx::tii_codes_from(&v["codes"]);
+                    let ens = &s.ensemble;
+                    let tii = super::rx::tii_view(
+                        &self.txdb,
+                        self.settings.location.as_ref(),
+                        &codes,
+                        ens.eid.unwrap_or(0),
+                        ens.ecc,
+                        s.frequency,
+                    );
+                    s.tii = Some(tii.clone());
+                    self.hub.broadcast(text(&tii), |c| c.slot == id);
+                    let pm = json!({"type": "tiiPairs", "pairs": v["pairs"]});
+                    self.hub.broadcast(text(&pm), |c| c.subs.tii_pairs && c.slot == id);
+                }
+            }
         }
     }
 
