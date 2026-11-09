@@ -293,6 +293,9 @@ function ServicePanel({ svc }: { svc?: Service }) {
   // the sub-channel comes (about 4 s of it), not one audio unit decoded
   const st = data?.stats
   const noAudio = !!st && st.frames > 160 && st.auOk + st.auErrors === 0
+  // audio units come, but not one survived the error correction (a weak
+  // signal, also in a DX recording of one): the silence explained
+  const tooWeak = !!st && st.frames > 160 && st.auOk === 0 && st.auErrors > 0
   const linkFm = !!svc && linkInfo?.sid === svc.sid && linkInfo.source === 'fm'
   if (!svc) {
     return (
@@ -369,6 +372,7 @@ function ServicePanel({ svc }: { svc?: Service }) {
       </div>
       {svc && linkInfo?.sid === svc.sid && <LinkRow info={linkInfo} />}
       {noAudio && <div className="banner">{t('svc_no_audio')}</div>}
+      {tooWeak && <div className="banner">{t('svc_too_weak')}</div>}
       <div className="slide-box">
         {slide ? (
           slideLink ? (
