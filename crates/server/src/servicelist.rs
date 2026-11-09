@@ -112,7 +112,17 @@ pub struct EnsembleEntry {
     /// Data services (`services` are the radio stations).
     #[serde(default)]
     pub data: Vec<DataEntry>,
+    /// Band scans that looked at its channel and did not find it since it
+    /// was last received (prune_gone).
+    #[serde(default)]
+    pub misses: u32,
 }
+
+/// A multiplex not received for a day, although band scans looked for it
+/// at least this many times meanwhile, leaves the list (a tropo opening is
+/// over); the next scan that hears it brings it back.
+pub const GONE_AFTER: i64 = 24 * 3600;
+pub const GONE_MISSES: u32 = 10;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ServiceList {
@@ -209,6 +219,7 @@ impl ServiceList {
             tii: Vec::new(),
             subchannels,
             data,
+            misses: 0,
         };
         // with a weak signal not all labels may have arrived yet: keep the
         // services known from earlier receptions until the list is complete
@@ -292,6 +303,22 @@ impl ServiceList {
             }
             _ => false,
         }
+    }
+
+    /// A band scan looked at `channel` and found the multiplexes `found`
+    /// (EIds): the others of the channel missed once more.
+    pub fn scanned(&mut self, channel: &str, found: &[u16]) {
+        for e in self.ensembles.iter_mut().filter(|e| e.channel == channel && !found.contains(&e.eid)) {
+            e.misses = e.misses.saturating_add(1);
+        }
+    }
+
+    /// Takes out the multiplexes gone (GONE_AFTER, GONE_MISSES) and returns them.
+    pub fn prune_gone(&mut self, now: i64) -> Vec<EnsembleEntry> {
+        let (gone, keep): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut self.ensembles).into_iter().partition(|e| e.misses >= GONE_MISSES && now - e.last_seen > GONE_AFTER);
+        self.ensembles = keep;
+        gone
     }
 
     pub fn remove_ensemble(&mut self, channel: &str, eid: u16) -> bool {
@@ -428,5 +455,40 @@ mod tests {
         l.ensembles.push(EnsembleEntry { eid: 0x3ABC, ..l.ensembles.iter().find(|e| e.eid == 0xC1A5).unwrap().clone() });
         l.update("10C", 213360, &ens(0xC1A5, "MUX B"), 20.0);
         assert!(!l.ensembles.iter().any(|e| e.eid == 0x3ABC));
+    }
+
+    #[test]
+    fn a_multiplex_not_heard_for_a_day_by_the_scans_leaves_the_list() {
+        let mut l = ServiceList::default();
+        l.update("5D", 180064, &ens(0x1A01, "FAR AWAY"), 2.0);
+        l.update("5D", 180064, &ens(0x2B02, "LOCAL"), 20.0);
+        l.update("8B", 197648, &ens(0x3C03, "OTHER"), 20.0);
+        let t = now();
+        for e in l.ensembles.iter_mut().filter(|e| e.eid != 0x3C03) {
+            e.last_seen = t - GONE_AFTER - 60;
+        }
+        // the scans find only the local one on 5D (whose last time is then new)
+        for _ in 0..GONE_MISSES - 1 {
+            l.scanned("5D", &[0x2B02]);
+        }
+        l.update("5D", 180064, &ens(0x2B02, "LOCAL"), 20.0);
+        assert!(l.prune_gone(t).is_empty(), "looked for too few times");
+        l.scanned("5D", &[0x2B02]);
+        let gone = l.prune_gone(t);
+        assert_eq!(gone.iter().map(|e| e.eid).collect::<Vec<_>>(), vec![0x1A01]);
+        assert_eq!(l.ensembles.iter().map(|e| e.eid).collect::<Vec<_>>(), vec![0x2B02, 0x3C03]);
+        // missed many times but heard within the day: stays; heard again: counts anew
+        for _ in 0..3 * GONE_MISSES {
+            l.scanned("8B", &[]);
+        }
+        assert!(l.prune_gone(t).is_empty());
+        l.update("8B", 197648, &ens(0x3C03, "OTHER"), 20.0);
+        assert_eq!(l.ensembles.iter().find(|e| e.eid == 0x3C03).unwrap().misses, 0);
+        // a list without the count (an older version) loads with none
+        let old: ServiceList = serde_json::from_str(
+            r#"{"ensembles":[{"channel":"5D","frequency":180064,"eid":1,"ecc":0,"label":"X","short":"","services":[],"lastSeen":0}]}"#,
+        )
+        .unwrap();
+        assert_eq!(old.ensembles[0].misses, 0);
     }
 }

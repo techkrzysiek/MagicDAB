@@ -1749,6 +1749,7 @@ mod tests {
                 apps: vec![7],
                 ca: false,
             }],
+            misses: 0,
         }
     }
 

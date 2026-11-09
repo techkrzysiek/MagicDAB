@@ -257,6 +257,24 @@ impl Radio {
             next = true;
         }
         if next {
+            // a band scan looked at the channel: what it did not find there
+            // missed once more, and what is gone for a day leaves the list
+            if let Some(s) = self.scan.as_ref().filter(|s| s.dx.is_none()) {
+                let ch = s.channels[s.index].clone();
+                let eids: Vec<u16> =
+                    s.found_here.iter().filter_map(|f| f["eid"].as_str().and_then(|e| u16::from_str_radix(e, 16).ok())).collect();
+                self.service_list.scanned(&ch, &eids);
+                for e in self.service_list.prune_gone(now()) {
+                    log::info!(
+                        "{} {} ({:02X}{:04X}) left the station list: not received for {} h",
+                        e.channel,
+                        e.label.trim(),
+                        e.ecc,
+                        e.eid,
+                        (now() - e.last_seen) / 3600
+                    );
+                }
+            }
             let scan = self.scan.as_mut().unwrap();
             let found = std::mem::take(&mut scan.found_here);
             scan.report.push(json!({"channel": scan.channels[scan.index], "found": found}));
