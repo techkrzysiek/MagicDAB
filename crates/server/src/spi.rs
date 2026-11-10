@@ -161,6 +161,12 @@ pub struct SpiStore {
     /// Objects of the SPI carousels received in this session (content name -> data).
     objects: HashMap<String, (String, Arc<Vec<u8>>)>,
     /// Logo references from SI documents waiting for their MOT object.
+    /// The SI of the stations of the documents decoded since it was last
+    /// taken: (ECC, SId, fields), for the change log (sichanges.rs).
+    pub si_seen: Vec<(u8, u32, crate::sichanges::SiFields)>,
+    /// The broadcast logos as they came: (ECC, SId, size "600×600", hash of
+    /// the picture), for the change log as well.
+    pub logo_seen: Vec<(u8, u32, String, String)>,
     pending: Vec<(u32, u8, LogoRef)>,
     pub documents: u64,
     /// The document list changed since it was last sent.
@@ -232,7 +238,17 @@ impl SpiStore {
         let dir = data_dir.join("logos");
         let _ = std::fs::create_dir_all(&dir);
         let index = std::fs::read_to_string(dir.join("index.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-        SpiStore { dir, index, objects: HashMap::new(), pending: Vec::new(), documents: 0, docs_dirty: false, unsaved: None }
+        SpiStore {
+            dir,
+            index,
+            objects: HashMap::new(),
+            pending: Vec::new(),
+            si_seen: Vec::new(),
+            logo_seen: Vec::new(),
+            documents: 0,
+            docs_dirty: false,
+            unsaved: None,
+        }
     }
 
     /// The index (with the whole programme guide) is written at most every 10 s:
@@ -289,6 +305,14 @@ impl SpiStore {
         let (w, h) = image_size(data).unwrap_or((width, height));
         let id = format!("{ecc:02x}{sid:04x}-{w}x{h}-{}", source.to_lowercase());
         let file = format!("{id}.{}", ext_for(&mime));
+        if source == "SPI" {
+            use sha2::Digest;
+            let hash: String = sha2::Sha256::digest(data).iter().take(8).map(|b| format!("{b:02x}")).collect();
+            self.logo_seen.push((ecc, sid, format!("{w}×{h}"), hash));
+            if self.logo_seen.len() > 500 {
+                self.logo_seen.remove(0);
+            }
+        }
         if let Some(v) = self.index.logos.iter().find(|v| v.id == id) {
             // the same picture again (a new one under the same name and size
             // replaces it)
@@ -401,6 +425,10 @@ impl SpiStore {
                                 links: s.links.clone(),
                             };
                             changed |= self.set_text(ecc, sid, text);
+                            self.si_seen.push((ecc, sid, crate::sichanges::fields_of(&s)));
+                            if self.si_seen.len() > 500 {
+                                self.si_seen.remove(0);
+                            }
                             changed |= self.drop_unlisted_logos(ecc, sid, &s.logos);
                             for l in &s.logos {
                                 if !self.pending.iter().any(|(ps, _, pl)| *ps == sid && pl == l) {

@@ -4,22 +4,39 @@ import { useT } from '../i18n'
 import { saveSettings, startAudio } from '../actions'
 import { send } from '../ws'
 import { kw } from '../util'
+import { genreLabel } from '../genres'
 import type { Change, ChangeReport } from '../types'
+
+// (genres are kept by their codes: shown by their names)
+const genres = (v: string | null) => (v === null ? null : v.split(', ').filter(Boolean).map(genreLabel).join(', ') || '-')
 
 function describe(t: (k: string) => string, c: Change) {
   const svc = c.service ? `${c.service}${c.sid ? ` (${c.sid})` : ''}` : ''
-  const arrow = c.from !== null && c.to !== null ? `${c.from} → ${c.to}` : c.to ?? c.from ?? ''
+  const [from, to] = c.kind === 'siGenres' ? [genres(c.from), genres(c.to)] : [c.from, c.to]
+  const arrow = from !== null && to !== null ? `${from} → ${to}` : to ?? from ?? ''
   return { title: t('chg_' + c.kind), svc, arrow }
 }
 
-// the first minute of a new multiplex: its signal and its transmitters by TII
-function Report({ t, r, admin }: { t: (k: string) => string; r: ChangeReport; admin: boolean }) {
+// a DX recording of the multiplex: one click plays it (anyone)
+function Recording({ t, name }: { t: (k: string) => string; name: string }) {
   const audioOn = useStore((s) => s.audioEnabled)
   // (the sound starts within the click: browsers allow it only there)
-  const play = (name: string) => {
+  const play = () => {
     if (!audioOn) startAudio()
     send({ type: 'dxrec', action: 'play', name })
   }
+  return (
+    <div className="change-item">
+      <span className="change-kind">ETI</span>{' '}
+      <button className="chip chip-btn" title={t('dxrec_play')} onClick={play}>
+        ▶ {name}
+      </button>
+    </div>
+  )
+}
+
+// the first minute of a new multiplex: its signal and its transmitters by TII
+function Report({ t, r }: { t: (k: string) => string; r: ChangeReport }) {
   return (
     <>
       <div className="change-item">
@@ -41,14 +58,7 @@ function Report({ t, r, admin }: { t: (k: string) => string; r: ChangeReport; ad
           {x.powerKw ? ` · ${kw(x.powerKw)} kW` : ''} · ≈{(r.snrMean + x.level).toFixed(1)} dB
         </div>
       ))}
-      {admin && r.recording && (
-        <div className="change-item">
-          <span className="change-kind">ETI</span>{' '}
-          <button className="chip chip-btn" title={t('dxrec_play')} onClick={() => play(r.recording!)}>
-            ▶ {r.recording}
-          </button>
-        </div>
-      )}
+      {r.recording && <Recording t={t} name={r.recording} />}
     </>
   )
 }
@@ -118,7 +128,8 @@ export default function ChangesView() {
               </div>
             )
           })}
-          {ev.report && <Report t={t} r={ev.report} admin={admin} />}
+          {ev.report && <Report t={t} r={ev.report} />}
+          {ev.recording && <Recording t={t} name={ev.recording} />}
         </div>
       ))}
     </div>

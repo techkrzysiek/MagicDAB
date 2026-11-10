@@ -614,6 +614,8 @@ export interface ChangeEvent {
   ensemble: string
   changes: Change[]
   report?: ChangeReport
+  /** the DX recording a new station or another line-up started */
+  recording?: string
 }
 
 // the first minute of a new multiplex (radio/newmux.rs)

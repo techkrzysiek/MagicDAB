@@ -68,6 +68,10 @@ pub struct ChangeEvent {
     /// A new multiplex: what its first minute brought (radio/newmux.rs).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<Report>,
+    /// The DX recording these changes started (a new station, another
+    /// line-up: radio/dxrec.rs); a new multiplex has it in its report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording: Option<String>,
 }
 
 /// The first minute of a multiplex never heard here: how long and how strong
@@ -140,6 +144,8 @@ pub struct ChangeTracker {
     fresh_until: Option<std::time::Instant>,
     /// Changes waiting to be posted to Discord.
     discord: Batch,
+    /// The SI of the stations as known (sichanges.rs).
+    si: crate::sichanges::SiTracker,
 }
 
 /// A label of random bytes: two or more characters no station name has
@@ -234,6 +240,7 @@ impl ChangeTracker {
             pending_structure: HashMap::new(),
             fresh_until,
             discord,
+            si: crate::sichanges::SiTracker::load(dir),
         }
     }
 
@@ -606,7 +613,63 @@ impl ChangeTracker {
         old.observations += 1;
         old.seen = crate::servicelist::now();
         self.save();
-        // what the admin chose not to hear about (the state above stays current)
+        self.record(channel, ens, eid, changes, mute)
+    }
+
+    /// The SI of stations of this multiplex as just received (spi.rs:
+    /// si_seen): the changes confirmed now, as an event of the multiplex.
+    pub fn observe_si(
+        &mut self,
+        channel: &str,
+        ens: &Ensemble,
+        seen: Vec<(u8, u32, crate::sichanges::SiFields)>,
+        logos: Vec<(u8, u32, String, String)>,
+        mute: &crate::config::NotifyMute,
+    ) -> Option<ChangeEvent> {
+        let eid = ens.eid?;
+        let now = std::time::Instant::now();
+        let mut changes = Vec::new();
+        // another picture of a logo (of the same size: new sizes are siLogos)
+        for (ecc, sid, size, hash) in logos {
+            let Some(s) = ens.services.get(&sid) else { continue };
+            if self.si.logo_seen(&format!("{ecc:02X}{sid:04X}"), &size, &hash, now) {
+                let c = Change {
+                    kind: "siLogoImage".into(),
+                    service: s.label.as_ref().map(|l| l.text.trim().to_string()),
+                    sid: Some(format!("{sid:04X}")),
+                    from: None,
+                    to: Some(size),
+                };
+                merge(&mut changes, c);
+            }
+        }
+        for (ecc, sid, fields) in seen {
+            // (a document may describe the stations of other multiplexes too)
+            let Some(s) = ens.services.get(&sid) else { continue };
+            let found = self.si.seen(&format!("{ecc:02X}{sid:04X}"), fields, now);
+            let name = s.label.as_ref().map(|l| l.text.trim().to_string());
+            changes.extend(found.into_iter().map(|(kind, from, to)| Change {
+                kind: kind.into(),
+                service: name.clone(),
+                sid: Some(format!("{sid:04X}")),
+                from: Some(from),
+                to: Some(to),
+            }));
+        }
+        self.record(channel, ens, eid, changes, mute)
+    }
+
+    /// Changes of a multiplex as an event: in the log and the recent ones,
+    /// unless the admin chose not to hear about them.
+    fn record(
+        &mut self,
+        channel: &str,
+        ens: &Ensemble,
+        eid: u16,
+        mut changes: Vec<Change>,
+        mute: &crate::config::NotifyMute,
+    ) -> Option<ChangeEvent> {
+        // what the admin chose not to hear about (the state stays current)
         let ens_id = format!("{:02X}{eid:04X}", ens.ecc.unwrap_or(0));
         if mute.ensembles.iter().any(|m| m.id == ens_id) {
             changes.clear();
@@ -622,6 +685,7 @@ impl ChangeTracker {
             ensemble: ens.label.as_ref().map(|l| l.text.clone()).unwrap_or_default(),
             changes,
             report: None,
+            recording: None,
         };
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&self.log) {
             if let Ok(l) = serde_json::to_string(&ev) {
@@ -682,6 +746,9 @@ impl Batch {
         };
         let held = &mut self.pending[i].1;
         held.ensemble = ev.ensemble.clone();
+        if ev.recording.is_some() {
+            held.recording = ev.recording.clone();
+        }
         for c in &ev.changes {
             merge(&mut held.changes, c.clone());
         }
@@ -737,6 +804,16 @@ fn merge(into: &mut Vec<Change>, c: Change) {
                 None => into.push(c),
             }
         }
+        // new pictures of logos of a station: their sizes together
+        "siLogoImage" => match into.iter_mut().find(|p| p.kind == c.kind && subject(p) == what) {
+            Some(p) => {
+                let mut sizes: Vec<String> = p.to.iter().chain(c.to.iter()).flat_map(|t| t.split(", ")).map(String::from).collect();
+                sizes.sort();
+                sizes.dedup();
+                p.to = Some(sizes.join(", "));
+            }
+            None => into.push(c),
+        },
         "serviceRemoved" | "subchRemoved" => {
             // whatever happened to it before does not matter any more
             let added = c.kind.replace("Removed", "Added");
@@ -797,6 +874,17 @@ fn discord_lines(ev: &ChangeEvent) -> Vec<String> {
             "codec" | "bitrate" | "protection" => format!("{from} → {to}"),
             "pty" => format!("PTY {from} → {to}"),
             "userApps" => format!("aplikacje: {} → {}", if from.is_empty() { "-" } else { &from }, if to.is_empty() { "-" } else { &to }),
+            // the service information (SPI SI): sichanges.rs
+            "siShortName" => format!("SI nazwa krótka „{from}” → „{to}”"),
+            "siMediumName" => format!("SI nazwa „{from}” → „{to}”"),
+            "siLongName" => format!("SI nazwa długa „{from}” → „{to}”"),
+            "siDescription" if to.is_empty() => "SI bez opisu".to_string(),
+            "siDescription" => format!("SI opis: „{}”", short_text(&to, 200)),
+            "siGenres" => format!("SI gatunki: {} → {}", or_dash(&genre_names(&from)), or_dash(&genre_names(&to))),
+            "siLinks" => format!("SI linki: {} → {}", or_dash(&from), or_dash(&to)),
+            "siLogos" => format!("SI logo: {} → {}", or_dash(&from), or_dash(&to)),
+            "siLogoImage" => format!("SI nowe logo {to}"),
+            "siRadioDns" => format!("SI RadioDNS: {} → {}", or_dash(&from), or_dash(&to)),
             _ => continue,
         };
         let who = name(c);
@@ -809,6 +897,27 @@ fn discord_lines(ev: &ChangeEvent) -> Vec<String> {
         lines.push(format!("🔄 {who}: {}", parts.join(", ")));
     }
     lines
+}
+
+/// Genres as sichanges.rs keeps them (codes, or names), by their names.
+fn genre_names(list: &str) -> String {
+    list.split(", ").filter(|g| !g.is_empty()).map(magicdab_dab::genres::genre_label).collect::<Vec<_>>().join(", ")
+}
+
+fn or_dash(s: &str) -> &str {
+    if s.is_empty() {
+        "-"
+    } else {
+        s
+    }
+}
+
+/// At most `max` characters, with an ellipsis when cut.
+fn short_text(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
+    }
 }
 
 /// The Discord message of a new multiplex, for its report (discord_report).
@@ -848,7 +957,8 @@ fn discord_send(req: ureq::RequestBuilder<ureq::typestate::WithBody>, body: serd
 }
 
 /// Post a change event to a Discord webhook (in a background thread).
-pub fn post_discord(webhook: &str, station: &str, ev: &ChangeEvent) -> DiscordMsg {
+/// `base`: the public address of this server, for the link to a recording.
+pub fn post_discord(webhook: &str, station: &str, base: Option<&str>, ev: &ChangeEvent) -> DiscordMsg {
     let posted = DiscordMsg::default();
     let body = discord_lines(ev);
     // (only sub-channels or capacity: the Changes view has them)
@@ -858,6 +968,7 @@ pub fn post_discord(webhook: &str, station: &str, ev: &ChangeEvent) -> DiscordMs
     }
     let mut lines = vec![discord_header(station, ev)];
     lines.extend(body);
+    lines.extend(recording_line(ev.recording.as_deref(), base));
     // Discord limits messages to 2000 characters
     let mut messages = Vec::new();
     let mut cur = String::new();
@@ -976,13 +1087,17 @@ fn report_lines(r: &Report, base: Option<&str>) -> Vec<String> {
     if r.transmitters.len() > SHOWN {
         lines.push(format!("📡 … i {} więcej", r.transmitters.len() - SHOWN));
     }
-    match (&r.recording, base) {
-        // (in <>: Discord shows no preview of it)
-        (Some(n), Some(b)) => lines.push(format!("🎙 nagranie: <{}/?dxrec={n}>", b.trim_end_matches('/'))),
-        (Some(n), None) => lines.push(format!("🎙 nagranie: {n}")),
-        _ => {}
-    }
+    lines.extend(recording_line(r.recording.as_deref(), base));
     lines
+}
+
+/// The line of a DX recording: a link that plays it (the web's ?dxrec=).
+fn recording_line(name: Option<&str>, base: Option<&str>) -> Option<String> {
+    match (name?, base) {
+        // (in <>: Discord shows no preview of it)
+        (n, Some(b)) => Some(format!("🎙 nagranie: <{}/?dxrec={n}>", b.trim_end_matches('/'))),
+        (n, None) => Some(format!("🎙 nagranie: {n}")),
+    }
 }
 
 #[cfg(test)]
@@ -1124,6 +1239,7 @@ mod tests {
                 to: None,
             }],
             report: None,
+            recording: None,
         };
         t.defer(&ev);
         let again = ChangeTracker::load(&dir);
@@ -1198,7 +1314,15 @@ mod tests {
     }
 
     fn event(channel: &str, changes: Vec<Change>) -> ChangeEvent {
-        ChangeEvent { time: 0, channel: channel.into(), eid: "E21234".into(), ensemble: "MUX A".into(), changes, report: None }
+        ChangeEvent {
+            time: 0,
+            channel: channel.into(),
+            eid: "E21234".into(),
+            ensemble: "MUX A".into(),
+            changes,
+            report: None,
+            recording: None,
+        }
     }
 
     /// The net effect of the events of a multiplex, as Discord gets it.
@@ -1363,6 +1487,37 @@ mod tests {
         assert_eq!(l[2], "📡 TII 7-1 · nie ma w bazie · ≈0.0 dB");
         assert_eq!(l[3], "🎙 nagranie: <https://rx.example.org/?dxrec=2026-01-02_030405_12C_1234.eti>");
         assert_eq!(l.len(), 4);
+    }
+
+    #[test]
+    fn si_changes_of_the_stations_of_the_multiplex_are_reported_once_confirmed() {
+        let (mut t, dir) = tracker();
+        let ens = ensemble(2);
+        let sid = *ens.services.keys().next().unwrap();
+        let si = |name: &str| {
+            let s = magicdab_dab::spi::ServiceInfo { medium_name: Some(name.into()), ..Default::default() };
+            crate::sichanges::fields_of(&s)
+        };
+        let mute = crate::config::NotifyMute::default();
+        // learnt, then a new name twice (half a minute apart: not in a test, so
+        // the confirmation time is checked by sichanges.rs)
+        assert!(t.observe_si("8C", &ens, vec![(0xE2, sid, si("Radio A"))], vec![], &mute).is_none());
+        assert!(t.observe_si("8C", &ens, vec![(0xE2, sid, si("Radio B"))], vec![], &mute).is_none());
+        // a station of another multiplex in the same document: not this one's
+        assert!(t.observe_si("8C", &ens, vec![(0xE2, 0x7777, si("Other"))], vec![], &mute).is_none());
+        // new pictures of two logos in one batch: one line
+        let mut into = Vec::new();
+        merge(&mut into, change("siLogoImage", Some("4A91"), "Radio A", None, Some("600×600")));
+        merge(&mut into, change("siLogoImage", Some("4A91"), "Radio A", None, Some("32×32")));
+        assert_eq!(discord_lines(&event("8C", into)), vec!["🔄 **Radio A**: SI nowe logo 32×32, 600×600"]);
+        let ev = event("8C", vec![change("siMediumName", Some("4A91"), "Radio A", Some("Radio A"), Some("Radio B"))]);
+        let lines = discord_lines(&ev);
+        assert_eq!(lines, vec!["🔄 **Radio A**: SI nazwa „Radio A” → „Radio B”"]);
+        let ev = event("8C", vec![change("siGenres", Some("4A91"), "Radio A", Some("3.6.4.1"), Some("3.6.4.14, Jazz"))]);
+        assert_eq!(discord_lines(&ev), vec!["🔄 **Radio A**: SI gatunki: Pop → Rock, Jazz"]);
+        let ev = event("8C", vec![change("siDescription", Some("4A91"), "Radio A", Some("x"), Some(&"a".repeat(300)))]);
+        assert!(discord_lines(&ev)[0].ends_with("…”"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -213,6 +213,7 @@ impl Radio {
                     self.logos_dirty = true;
                     self.logos_changed = Some(Instant::now());
                 }
+                self.observe_si();
             }
             RxEvent::DataProgress { sid, scid, ua_type, progress } => {
                 let ch = self.channel.clone().unwrap_or_default();
@@ -241,6 +242,7 @@ impl Radio {
                         self.logos_dirty = true;
                         self.logos_changed = Some(Instant::now());
                     }
+                    self.observe_si();
                     return;
                 }
                 let slideshow_app = self.slideshow_app_type(key);

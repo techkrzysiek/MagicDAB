@@ -2244,8 +2244,15 @@ mod tests {
 
     #[test]
     fn change_events_have_the_eid_and_the_ecc_apart() {
-        let ev =
-            ChangeEvent { time: 1, channel: "12A".into(), eid: "E25B7A".into(), ensemble: "MUX TWO".into(), changes: vec![], report: None };
+        let ev = ChangeEvent {
+            time: 1,
+            channel: "12A".into(),
+            eid: "E25B7A".into(),
+            ensemble: "MUX TWO".into(),
+            changes: vec![],
+            report: None,
+            recording: None,
+        };
         let v = change_event(&ev).unwrap();
         assert_eq!((v["eid"].as_str(), v["ecc"].as_str()), (Some("5B7A"), Some("E2")));
     }

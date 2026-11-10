@@ -627,8 +627,9 @@ impl Radio {
                             to: Some("test webhooka".into()),
                         }],
                         report: None,
+                        recording: None,
                     };
-                    changes::post_discord(&self.settings.discord_webhook, &self.settings.station_name, &ev);
+                    changes::post_discord(&self.settings.discord_webhook, &self.settings.station_name, None, &ev);
                 }
             }
             "listeners" | "kick" | "ban" | "unban" | "tuneLogin" | "tuneLogout" => self.on_access_message(client, kind, &msg),

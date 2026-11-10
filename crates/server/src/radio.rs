@@ -992,18 +992,23 @@ impl Radio {
         let long = self.tuned_at.elapsed() > Duration::from_secs(120);
         // services with dynamic labels by their usual name: no change every few seconds
         let ens = self.dyn_labels.stable(&self.ensemble);
-        if let Some(ev) = self.changes.observe(&ch, &ens, long, &self.dyn_labels.sids(), &self.settings.notify_mute) {
+        if let Some(mut ev) = self.changes.observe(&ch, &ens, long, &self.dyn_labels.sids(), &self.settings.notify_mute) {
             log::info!("ensemble changes on {}: {} item(s)", ch, ev.changes.len());
+            // a new station, another line-up: recorded (radio/dxrec.rs); a new
+            // multiplex has its recording in its report (radio/newmux.rs)
+            let recording = self.dxrec_on_changes(&ev);
+            if !ev.changes.iter().any(|c| c.kind == "ensembleNew") {
+                ev.recording = recording;
+            }
             self.hub.broadcast_all(text(&json!({"type": "change", "event": ev})));
             // (Discord gets the changes of the multiplex together, 5 minutes later
             // - tick - but a new multiplex at once: an opening may not last)
             let discord = if ev.changes.iter().any(|c| c.kind == "ensembleNew") {
-                Some(changes::post_discord(&self.settings.discord_webhook, &self.settings.station_name, &ev))
+                Some(changes::post_discord(&self.settings.discord_webhook, &self.settings.station_name, None, &ev))
             } else {
                 self.changes.defer(&ev);
                 None
             };
-            self.dxrec_on_changes(&ev);
             // (its signal and transmitters a minute later, into that message)
             if let Some(d) = discord {
                 self.newmux_start(&ev, d);
@@ -1012,6 +1017,20 @@ impl Radio {
             if crate::servermap::source(&self.settings, &ch) == "air" {
                 self.server_map.send_changes([&ev]);
             }
+        }
+    }
+
+    /// The SI of the stations of the multiplex as just received (spi.rs):
+    /// its changes into the change log and, 5 minutes later, to Discord
+    /// (not to the server map: it compares the structure).
+    fn observe_si(&mut self) {
+        let seen = std::mem::take(&mut self.spi.si_seen);
+        let logos = std::mem::take(&mut self.spi.logo_seen);
+        let Some(ch) = self.channel.clone().filter(|_| !(seen.is_empty() && logos.is_empty()) && !self.awaiting_retune) else { return };
+        if let Some(ev) = self.changes.observe_si(&ch, &self.ensemble, seen, logos, &self.settings.notify_mute) {
+            log::info!("SI changes on {}: {} item(s)", ch, ev.changes.len());
+            self.hub.broadcast_all(text(&json!({"type": "change", "event": ev})));
+            self.changes.defer(&ev);
         }
     }
 
@@ -1137,8 +1156,12 @@ impl Radio {
         if let Some(st) = self.server_map.status_changed() {
             self.hub.broadcast(text(&json!({"type": "serverMap", "status": st})), |c| c.admin);
         }
-        for ev in self.changes.due_for_discord() {
-            changes::post_discord(&self.settings.discord_webhook, &self.settings.station_name, &ev);
+        let due = self.changes.due_for_discord();
+        if !due.is_empty() {
+            let base = crate::servermap::Target::from_settings(&self.settings).url;
+            for ev in due {
+                changes::post_discord(&self.settings.discord_webhook, &self.settings.station_name, base.as_deref(), &ev);
+            }
         }
         if self.spi.docs_dirty {
             self.spi.docs_dirty = false;

@@ -61,14 +61,21 @@ impl Radio {
     }
 
     /// From observe_changes: a multiplex heard on this channel for the first
-    /// time (or another one than before) is recorded.
-    pub(super) fn dxrec_on_changes(&mut self, ev: &changes::ChangeEvent) {
-        let Some(kind) = ev.changes.iter().map(|c| c.kind.as_str()).find(|k| *k == "ensembleNew" || *k == "ensembleId") else { return };
+    /// time (or another one than before), a new station in one, another
+    /// line-up (stations gone, sub-channels, bitrates, codecs, protection) is
+    /// recorded; the file recording it (one running on the channel already
+    /// counts).
+    pub(super) fn dxrec_on_changes(&mut self, ev: &changes::ChangeEvent) -> Option<String> {
+        let reason = dxrec_reason(ev)?;
         if !self.settings.dx_record.enabled {
-            return;
+            return None;
         }
-        if let Err(e) = self.dxrec_start(kind, None) {
-            log::info!("no DX recording of {} on {}: {e}", ev.ensemble.trim(), ev.channel);
+        match self.dxrec_start(reason, None) {
+            Ok(()) => self.dxrec_file(&ev.channel),
+            Err(e) => {
+                log::info!("no DX recording of {} on {} ({reason}): {e}", ev.ensemble.trim(), ev.channel);
+                self.dxrec_file(&ev.channel)
+            }
         }
     }
 
@@ -457,5 +464,53 @@ impl Radio {
                 self.notice(client, "error", "dxrec_missing");
             }
         }
+    }
+}
+
+/// Why changes are worth a recording: a new multiplex, a new EId, a new
+/// station, another line-up; not names, PTY or applications.
+fn dxrec_reason(ev: &changes::ChangeEvent) -> Option<&'static str> {
+    let has = |k: &str| ev.changes.iter().any(|c| c.kind == k);
+    if has("ensembleNew") {
+        Some("ensembleNew")
+    } else if has("ensembleId") {
+        Some("ensembleId")
+    } else if has("serviceAdded") {
+        Some("serviceAdded")
+    } else if ev.changes.iter().any(|c| {
+        matches!(
+            c.kind.as_str(),
+            "serviceRemoved" | "subchAdded" | "subchRemoved" | "subchChanged" | "capacity" | "codec" | "bitrate" | "protection"
+        )
+    }) {
+        Some("structure")
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ev(kinds: &[&str]) -> changes::ChangeEvent {
+        changes::ChangeEvent {
+            time: 0,
+            channel: "8C".into(),
+            eid: "E21234".into(),
+            ensemble: "MUX A".into(),
+            changes: kinds.iter().map(|k| changes::Change { kind: (*k).into(), service: None, sid: None, from: None, to: None }).collect(),
+            report: None,
+            recording: None,
+        }
+    }
+
+    #[test]
+    fn a_new_station_or_another_line_up_is_recorded_names_are_not() {
+        assert_eq!(dxrec_reason(&ev(&["ensembleNew", "serviceAdded"])), Some("ensembleNew"));
+        assert_eq!(dxrec_reason(&ev(&["label", "serviceAdded"])), Some("serviceAdded"));
+        assert_eq!(dxrec_reason(&ev(&["bitrate"])), Some("structure"));
+        assert_eq!(dxrec_reason(&ev(&["serviceRemoved"])), Some("structure"));
+        assert_eq!(dxrec_reason(&ev(&["label", "shortLabel", "pty", "userApps", "ensembleLabel"])), None);
     }
 }

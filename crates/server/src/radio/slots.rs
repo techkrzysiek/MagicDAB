@@ -1002,10 +1002,13 @@ impl Radio {
                 self.hub.broadcast(binary(BIN_ENCODED, &h, &data), |c| c.slot == id && c.record && c.service == Some(key));
             }
             RxEvent::DataObject { ua_type, object, .. } => {
-                // logos and programme guides of the shared store
+                // logos and programme guides of the shared store (the change
+                // log is of the main receiver: not its SI)
                 if ua_type == 0x007 && self.spi.on_object(&s.ensemble, &object) {
                     self.logos_dirty = true;
                 }
+                self.spi.si_seen.clear();
+                self.spi.logo_seen.clear();
             }
             RxEvent::DataProgress { sid, scid, ua_type, progress } => {
                 note_data_progress(&mut s.data_progress, channel, sid, scid, ua_type, progress);
@@ -1031,6 +1034,8 @@ impl Radio {
                     if self.spi.on_object(&s.ensemble, &object) {
                         self.logos_dirty = true;
                     }
+                    self.spi.si_seen.clear();
+                    self.spi.logo_seen.clear();
                     return;
                 }
                 // only real pictures (the main receiver keeps the odd ones for inspection)

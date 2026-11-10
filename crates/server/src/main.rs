@@ -31,6 +31,7 @@ mod radiovis;
 mod rawrec;
 mod servermap;
 mod servicelist;
+mod sichanges;
 mod spi;
 mod sysstats;
 mod tunnel;
