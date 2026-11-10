@@ -15,6 +15,7 @@ pub mod eti;
 pub mod etirec;
 pub mod fic;
 pub mod fig;
+pub mod genres;
 pub mod mot;
 pub mod msc;
 pub mod ofdm;

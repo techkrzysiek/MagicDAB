@@ -5,6 +5,7 @@ import { useT } from '../i18n'
 import { requestLogo, send } from '../ws'
 import { whenShort } from '../util'
 import { safeUrl } from '../components/common'
+import { genreLabel, genrePath } from '../genres'
 import type { SpiDoc } from '../types'
 
 const OpenPicture = createContext<(p: Picture) => void>(() => undefined)
@@ -267,8 +268,8 @@ function Extras({ el }: { el: Element }) {
         <div className="spi-row">
           <Tag size={14} />
           {genres.map((g, i) => (
-            <span key={i} className="chip" title={g.getAttribute('href') ?? ''}>
-              {textOf(g) || (g.getAttribute('href') ?? '').split(':').pop()}
+            <span key={i} className="chip" title={[genrePath(g.getAttribute('href') ?? ''), g.getAttribute('href')].filter(Boolean).join('\n')}>
+              {textOf(g) || genreLabel(g.getAttribute('href') ?? '')}
             </span>
           ))}
         </div>
@@ -356,7 +357,7 @@ function Programmes({ root, query }: { root: Element; query: string }) {
         dur: time?.getAttribute('duration') ?? '',
         name: textOf(kids(p, 'mediumName')[0] ?? kids(p, 'longName')[0] ?? kids(p, 'shortName')[0]),
         desc: textOf(p.getElementsByTagNameNS('*', 'shortDescription')[0] ?? p.getElementsByTagNameNS('*', 'longDescription')[0]),
-        genres: kids(p, 'genre').map((g) => textOf(g) || (g.getAttribute('href') ?? '').split(':').pop()),
+        genres: kids(p, 'genre').map((g) => textOf(g) || genreLabel(g.getAttribute('href') ?? '')),
       }
     })
     .filter((r) => !q || `${r.name} ${r.desc}`.toLowerCase().includes(q))
@@ -461,9 +462,15 @@ export default function SpiView() {
   useEffect(() => {
     send({ type: 'getSpiDocs' })
   }, [])
+  const ueid = useStore((s) => s.ensemble.ueid ?? null)
   const doc = docs.find((d) => d.id === sel)
+  // the documents of the multiplex listened to first (its ECC and EId end
+  // the scope of a broadcast one: "MUX A (E21234)"), then the others
+  const air = docs.filter((d) => d.source === 'SPI')
+  const here = (d: SpiDoc) => !!ueid && d.scope.endsWith(`(${ueid})`)
   const groups: [string, SpiDoc[]][] = [
-    [t('spi_air'), docs.filter((d) => d.source === 'SPI')],
+    [t('spi_air_here'), air.filter(here)],
+    [air.some(here) ? t('spi_air_other') : t('spi_air'), air.filter((d) => !here(d))],
     ['RadioDNS', docs.filter((d) => d.source !== 'SPI')],
   ]
   return (

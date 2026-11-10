@@ -78,8 +78,12 @@ fn xml_escape(s: &str) -> String {
 
 /// A genre as TS 102 371 encodes it: the classification scheme (low 4 bits of
 /// the first byte), then a byte a level; written as the TV-Anytime URN of TS
-/// 102 818 (the year of the scheme is not sent: 2005).
+/// 102 818 (the year of the scheme is not sent: 2005). Some encoders send
+/// the URN itself as text ("urn:tva:..."): taken as it is.
 fn genre(d: &[u8]) -> Option<String> {
+    if d.starts_with(b"urn:") {
+        return std::str::from_utf8(d).ok().filter(|s| s.chars().all(|c| c.is_ascii_graphic())).map(str::to_string);
+    }
     let cs = match d.first()? & 0x0F {
         1 => "IntentionCS",
         2 => "FormatCS",
@@ -612,6 +616,9 @@ mod tests {
         assert_eq!(genre(&[0x02, 1, 2]).as_deref(), Some("urn:tva:metadata:cs:FormatCS:2005:1.2"));
         assert_eq!(genre(&[0x0F, 1]), None);
         assert_eq!(genre(&[0x03]), None);
+        // (the URN as text, as some encoders send it, is no list of levels)
+        assert_eq!(genre(b"urn:tva:metadata:cs:ContentCS:2004:3.6.4.14").as_deref(), Some("urn:tva:metadata:cs:ContentCS:2004:3.6.4.14"));
+        assert_eq!(genre(b"urn:tva\x01"), None);
         // control characters would make the document not well-formed
         assert_eq!(xml_escape("a\u{3}\u{6}b<c>\n"), "ab&lt;c&gt;\n");
     }
