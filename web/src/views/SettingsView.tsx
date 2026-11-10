@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { Eye, EyeOff } from 'lucide-react'
 import { androidApp, closePrefs, desktop, desktopServerMode, toHost } from '../desktop'
 import { useStore, save, isLocal } from '../store'
 import type { ServerMapStatus } from '../store'
@@ -46,7 +45,11 @@ rule('channelMaps', {
   ok: (v: { url: string }[]) => v.every((m) => validMap(m.url)),
   encode: (v: { channel: string; url: string }[]) => v.map((m) => ({ channel: m.channel, url: m.url.trim() })),
 })
-rule('discordWebhook', { ok: (v: string) => !v.trim() || /^https:\/\/([a-z]+\.)?discord(app)?\.com\/api\/webhooks\/\S+$/i.test(v.trim()), encode: (v: string) => v.trim() })
+// (empty: the one saved stays; null: removed)
+rule('discordWebhook', {
+  ok: (v: string | null) => v === null || !v.trim() || /^https:\/\/([a-z]+\.)?discord(app)?\.com\/api\/webhooks\/\S+$/i.test(v.trim()),
+  encode: (v: string | null) => (v === null ? null : v.trim()),
+})
 rule('updateUrl', { ok: (v: string) => !v.trim() || /^https:\/\/\S+$/i.test(v.trim()), encode: (v: string) => v.trim() })
 rule('tunnel', { ok: (f: any) => !f.enabled || (!!f.host?.trim() && !!f.subdomain?.trim() && f.port > 0 && f.port < 65536) })
 rule('serverMap', { ok: (f: any) => (!f.publicUrl.trim() || webAddress.test(f.publicUrl.trim())) && (!f.url.trim() || /^https:\/\/\S+$/i.test(f.url.trim())) })
@@ -787,10 +790,11 @@ function Internet() {
   const s = useStore((st) => st.settings?.settings)
   const [internet, setInternet] = useField('internet', s?.internet ?? true)
   const [vis, setVis] = useField('radioVis', s?.radioVis ?? true)
-  const [hook, setHook, hookChanged] = useField('discordWebhook', s?.discordWebhook ?? '')
+  // the server never sends the webhook: only that there is one
+  const hasHook = !!s?.hasDiscordWebhook
+  const [hook, setHook, hookChanged] = useField<string | null>('discordWebhook', '')
   const [chat, setChat] = useField('chatEnabled', s?.chatEnabled ?? true)
   const [noIndex, setNoIndex] = useField('noIndex', !!s?.noIndex)
-  const [show, setShow] = useState(false)
   if (!s) return null
   return (
     <>
@@ -803,20 +807,26 @@ function Internet() {
         </Row>
       </Card>
       <Card title={t('set_card_notify')}>
-        <Row label={t('discord_webhook')} hint={t('set_discord_hint')} wide>
+        <Row
+          label={t('discord_webhook')}
+          hint={[t('set_discord_hint'), hook === null ? t('secret_removed') : hasHook ? t('secret_kept') : ''].filter(Boolean).join(' ')}
+          wide
+        >
           <div className="set-inline">
             <input
-              type={show ? 'text' : 'password'}
-              autoComplete="off"
+              type="password"
+              autoComplete="new-password"
               className={fieldOk('discordWebhook', hook) ? '' : 'invalid'}
-              placeholder="https://discord.com/api/webhooks/…"
-              value={hook}
+              placeholder={hasHook && hook !== null ? '••••••••' : 'https://discord.com/api/webhooks/…'}
+              value={hook ?? ''}
               onChange={(e) => setHook(e.target.value)}
             />
-            <button className="icon-btn" onClick={() => setShow(!show)} title={t(show ? 'set_hide' : 'set_show')} aria-label={t(show ? 'set_hide' : 'set_show')}>
-              {show ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
-            <button className="btn" disabled={hookChanged || !s.discordWebhook} title={hookChanged ? t('set_save_first') : undefined} onClick={() => send({ type: 'testDiscord' })}>
+            {hasHook && hook !== null && (
+              <button className="btn" onClick={() => setHook(null)}>
+                {t('remove')}
+              </button>
+            )}
+            <button className="btn" disabled={hookChanged || !hasHook} title={hookChanged ? t('set_save_first') : undefined} onClick={() => send({ type: 'testDiscord' })}>
               Test
             </button>
           </div>
@@ -895,15 +905,9 @@ function Tunnel() {
   const s = useStore((st) => st.settings?.settings)
   const status = useStore((st) => st.tunnelStatus ?? st.settings?.tunnel)
   const [f, setF, changed] = useField<any>('tunnel', { host: 'dxserver.eu', port: 7000, ...(s?.tunnel ?? {}) })
-  const [show, setShow] = useState(false)
   if (!s) return null
   const url = s.tunnel?.enabled && s.tunnel.subdomain && s.tunnel.host ? `https://${s.tunnel.subdomain}.${s.tunnel.host}` : ''
   const state = status?.state ?? 'off'
-  const eye = (
-    <button className="icon-btn" onClick={() => setShow(!show)} title={t(show ? 'set_hide' : 'set_show')} aria-label={t(show ? 'set_hide' : 'set_show')}>
-      {show ? <EyeOff size={16} /> : <Eye size={16} />}
-    </button>
-  )
   return (
     <>
       <Card title={t('set_card_tunnel')} note={t('set_tunnel_note')}>
@@ -935,11 +939,15 @@ function Tunnel() {
         <Row label={t('tunnel_subdomain')} hint={f.subdomain && f.host ? `https://${f.subdomain}.${f.host}` : undefined}>
           <input type="text" value={f.subdomain ?? ''} onChange={(e) => setF({ ...f, subdomain: e.target.value.trim().toLowerCase() })} />
         </Row>
-        <Row label={t('tunnel_token')}>
-          <div className="set-inline">
-            <input type={show ? 'text' : 'password'} value={f.token ?? ''} autoComplete="off" onChange={(e) => setF({ ...f, token: e.target.value.trim() })} />
-            {eye}
-          </div>
+        {/* the server never sends the token: only that there is one (empty keeps it) */}
+        <Row label={t('tunnel_token')} hint={s.tunnel?.hasToken ? t('secret_kept') : undefined}>
+          <input
+            type="password"
+            value={f.token ?? ''}
+            placeholder={s.tunnel?.hasToken ? '••••••••' : ''}
+            autoComplete="new-password"
+            onChange={(e) => setF({ ...f, token: e.target.value.trim() })}
+          />
         </Row>
         <Row label={t('tunnel_kcp')}>
           <Toggle checked={!!f.lowLatency} onChange={(v) => setF({ ...f, lowLatency: v })} />

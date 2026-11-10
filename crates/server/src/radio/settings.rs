@@ -153,11 +153,18 @@ impl Radio {
         if let Some(v) = s.get("internet").and_then(|v| v.as_bool()) {
             self.settings.internet = v;
         }
-        if let Some(v) = s.get("discordWebhook").and_then(|v| v.as_str()) {
-            self.settings.discord_webhook = v.trim().to_string();
+        // (the interface never has it: empty keeps it, null removes it)
+        match s.get("discordWebhook") {
+            Some(Value::Null) => self.settings.discord_webhook.clear(),
+            Some(Value::String(v)) if !v.trim().is_empty() => self.settings.discord_webhook = v.trim().to_string(),
+            _ => {}
         }
         if let Some(v) = s.get("tunnel") {
-            if let Ok(t) = serde_json::from_value::<crate::tunnel::TunnelConfig>(v.clone()) {
+            if let Ok(mut t) = serde_json::from_value::<crate::tunnel::TunnelConfig>(v.clone()) {
+                // (the interface never has the token: an empty one keeps it)
+                if t.token.is_empty() {
+                    t.token = self.settings.tunnel.token.clone();
+                }
                 self.settings.tunnel = t;
                 let port = self.listen_port;
                 self.tunnel.apply(&self.settings.tunnel, port);

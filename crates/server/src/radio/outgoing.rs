@@ -232,6 +232,15 @@ impl Radio {
             if let Some(m) = o.get_mut("serverMap").and_then(|m| m.as_object_mut()) {
                 m.remove("entry");
             }
+            // the tunnel's token and the Discord webhook too (who has its
+            // address posts to the channel): the interface learns only that
+            // there is one
+            if let Some(t) = o.get_mut("tunnel").and_then(|t| t.as_object_mut()) {
+                let set = t.insert("token".into(), json!("")).is_some_and(|v| v.as_str().is_some_and(|s| !s.is_empty()));
+                t.insert("hasToken".into(), json!(set));
+            }
+            let hook = o.insert("discordWebhook".into(), json!("")).is_some_and(|v| v.as_str().is_some_and(|s| !s.is_empty()));
+            o.insert("hasDiscordWebhook".into(), json!(hook));
         }
         json!({
             "type": "settings",
