@@ -6,7 +6,7 @@ import { requestLogo, send } from '../ws'
 import { whenShort } from '../util'
 import { safeUrl } from '../components/common'
 import { genreLabel, genrePath } from '../genres'
-import type { SpiDoc } from '../types'
+import type { SpiDoc, SpiIssue } from '../types'
 
 const OpenPicture = createContext<(p: Picture) => void>(() => undefined)
 
@@ -453,6 +453,38 @@ function DocDetail({ doc, onBack }: { doc: SpiDoc; onBack: () => void }) {
   )
 }
 
+/**
+ * The SPI diagnostics of the multiplex listened to: what in its carousel
+ * goes against the standard, the worst first (what may hang receivers in red).
+ */
+function SpiHealth({ issues }: { issues: SpiIssue[] }) {
+  const t = useT()
+  const line = (i: SpiIssue) => {
+    let s = t('spih_' + i.code)
+      .replace('{subject}', i.subject)
+      .replace('{a}', String(i.a ?? ''))
+      .replace('{b}', String(i.b ?? ''))
+      .replace('{text}', i.text ?? '')
+    // (a size given in bits: an encoder that forgot to turn bits into bytes)
+    if (i.code === 'bodySize' && i.a && i.b && i.a === i.b * 8) s += t('spih_bits')
+    return s
+  }
+  return (
+    <div className="spi-health">
+      <div className="spi-group">
+        {t('spih_title')}
+        {!issues.length && <span className="spi-health-ok"> · {t('spih_ok')}</span>}
+      </div>
+      {issues.map((i, n) => (
+        <div key={n} className={'spi-issue l' + i.level} title={i.level === 2 ? t('spih_level2') : undefined}>
+          <span className="spi-issue-dot" />
+          <span>{line(i)}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function SpiView() {
   const t = useT()
   const docs = useStore((s) => s.spiDocs)
@@ -463,6 +495,7 @@ export default function SpiView() {
     send({ type: 'getSpiDocs' })
   }, [])
   const ueid = useStore((s) => s.ensemble.ueid ?? null)
+  const health = useStore((s) => (ueid ? s.spiHealth[ueid] : undefined))
   const doc = docs.find((d) => d.id === sel)
   // the documents of the multiplex listened to first (its ECC and EId end
   // the scope of a broadcast one: "MUX A (E21234)"), then the others
@@ -524,6 +557,7 @@ export default function SpiView() {
             })}
           </div>
         )}
+        {health && <SpiHealth issues={health} />}
         <div className="spi-list-head">
           <FileCode2 size={18} /> {t('spi_documents')}
         </div>

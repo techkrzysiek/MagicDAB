@@ -1,5 +1,5 @@
 // Names of the TV-Anytime content genres (ContentCS of ETSI TS 102 822-3-1,
-// the 2011 edition as the DVB Project publishes it), the genres of SPI
+// the 2011 edition, from the XML of the DVB-I tools), the genres of SPI
 // documents: genres_table.ts, made by build/genres.py (the receiver has the
 // same: crates/dab/src/genres.rs).
 import { CONTENT } from './genres_table'

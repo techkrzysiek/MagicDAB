@@ -102,7 +102,7 @@ function handleText(m: any) {
       const known = new Map(st.spiDocs.map((d) => [d.id, d.received]))
       const xml = { ...st.spiDocXml }
       for (const d of m.docs) if (known.get(d.id) !== d.received) delete xml[d.id]
-      st.set({ spiDocs: m.docs, spiDocXml: xml })
+      st.set({ spiDocs: m.docs, spiDocXml: xml, spiHealth: m.health ?? {} })
       break
     }
     case 'update':

@@ -60,8 +60,8 @@ carry these source archives).
 - The names of the TV-Anytime content genres (`crates/dab/src/genres_table.rs`,
   `web/src/genres_table.ts`, made by `build/genres.py`) are those of the
   ContentCS classification scheme (`urn:tva:metadata:cs:ContentCS:2011`) of
-  ETSI TS 102 822-3-1, as published in XML by the DVB Project and used by
-  DVB-I tools (https://github.com/paulhiggs/dvb-i-tools, `res/tva/ContentCS.xml`).
+  ETSI TS 102 822-3-1, taken from the XML in the DVB-I tools
+  (https://github.com/paulhiggs/dvb-i-tools, `res/tva/ContentCS.xml`).
 
 ## Run time
 

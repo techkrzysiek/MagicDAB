@@ -2,7 +2,7 @@ import { useCallback } from 'react'
 import { create } from 'zustand'
 import type {
   AudioFormat, AudioStats, ChangeEvent, DxResult, Dls, Ensemble, EnsembleEntry, Hello, LogLine, LogoVariant, RadioState, ServiceText, Signal,
-  Slide, SpiDoc, TiiState, DataProgress, FmState, LinkingState, LinkInfo, Listener, Stats, StatsPoint, DxRecState,
+  Slide, SpiDoc, SpiIssue, TiiState, DataProgress, FmState, LinkingState, LinkInfo, Listener, Stats, StatsPoint, DxRecState,
 } from './types'
 import { androidApp } from './desktop'
 
@@ -233,6 +233,8 @@ export interface Store {
   favorites: number[]
   listMode: 'ensemble' | 'favorites'
   spiDocs: SpiDoc[]
+  /** SPI diagnostics by multiplex (UEId "E21234") */
+  spiHealth: Record<string, SpiIssue[]>
   dataProgress: DataProgress[]
   uiUpdate: boolean
   loginOpen: boolean
@@ -338,6 +340,7 @@ export const useStore = create<Store>((set, get) => ({
   favorites: load('favorites', [] as number[]),
   listMode: load('listMode', 'ensemble'),
   spiDocs: [],
+  spiHealth: {},
   dataProgress: [],
   uiUpdate: false,
   loginOpen: false,

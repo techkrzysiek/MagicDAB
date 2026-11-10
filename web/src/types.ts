@@ -640,6 +640,17 @@ export interface ChangeReportTx {
   powerKw: number | null
 }
 
+/** What the SPI diagnostics found in a carousel (server: spi.rs, dab mot.rs). */
+export interface SpiIssue {
+  /** 2 may hang receivers, 1 against the standard, 0 unusual */
+  level: 0 | 1 | 2
+  code: string
+  subject: string
+  a?: number
+  b?: number
+  text?: string
+}
+
 export interface SpiDoc {
   id: string
   source: string

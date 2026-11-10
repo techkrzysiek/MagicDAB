@@ -2,7 +2,7 @@
 //! and RadioDNS (internet), stored on disk and offered to the web clients.
 
 use magicdab_dab::ensemble::Ensemble;
-use magicdab_dab::mot::MotObject;
+use magicdab_dab::mot::{Issues, MotIssue, MotObject};
 use magicdab_dab::spi::{self, LogoRef};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -155,19 +155,75 @@ struct Index {
     epg: HashMap<String, Vec<Programme>>,
 }
 
+/// The SPI diagnostics of a multiplex: what the MOT decoder noticed, what
+/// the documents and the logos show.
+#[derive(Default)]
+struct Health {
+    directory: Arc<Vec<String>>,
+    mot: Vec<MotIssue>,
+    document: Issues,
+    logos: Issues,
+}
+
+/// A logo against what the SI says of it: a PNG of its size, not interlaced
+/// nor of 16 bits; an alpha channel, an ICC profile and legacy logos over
+/// 5 kB (the ODR SPI tools keep them under that) are worth knowing.
+fn logo_issues(l: &LogoRef, data: &[u8]) -> Vec<MotIssue> {
+    let mut out = Vec::new();
+    let name = l.url.clone();
+    let png = data.starts_with(b"\x89PNG\r\n\x1a\n");
+    if !png {
+        // (declared a PNG, or nothing declared and no JPEG either)
+        let declared = l.mime.as_deref();
+        if declared == Some("image/png") || (declared.is_none() && sniff_mime(data) != "image/jpeg") {
+            out.push(MotIssue::new(1, "notPng", name).text(sniff_mime(data)));
+        }
+        return out;
+    }
+    if data.len() >= 29 {
+        let (w, h) =
+            (u32::from_be_bytes([data[16], data[17], data[18], data[19]]), u32::from_be_bytes([data[20], data[21], data[22], data[23]]));
+        let (depth, colour, interlace) = (data[24], data[25], data[28]);
+        if l.width > 0 && (w, h) != (l.width as u32, l.height as u32) {
+            out.push(MotIssue::new(1, "logoSize", name.clone()).ab(l.width as u64, l.height as u64).text(format!("{w}×{h}")));
+        }
+        if interlace != 0 {
+            out.push(MotIssue::new(1, "pngInterlace", name.clone()));
+        }
+        if depth == 16 {
+            out.push(MotIssue::new(1, "png16", name.clone()));
+        }
+        if colour == 4 || colour == 6 {
+            out.push(MotIssue::new(0, "pngAlpha", name.clone()));
+        }
+    }
+    if data.windows(4).any(|c| c == b"iCCP") {
+        out.push(MotIssue::new(0, "pngIccp", name.clone()));
+    }
+    let legacy =
+        matches!(l.kind.as_deref(), Some("logo_colour_square" | "logo_colour_rectangle" | "logo_mono_square" | "logo_mono_rectangle"));
+    if legacy && data.len() > 5000 {
+        out.push(MotIssue::new(0, "logoBytes", name).ab(data.len() as u64, 5000));
+    }
+    out
+}
+
 pub struct SpiStore {
     dir: PathBuf,
     index: Index,
     /// Objects of the SPI carousels received in this session (content name -> data).
     objects: HashMap<String, (String, Arc<Vec<u8>>)>,
-    /// Logo references from SI documents waiting for their MOT object.
     /// The SI of the stations of the documents decoded since it was last
     /// taken: (ECC, SId, fields), for the change log (sichanges.rs).
     pub si_seen: Vec<(u8, u32, crate::sichanges::SiFields)>,
     /// The broadcast logos as they came: (ECC, SId, size "600×600", hash of
     /// the picture), for the change log as well.
     pub logo_seen: Vec<(u8, u32, String, String)>,
+    /// Logo references from SI documents waiting for their MOT object.
     pending: Vec<(u32, u8, LogoRef)>,
+    /// What is wrong with the SPI carousel of each multiplex (UEId): the
+    /// SPI diagnostics of the interface.
+    health: HashMap<u32, Health>,
     pub documents: u64,
     /// The document list changed since it was last sent.
     pub docs_dirty: bool,
@@ -245,6 +301,7 @@ impl SpiStore {
             pending: Vec::new(),
             si_seen: Vec::new(),
             logo_seen: Vec::new(),
+            health: HashMap::new(),
             documents: 0,
             docs_dirty: false,
             unsaved: None,
@@ -387,10 +444,13 @@ impl SpiStore {
     /// Handle a MOT object of an SPI channel. Returns true when logos changed.
     pub fn on_object(&mut self, ens: &Ensemble, object: &MotObject) -> bool {
         let mut changed = false;
+        let ueid = ens.ueid().unwrap_or(0);
+        self.note_mot_issues(ueid, object);
         if object.content_type == 7 {
             // binary encoded SPI document
-            let ueid = ens.ueid().unwrap_or(0);
-            if let Some(doc) = spi::decode(&object.body, ueid) {
+            let (doc, problems) = spi::decode_checked(&object.body, ueid);
+            self.note_document(ueid, object, doc.as_ref(), &problems);
+            if let Some(doc) = doc {
                 self.documents += 1;
                 let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
                 doc.to_xml(&mut xml, 0);
@@ -459,6 +519,12 @@ impl SpiStore {
             }
         }
         for (_, sid, ecc, l, mime, data) in resolved.iter() {
+            let issues = logo_issues(l, data);
+            if let Some(h) = self.health.get_mut(&ueid) {
+                for i in issues {
+                    h.logos.note(i);
+                }
+            }
             changed |= self.add_logo(*sid, *ecc, l.width, l.height, data, "SPI", &l.url, l.mime.as_deref().or(Some(mime.as_str())));
         }
         let done: Vec<usize> = resolved.iter().map(|r| r.0).collect();
@@ -582,7 +648,86 @@ impl SpiStore {
     }
 
     pub fn docs_json(&self) -> Value {
-        json!({"type": "spiDocs", "docs": self.index.docs})
+        // the diagnostics of each multiplex's carousel, the worst first
+        let health: serde_json::Map<String, Value> = self
+            .health
+            .iter()
+            .map(|(ueid, h)| {
+                let mut all: Vec<&MotIssue> = h.mot.iter().chain(&h.document.0).chain(&h.logos.0).collect();
+                all.sort_by_key(|i| std::cmp::Reverse(i.level));
+                (format!("{ueid:06X}"), json!(all))
+            })
+            .collect();
+        json!({"type": "spiDocs", "docs": self.index.docs, "health": health})
+    }
+
+    /// What the MOT decoder noticed of the carousel (each object carries the
+    /// state so far); a new directory starts the diagnostics anew.
+    fn note_mot_issues(&mut self, ueid: u32, object: &MotObject) {
+        let h = self.health.entry(ueid).or_default();
+        if !Arc::ptr_eq(&h.directory, &object.directory_names) && !object.directory_names.is_empty() {
+            h.directory = object.directory_names.clone();
+            h.document = Issues::default();
+            h.logos = Issues::default();
+            self.docs_dirty = true;
+        }
+        if h.mot != object.issues {
+            h.mot = object.issues.clone();
+            self.docs_dirty = true;
+        }
+    }
+
+    /// An SPI document: its encoding, and of an SI the names, the ensembles,
+    /// the scope and the logos it names.
+    fn note_document(&mut self, ueid: u32, object: &MotObject, doc: Option<&spi::Element>, problems: &[(u8, String)]) {
+        let h = self.health.entry(ueid).or_default();
+        let before = h.document.0.clone();
+        let name = if object.content_name.is_empty() { format!("TID {}", object.transport_id) } else { object.content_name.clone() };
+        for (level, p) in problems {
+            h.document.note(MotIssue::new(*level, "encoding", name.clone()).text(p.clone()));
+        }
+        if doc.is_none() {
+            h.document.note(MotIssue::new(2, "undecodable", name.clone()));
+        }
+        // the scope: another multiplex's documents in this one's carousel
+        if let Some(s) = object.param(0x27).filter(|s| s.len() == 3) {
+            let scope = ((s[0] as u32) << 16) | ((s[1] as u32) << 8) | s[2] as u32;
+            if ueid != 0 && scope != ueid {
+                h.document.note(MotIssue::new(0, "scope", name.clone()).text(format!("{scope:06X}")));
+            }
+        }
+        if let Some(doc) = doc.filter(|d| d.name == "serviceInformation") {
+            let mut ensembles = Vec::new();
+            doc.find_all("ensemble", &mut ensembles);
+            for e in ensembles {
+                if e.child("shortName").is_none() || e.child("mediumName").is_none() {
+                    h.document.note(MotIssue::new(1, "ensembleNames", e.attr("id").unwrap_or("").to_string()));
+                }
+            }
+            for s in spi::services(doc) {
+                let station = s.medium_name.clone().or(s.short_name.clone()).or(s.long_name.clone()).unwrap_or_default();
+                for (field, value, limit) in
+                    [("shortName", &s.short_name, 8usize), ("mediumName", &s.medium_name, 16), ("longName", &s.long_name, 128)]
+                {
+                    let n = value.as_deref().map_or(0, |v| v.trim().chars().count());
+                    if n > limit {
+                        h.document.note(MotIssue::new(1, "nameLength", station.clone()).ab(n as u64, limit as u64).text(field));
+                    }
+                }
+                // a logo the SI names that the carousel does not carry
+                if !object.directory_names.is_empty() {
+                    for l in &s.logos {
+                        let file = l.url.trim_start_matches('/');
+                        if !object.directory_names.iter().any(|n| n == file || *n == l.url) {
+                            h.document.note(MotIssue::new(1, "missingLogo", l.url.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        if h.document.0 != before {
+            self.docs_dirty = true;
+        }
     }
 
     pub fn doc_json(&self, id: &str) -> Value {
@@ -679,6 +824,39 @@ mod tests {
         assert!(s.drop_unlisted_logos(0xE1, 0x1234, &[logo_ref("/logo600.png")]));
         assert!(s.index.logos.is_empty() && !file.exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The start of a PNG: signature and IHDR (width, height, depth, colour, interlace).
+    fn png(w: u32, h: u32, depth: u8, colour: u8, interlace: u8) -> Vec<u8> {
+        let mut v = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        v.extend_from_slice(&w.to_be_bytes());
+        v.extend_from_slice(&h.to_be_bytes());
+        v.extend_from_slice(&[depth, colour, 0, 0, interlace]);
+        v
+    }
+
+    #[test]
+    fn logos_against_what_the_si_says_of_them() {
+        let codes = |l: &LogoRef, data: &[u8]| logo_issues(l, data).iter().map(|i| i.code).collect::<Vec<_>>();
+        let unrestricted = LogoRef {
+            url: "/a.png".into(),
+            mime: Some("image/png".into()),
+            width: 112,
+            height: 32,
+            kind: Some("logo_unrestricted".into()),
+        };
+        assert!(codes(&unrestricted, &png(112, 32, 8, 3, 0)).is_empty());
+        assert_eq!(codes(&unrestricted, &png(120, 32, 8, 2, 1)), ["logoSize", "pngInterlace"]);
+        let mut icc = png(112, 32, 16, 6, 0);
+        icc.extend_from_slice(b"\0\0\0\x10iCCP");
+        assert_eq!(codes(&unrestricted, &icc), ["png16", "pngAlpha", "pngIccp"]);
+        // a JPEG said to be a PNG
+        assert_eq!(codes(&unrestricted, b"\xFF\xD8\xFF\xE0rest"), ["notPng"]);
+        // a legacy logo of more than 5 kB
+        let mut big = png(32, 32, 8, 2, 0);
+        big.resize(6000, 0);
+        let square = LogoRef { width: 32, height: 32, kind: Some("logo_colour_square".into()), ..unrestricted };
+        assert_eq!(codes(&square, &big), ["logoBytes"]);
     }
 
     #[test]

@@ -794,6 +794,11 @@ impl FrameSink for Core {
                             }
                         }
                     });
+                    for (addr, &(jumps, dir)) in &pc.packets.ci_jumps {
+                        if let Some((mot, ..)) = pc.components.get_mut(addr) {
+                            mot.packet_continuity(jumps, dir);
+                        }
+                    }
                 }
             }
         }
@@ -954,6 +959,11 @@ impl Core {
                     }
                 }
             });
+            for (addr, &(jumps, dir)) in &pc.packets.ci_jumps {
+                if let Some((mot, ..)) = pc.components.get_mut(addr) {
+                    mot.packet_continuity(jumps, dir);
+                }
+            }
         }
         spent.data = t.elapsed();
         // the ETI recording: the stream's frame as it came

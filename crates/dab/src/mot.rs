@@ -4,6 +4,58 @@
 use crate::charset;
 use crate::crc::check_crc16;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
+
+/// Something a MOT channel does against EN 301 234 / TS 102 371, or that
+/// may upset receivers: what the decoder notices, shown by the interface
+/// (the SPI diagnostics).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MotIssue {
+    /// 2: may make receivers fail, 1: against the standard, 0: unusual.
+    pub level: u8,
+    pub code: &'static str,
+    /// The object (its name, else its transport id) or empty.
+    pub subject: String,
+    /// Numbers and a text of the case (what the code says of them).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+impl MotIssue {
+    pub fn new(level: u8, code: &'static str, subject: impl Into<String>) -> Self {
+        MotIssue { level, code, subject: subject.into(), a: None, b: None, text: None }
+    }
+
+    pub fn ab(mut self, a: u64, b: u64) -> Self {
+        self.a = Some(a);
+        self.b = Some(b);
+        self
+    }
+
+    pub fn text(mut self, t: impl Into<String>) -> Self {
+        self.text = Some(t.into());
+        self
+    }
+}
+
+/// The issues of a channel, one per code and subject (the latest case).
+#[derive(Clone, Debug, Default)]
+pub struct Issues(pub Vec<MotIssue>);
+
+impl Issues {
+    pub fn note(&mut self, issue: MotIssue) {
+        if let Some(i) = self.0.iter_mut().find(|i| i.code == issue.code && i.subject == issue.subject) {
+            *i = issue;
+        } else if self.0.len() < 64 {
+            self.0.push(issue);
+        }
+    }
+}
 
 /// Parsed MSC data group.
 #[derive(Debug)]
@@ -14,6 +66,8 @@ pub struct DataGroup<'a> {
     pub last: bool,
     pub segment: Option<u16>,
     pub transport_id: Option<u16>,
+    /// It carries a CRC (without one a receiver cannot check it).
+    pub crc: bool,
     pub data: &'a [u8],
 }
 
@@ -66,7 +120,7 @@ pub fn parse_data_group(dg: &[u8]) -> Option<DataGroup<'_>> {
     if i > end {
         return None;
     }
-    Some(DataGroup { dg_type, continuity, repetition, last, segment, transport_id, data: &dg[i..end] })
+    Some(DataGroup { dg_type, continuity, repetition, last, segment, transport_id, crc, data: &dg[i..end] })
 }
 
 #[derive(Clone, Debug, Default)]
@@ -81,6 +135,10 @@ pub struct MotObject {
     pub body: Vec<u8>,
     /// Body size from the header core.
     pub body_size: usize,
+    /// What the decoder noticed of the channel so far (MotIssue), and the
+    /// names of its MOT directory.
+    pub issues: Vec<MotIssue>,
+    pub directory_names: Arc<Vec<String>>,
 }
 
 impl MotObject {
@@ -201,6 +259,45 @@ pub struct MotDecoder {
     pub objects_done: u64,
     /// Bytes of all completed objects.
     pub bytes_done: usize,
+    pub issues: Issues,
+    /// The names of the objects of the directory.
+    directory_names: Arc<Vec<String>>,
+    /// Packet continuity jumps (all, before the directory) given last, and
+    /// as they were when the directory came (packet_continuity).
+    ci_seen: (u32, u32),
+    ci_base: (u32, u32),
+}
+
+/// The parameters of a MOT header extension or directory extension: (id, data).
+fn params(b: &[u8]) -> Vec<(u8, &[u8])> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let (pli, id) = (b[i] >> 6, b[i] & 0x3F);
+        i += 1;
+        let len = match pli {
+            0 => 0,
+            1 => 1,
+            2 => 4,
+            _ => {
+                let Some(&l) = b.get(i) else { break };
+                if l & 0x80 != 0 {
+                    let Some(&l2) = b.get(i + 1) else { break };
+                    i += 2;
+                    (((l & 0x7F) as usize) << 8) | l2 as usize
+                } else {
+                    i += 1;
+                    l as usize
+                }
+            }
+        };
+        if i + len > b.len() {
+            break;
+        }
+        out.push((id, &b[i..i + len]));
+        i += len;
+    }
+    out
 }
 
 /// Parse a MOT header (core + extension) into an object description.
@@ -339,7 +436,18 @@ impl MotDecoder {
         if dg.data.len() < 2 {
             return;
         }
-        let seg_size = ((((dg.data[0] & 0x1F) as usize) << 8) | dg.data[1] as usize).min(dg.data.len() - 2);
+        let declared = (((dg.data[0] & 0x1F) as usize) << 8) | dg.data[1] as usize;
+        let seg_size = declared.min(dg.data.len() - 2);
+        if matches!(dg.dg_type, 3 | 4 | 6) {
+            if !dg.crc {
+                self.issues.note(MotIssue::new(1, "noCrc", "").ab(dg.dg_type as u64, 0));
+            }
+            // (a receiver trusting it would read beyond the data group)
+            if declared != dg.data.len() - 2 {
+                let what = self.name_of(tid).unwrap_or_else(|| format!("TID {tid}"));
+                self.issues.note(MotIssue::new(2, "segmentSize", what).ab(declared as u64, (dg.data.len() - 2) as u64));
+            }
+        }
         let payload = &dg.data[2..2 + seg_size];
         match dg.dg_type {
             3 => {
@@ -386,6 +494,26 @@ impl MotDecoder {
         }
     }
 
+    /// The name of an object of the directory.
+    fn name_of(&self, tid: u16) -> Option<String> {
+        let (_, entries) = self.directory.as_ref()?;
+        entries.iter().find(|e| e.transport_id == tid).map(|e| e.header.content_name.clone()).filter(|n| !n.is_empty())
+    }
+
+    /// Continuity of the packets of the channel (packet.rs): jumps right
+    /// before the MOT directory, time after time and with no reception error
+    /// near them, most likely come from a carousel file whose packets do not
+    /// come to a multiple of 4, looped by the multiplexer as it is; the
+    /// receiver sees a packet lost at the start of the directory.
+    pub fn packet_continuity(&mut self, jumps: u32, before_directory: u32) {
+        self.ci_seen = (jumps, before_directory);
+        // (since the current directory: a carousel replaced starts anew)
+        let (all, dir) = (jumps.saturating_sub(self.ci_base.0), before_directory.saturating_sub(self.ci_base.1));
+        if dir >= 3 && dir * 2 >= all {
+            self.issues.note(MotIssue::new(1, "ciLoop", "").ab(dir as u64, all as u64));
+        }
+    }
+
     fn parse_directory(&mut self, tid: u16, d: &[u8]) {
         if d.len() < 13 {
             return;
@@ -395,6 +523,14 @@ impl MotDecoder {
         }
         let num_objects = ((d[4] as usize) << 8) | d[5] as usize;
         let ext_len = ((d[11] as usize) << 8) | d[12] as usize;
+        // a new version of the carousel: what the old one did does not count
+        self.issues = Issues::default();
+        self.ci_base = self.ci_seen;
+        let size = (u32::from_be_bytes([d[0], d[1], d[2], d[3]]) & 0x3FFF_FFFF) as usize;
+        if size != d.len() {
+            self.issues.note(MotIssue::new(2, "directorySize", "").ab(size as u64, d.len() as u64));
+        }
+        let sorted = params(&d[13..(13 + ext_len).min(d.len())]).iter().any(|(id, _)| *id == 0x00);
         let mut i = 13 + ext_len;
         let mut entries = Vec::with_capacity(num_objects.min(1024));
         for _ in 0..num_objects {
@@ -417,8 +553,26 @@ impl MotDecoder {
         // an incompletely parsed directory (corrupted segments) must not replace
         // a good one and throw away the objects received so far
         if entries.len() != num_objects {
+            self.issues.note(MotIssue::new(2, "directoryEntries", "").ab(num_objects as u64, entries.len() as u64));
             return;
         }
+        // SortedHeaderInformation: a receiver may rely on the order
+        let names: Vec<String> = entries.iter().map(|e| e.header.content_name.clone()).collect();
+        if sorted {
+            if let Some(w) = names.windows(2).find(|w| w[0].as_bytes() > w[1].as_bytes()) {
+                self.issues.note(MotIssue::new(1, "unsorted", "").text(format!("{} > {}", w[0], w[1])));
+            }
+        }
+        // the content names in another character set than EBU Latin (0)
+        let charsets: Vec<u8> = entries
+            .iter()
+            .filter_map(|e| e.header.params.iter().find(|(id, d)| *id == 0x0C && !d.is_empty()).map(|(_, d)| d[0] >> 4))
+            .filter(|c| *c != 0)
+            .collect();
+        if let Some(&c) = charsets.first() {
+            self.issues.note(MotIssue::new(0, "charset", "").ab(c as u64, charsets.len() as u64));
+        }
+        self.directory_names = Arc::new(names);
         // keep objects that are still part of the new directory
         let keep: Vec<u16> = entries.iter().map(|e| e.transport_id).collect();
         self.carousel.retain(|t| keep.contains(t));
@@ -434,7 +588,14 @@ impl MotDecoder {
             self.directory.as_ref().and_then(|(_, e)| e.iter().find(|e| e.transport_id == tid)).map(|e| e.header.clone())
         };
         let Some(mut obj) = header else { return };
+        // a receiver may allocate and wait for the size the header gives
+        if obj.body_size != body.len() {
+            let what = if obj.content_name.is_empty() { format!("TID {tid}") } else { obj.content_name.clone() };
+            self.issues.note(MotIssue::new(2, "bodySize", what).ab(obj.body_size as u64, body.len() as u64));
+        }
         obj.body = body;
+        obj.issues = self.issues.0.clone();
+        obj.directory_names = self.directory_names.clone();
         self.pending.remove(&tid);
         if self.recent.len() >= 8 {
             self.recent.pop_front();
@@ -506,5 +667,56 @@ mod tests {
         m.process(&dg(3, 0, true, 8, &header(2000, "b.jpg")), &mut out);
         m.process(&dg(4, 0, false, 8, &body[..1000]), &mut out);
         assert_eq!(m.receiving().map(|p| (p.bytes, p.size)), Some((1000, 2000)));
+    }
+
+    /// A MOT header (core and a ContentName in character set `cs`).
+    fn named(body_size: usize, name: &str, cs: u8) -> Vec<u8> {
+        let mut h = header(body_size, name);
+        h[9] = cs << 4;
+        h
+    }
+
+    #[test]
+    fn a_size_in_bits_and_an_unsorted_directory_are_noticed() {
+        // a directory saying it is sorted (SortedHeaderInformation), names
+        // that are not, in ISO Latin-1, and an object whose sizes are in bits
+        let entries = [(10u16, named(1000, "b.png", 4)), (11, named(80, "a.bin", 4))];
+        let mut d = Vec::new();
+        let size = 13 + 1 + entries.iter().map(|(_, h)| 2 + h.len()).sum::<usize>();
+        d.extend_from_slice(&(size as u32).to_be_bytes());
+        d.extend_from_slice(&(entries.len() as u16).to_be_bytes());
+        d.extend_from_slice(&[0, 0, 0, 0, 0, 0, 1, 0x00]);
+        for (tid, h) in &entries {
+            d.extend_from_slice(&tid.to_be_bytes());
+            d.extend_from_slice(h);
+        }
+        let mut m = MotDecoder::new();
+        let mut out = Vec::new();
+        m.process(&dg(6, 0, true, 99, &d), &mut out);
+        let mut bits = dg(4, 0, true, 11, &[7u8; 10]);
+        // (the segment header says 80 too)
+        bits[7] = 0;
+        bits[8] = 80;
+        m.process(&bits, &mut out);
+        assert_eq!(out.len(), 1);
+        let has = |code: &str| out[0].issues.iter().find(|i| i.code == code).cloned();
+        let body = has("bodySize").expect("BodySize");
+        assert_eq!((body.level, body.subject.as_str(), body.a, body.b), (2, "a.bin", Some(80), Some(10)));
+        let seg = has("segmentSize").expect("segment size");
+        assert_eq!((seg.level, seg.a, seg.b), (2, Some(80), Some(10)));
+        assert_eq!(has("unsorted").and_then(|i| i.text).as_deref(), Some("b.png > a.bin"));
+        assert_eq!(has("charset").map(|i| (i.a, i.b)), Some((Some(4), Some(2))));
+        // (these test data groups carry no CRC)
+        assert!(has("noCrc").is_some());
+        assert_eq!(out[0].directory_names.as_slice(), ["b.png", "a.bin"]);
+        // packets jumping right before the directory, time after time
+        m.packet_continuity(4, 3);
+        assert!(m.issues.0.iter().any(|i| i.code == "ciLoop"));
+        // a new carousel starts the diagnostics anew
+        let mut d2 = d.clone();
+        // (the first letter of the first name)
+        d2[13 + 1 + 2 + 7 + 3] = b'a';
+        m.process(&dg(6, 0, true, 100, &d2), &mut out);
+        assert!(m.issues.0.iter().all(|i| i.code != "ciLoop" && i.code != "bodySize"));
     }
 }

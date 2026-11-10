@@ -3596,6 +3596,45 @@ table.table {
   padding: 4px 6px 10px;
 }
 
+.spi-health {
+  margin-bottom: 8px;
+}
+
+.spi-health-ok {
+  text-transform: none;
+  font-weight: 600;
+  color: var(--good, #2e9d57);
+}
+
+.spi-issue {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 6px;
+  font-size: 13px;
+}
+
+.spi-issue-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+}
+
+.spi-issue.l1 .spi-issue-dot {
+  background: #e0a100;
+}
+
+.spi-issue.l2 {
+  color: #d23b3b;
+  font-weight: 600;
+}
+
+.spi-issue.l2 .spi-issue-dot {
+  background: #d23b3b;
+}
+
 .spi-group {
   font-size: 12px;
   font-weight: 800;

@@ -228,6 +228,8 @@ struct Decoder {
     default_lang: Option<String>,
     /// Nesting of the element being parsed.
     depth: usize,
+    /// What does not hold together (decode_checked): (2 broken, 1 unusual).
+    problems: Vec<(u8, String)>,
 }
 
 /// Real documents nest a few levels; deeper ones are skipped (a hostile
@@ -332,6 +334,7 @@ impl Decoder {
 
     fn parse(&mut self, d: &[u8], parent: &mut Element) -> usize {
         if d.len() < 2 {
+            self.problem(format!("{} byte(s) left over in <{}>", d.len(), parent.name));
             return d.len();
         }
         let tag = d[0];
@@ -339,18 +342,22 @@ impl Decoder {
         let mut hdr = 2;
         if len == 0xFE {
             if d.len() < 4 {
+                self.problem(format!("tag 0x{tag:02X} cut short in <{}>", parent.name));
                 return d.len();
             }
             len = u16::from_be_bytes([d[2], d[3]]) as usize;
             hdr = 4;
         } else if len == 0xFF {
             if d.len() < 5 {
+                self.problem(format!("tag 0x{tag:02X} cut short in <{}>", parent.name));
                 return d.len();
             }
             len = ((d[2] as usize) << 16) | ((d[3] as usize) << 8) | d[4] as usize;
             hdr = 5;
         }
         if d.len() < hdr + len {
+            // (a receiver trusting the length reads beyond its parent)
+            self.problem(format!("tag 0x{tag:02X} in <{}> says {len} bytes, {} left", parent.name, d.len() - hdr));
             return d.len();
         }
         let body = &d[hdr..hdr + len];
@@ -384,9 +391,12 @@ impl Decoder {
                     }),
                     Kind::Enum(values) => body.first().and_then(|v| values.iter().find(|(k, _)| k == v)).map(|(_, s)| s.to_string()),
                 };
-                if let Some(v) = value {
-                    parent.attrs.push((name.to_string(), v));
+                match value {
+                    Some(v) => parent.attrs.push((name.to_string(), v)),
+                    None => self.unusual(format!("attribute {name} of <{}>: {} byte(s) it cannot be", parent.name, body.len())),
                 }
+            } else {
+                self.unusual(format!("unknown attribute 0x{tag:02X} of <{}>", parent.name));
             }
             return hdr + len;
         }
@@ -416,8 +426,12 @@ impl Decoder {
                 self.default_lang = Some(self.string(body, false));
             }
             _ => {
-                let Some(name) = element_name(tag) else { return hdr + len };
+                let Some(name) = element_name(tag) else {
+                    self.unusual(format!("unknown element 0x{tag:02X} in <{}>", parent.name));
+                    return hdr + len;
+                };
                 if self.depth >= MAX_DEPTH {
+                    self.problem(format!("elements nested deeper than {MAX_DEPTH}"));
                     return hdr + len;
                 }
                 self.depth += 1;
@@ -441,8 +455,15 @@ impl Decoder {
 /// Decode a binary encoded SPI object. `ueid` (ECC << 16 | EId) is used for
 /// bearer URIs that do not carry an ensemble id.
 pub fn decode(data: &[u8], ueid: u32) -> Option<Element> {
+    decode_checked(data, ueid).0
+}
+
+/// Decode, with what does not hold together in the encoding (lengths beyond
+/// their parent, bytes left over, unknown tags, values of a wrong size, more
+/// than one top element): a receiver may trip over it.
+pub fn decode_checked(data: &[u8], ueid: u32) -> (Option<Element>, Vec<(u8, String)>) {
     let mut root = Element { name: "#root".into(), ..Default::default() };
-    let mut dec = Decoder { tokens: HashMap::new(), ueid, default_lang: None, depth: 0 };
+    let mut dec = Decoder { tokens: HashMap::new(), ueid, default_lang: None, depth: 0, problems: Vec::new() };
     let mut i = 0;
     while i < data.len() {
         let used = dec.parse(&data[i..], &mut root);
@@ -451,8 +472,25 @@ pub fn decode(data: &[u8], ueid: u32) -> Option<Element> {
         }
         i += used;
     }
-    let doc = root.children.into_iter().next()?;
-    Some(doc)
+    if root.children.len() > 1 {
+        dec.problem(format!("{} top elements", root.children.len()));
+    }
+    let problems = dec.problems;
+    (root.children.into_iter().next(), problems)
+}
+
+impl Decoder {
+    fn problem(&mut self, p: String) {
+        if self.problems.len() < 20 {
+            self.problems.push((2, p));
+        }
+    }
+
+    fn unusual(&mut self, p: String) {
+        if self.problems.len() < 20 {
+            self.problems.push((1, p));
+        }
+    }
 }
 
 /// A logo reference of a service found in an SPI service information document.
@@ -656,5 +694,19 @@ mod tests {
     #[test]
     fn bearer_parse() {
         assert_eq!(parse_bearer("dab:2e2.4a5c.5e1d.0"), Some((0xE2, 0x4A5C, 0x5E1D, 0)));
+    }
+
+    #[test]
+    fn what_does_not_hold_together_is_told() {
+        // <serviceInformation> of 4 bytes whose <shortName> says 9
+        let (doc, problems) = decode_checked(&[0x03, 4, 0x10, 9, b'A', b'B'], 0);
+        assert!(doc.is_some());
+        assert_eq!(problems, vec![(2, "tag 0x10 in <serviceInformation> says 9 bytes, 2 left".to_string())]);
+        // an element this decoder does not know: unusual, not broken
+        let (_, problems) = decode_checked(&[0x03, 2, 0x7E, 0], 0);
+        assert_eq!(problems.iter().map(|p| p.0).collect::<Vec<_>>(), vec![1]);
+        // a good document: nothing
+        let (_, problems) = decode_checked(&[0x03, 6, 0x10, 4, 0x01, 2, b'A', b'B'], 0);
+        assert!(problems.is_empty(), "{problems:?}");
     }
 }
