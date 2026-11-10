@@ -11,6 +11,7 @@ extern "C" {
 
 const OPUS_APPLICATION_AUDIO: c_int = 2049;
 const OPUS_SET_BITRATE_REQUEST: c_int = 4002;
+const OPUS_SET_VBR_REQUEST: c_int = 4006;
 const OPUS_SET_COMPLEXITY_REQUEST: c_int = 4010;
 const OPUS_SET_SIGNAL_REQUEST: c_int = 4024;
 const OPUS_SIGNAL_MUSIC: c_int = 3002;
@@ -38,6 +39,14 @@ impl OpusEncoder {
             opus_encoder_ctl(st, OPUS_SET_SIGNAL_REQUEST, OPUS_SIGNAL_MUSIC);
         }
         Ok(OpusEncoder { st, out: vec![0; 4000] })
+    }
+
+    /// Constant bitrate: every packet of the same size, silence too.
+    pub fn constant(self) -> Self {
+        unsafe {
+            opus_encoder_ctl(self.st, OPUS_SET_VBR_REQUEST, 0 as c_int);
+        }
+        self
     }
 
     /// Encode one frame of 960 interleaved stereo samples.

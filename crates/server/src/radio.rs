@@ -369,6 +369,12 @@ pub struct Radio {
     streams_wanted: HashSet<u32>,
     stream_encoders: HashMap<ServiceKey, (magicdab_codecs::opus::OpusEncoder, Vec<f32>)>,
     streams_policy_at: Instant,
+    /// Per streamed station: when its audio came last, and up to when the
+    /// silence standing for it was sent (radio/streams.rs).
+    stream_audio_at: HashMap<u32, Instant>,
+    stream_silence_to: HashMap<u32, Instant>,
+    /// 20 ms of silence as a packet of the streams' bitrate (and that bitrate).
+    stream_silence: Option<(u32, Vec<u8>)>,
     service_lock: Option<u32>,
     /// Side slots: multiplexes listeners chose themselves, each on a receiver
     /// of its own next to this main one (radio/slots.rs).
@@ -545,6 +551,9 @@ impl Radio {
             streams_wanted: HashSet::new(),
             stream_encoders: HashMap::new(),
             streams_policy_at: Instant::now(),
+            stream_audio_at: HashMap::new(),
+            stream_silence_to: HashMap::new(),
+            stream_silence: None,
             service_lock,
             slots: slots::Table::new(),
             stats: stats::State::new(),

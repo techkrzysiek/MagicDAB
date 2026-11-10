@@ -2,7 +2,9 @@
 //! of the multiplex received as Ogg Opus over HTTP, with its dynamic label
 //! (DLS) as the ICY `StreamTitle` for players that ask for it
 //! (`Icy-MetaData: 1`). A station is decoded and encoded only while somebody
-//! listens to its stream. Which stations, and how many at once, the radio
+//! listens to its stream. Without its audio (no signal) the stream goes on
+//! with silence and says so in its title, "MagicDAB: NO DAB SIGNAL (11B)":
+//! players keep the connection and show why it is quiet. Which stations, and how many at once, the radio
 //! decides (settings `streams`, a receiver locked to one station, the
 //! dongle's single sub-channel).
 
@@ -47,6 +49,8 @@ struct Inner {
     policy: Policy,
     stations: HashMap<u32, Station>,
     titles: HashMap<u32, String>,
+    /// What stands for the title while a station has no audio (set_status).
+    status: HashMap<u32, String>,
 }
 
 #[derive(Default)]
@@ -120,8 +124,19 @@ impl Streams {
         self.inner.lock().titles.insert(sid, title.trim().to_string());
     }
 
+    /// Why the station is quiet ("MagicDAB: NO DAB SIGNAL (11B)"), the
+    /// title until its audio comes back; `None` once it has.
+    pub fn set_status(&self, sid: u32, status: Option<String>) {
+        let mut g = self.inner.lock();
+        match status {
+            Some(s) => g.status.insert(sid, s),
+            None => g.status.remove(&sid),
+        };
+    }
+
     fn title(&self, sid: u32) -> Option<String> {
-        self.inner.lock().titles.get(&sid).filter(|t| !t.is_empty()).cloned()
+        let g = self.inner.lock();
+        g.status.get(&sid).or_else(|| g.titles.get(&sid)).filter(|t| !t.is_empty()).cloned()
     }
 }
 
@@ -305,6 +320,11 @@ mod tests {
         let len = got[META_INTERVAL] as usize * 16;
         let block = String::from_utf8_lossy(&got[META_INTERVAL + 1..META_INTERVAL + 1 + len]).trim_end_matches('\0').to_string();
         assert_eq!(block, "StreamTitle='Artist - It’s a song';");
+        // no signal: what stands for the title, then the label again
+        s.set_status(0x4C7E, Some("MagicDAB: NO DAB SIGNAL (11B)".into()));
+        assert_eq!(s.title(0x4C7E).as_deref(), Some("MagicDAB: NO DAB SIGNAL (11B)"));
+        s.set_status(0x4C7E, None);
+        assert_eq!(s.title(0x4C7E).as_deref(), Some("Artist - It's a song"));
         // without it, whole Ogg pages one after another
         let audio: Vec<u8> = [&got[..META_INTERVAL], &got[META_INTERVAL + 1 + len..]].concat();
         let (mut at, mut pages) = (0, 0);
