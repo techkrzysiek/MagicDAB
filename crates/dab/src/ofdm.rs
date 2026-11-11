@@ -40,11 +40,71 @@ pub struct Frame {
     /// Smoothed power delay profile (T_U taps from the start of the FFT
     /// window), the window advance and the noise power of one tap, if requested.
     pub impulse: Option<(Vec<f32>, usize, f32)>,
+    /// The MSC symbols demodulated (MscSymbols): the others are zeros.
+    pub msc_mask: [u64; 2],
 }
 
 /// Symbols of the frame whose points make the constellation (MSC symbols);
 /// every fourth carrier of them.
 const CONSTELLATION_SYMBOLS: [usize; 3] = [5, 30, 60];
+
+/// Which of the 72 MSC symbols of a frame are demodulated (Demodulator::msc_symbols).
+pub struct MscSymbols([std::sync::atomic::AtomicU64; 2]);
+
+impl MscSymbols {
+    pub fn all() -> Self {
+        MscSymbols([std::sync::atomic::AtomicU64::new(u64::MAX), std::sync::atomic::AtomicU64::new(u64::MAX)])
+    }
+
+    /// The symbols that carry the CUs of these sub-channels ((start, size) in
+    /// CUs) in each of the four CIFs; `all`: every symbol (an ETI recording).
+    pub fn set(&self, subchannels: impl Iterator<Item = (usize, usize)>, all: bool) {
+        let mut m = [0u64; 2];
+        if all {
+            m = [u64::MAX; 2];
+        } else {
+            const PER_CIF: usize = MSC_SYMBOLS / CIFS_PER_FRAME;
+            const CUS_PER_SYMBOL: usize = BITS_PER_SYMBOL / CU_BITS;
+            for (start, size) in subchannels.filter(|&(_, n)| n > 0) {
+                let (first, last) = (start / CUS_PER_SYMBOL, ((start + size - 1) / CUS_PER_SYMBOL).min(PER_CIF - 1));
+                for c in 0..CIFS_PER_FRAME {
+                    for s in first..=last {
+                        let i = c * PER_CIF + s;
+                        m[i / 64] |= 1 << (i % 64);
+                    }
+                }
+            }
+        }
+        self.0[0].store(m[0], Ordering::Relaxed);
+        self.0[1].store(m[1], Ordering::Relaxed);
+    }
+
+    /// All the symbols of a sub-channel were demodulated in a frame of this
+    /// mask (a decoder started after it was made waits for the next frame).
+    pub fn covers(mask: &[u64; 2], start: usize, size: usize) -> bool {
+        const PER_CIF: usize = MSC_SYMBOLS / CIFS_PER_FRAME;
+        const CUS_PER_SYMBOL: usize = BITS_PER_SYMBOL / CU_BITS;
+        if size == 0 {
+            return true;
+        }
+        let (first, last) = (start / CUS_PER_SYMBOL, ((start + size - 1) / CUS_PER_SYMBOL).min(PER_CIF - 1));
+        (0..CIFS_PER_FRAME).all(|c| {
+            (first..=last).all(|s| {
+                let i = c * PER_CIF + s;
+                (mask[i / 64] >> (i % 64)) & 1 == 1
+            })
+        })
+    }
+
+    /// Every symbol.
+    pub fn is_all(mask: &[u64; 2]) -> bool {
+        mask[0] == u64::MAX && mask[1] & ((1 << (MSC_SYMBOLS - 64)) - 1) == (1 << (MSC_SYMBOLS - 64)) - 1
+    }
+
+    fn load(&self) -> [u64; 2] {
+        [self.0[0].load(Ordering::Relaxed), self.0[1].load(Ordering::Relaxed)]
+    }
+}
 
 /// Events of the demodulator.
 pub trait FrameSink {
@@ -161,10 +221,13 @@ impl SampleBuffer {
 }
 
 /// Where the demodulator's time goes (MAGICDAB_PROFILE=1: a log line every
-/// 10 s, in % of one processor), to find what is too slow on small computers.
+/// 10 s, MAGICDAB_PROFILE=N: every N s; in % of one processor), to find what
+/// is too slow on small computers.
 #[derive(Default)]
 struct Profile {
     on: bool,
+    /// Seconds between the log lines.
+    every: u64,
     fft: Duration,
     setup: Duration,
     chest: Duration,
@@ -182,7 +245,7 @@ impl Profile {
     fn report(&mut self, mix: &mut Duration) {
         let since = *self.since.get_or_insert_with(Instant::now);
         let wall = since.elapsed();
-        if wall < Duration::from_secs(10) {
+        if wall < Duration::from_secs(self.every) {
             return;
         }
         let pc = |d: Duration| 100.0 * d.as_secs_f64() / wall.as_secs_f64();
@@ -201,7 +264,7 @@ impl Profile {
             self.frames
         );
         *mix = Duration::ZERO;
-        *self = Profile { on: true, since: Some(Instant::now()), ..Default::default() };
+        *self = Profile { on: true, every: self.every, since: Some(Instant::now()), ..Default::default() };
     }
 }
 
@@ -256,6 +319,10 @@ pub struct OfdmDemodulator {
     pub coherent_symbols: u64,
     pub differential_symbols: u64,
     pub spectrum_requested: Arc<AtomicBool>,
+    /// The MSC symbols (bit i: symbol i of the 72) whose bits someone uses
+    /// (the receiver's sub-channel decoders, receiver.rs): the others are
+    /// not demodulated, their bits stay erased (zeros). All by default.
+    pub msc_symbols: Arc<MscSymbols>,
     symbols: Vec<Vec<Complex32>>,
     frame: Frame,
     /// Short time spectra for the power envelope inside the channel (acquisition).
@@ -291,7 +358,10 @@ impl OfdmDemodulator {
         deinterleave.sort_by_key(|&(_, bin)| bin);
         let active = carriers().map(carrier_bin).collect();
         OfdmDemodulator {
-            prof: Profile { on: std::env::var("MAGICDAB_PROFILE").is_ok_and(|v| v == "1"), ..Default::default() },
+            prof: {
+                let n: u64 = std::env::var("MAGICDAB_PROFILE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+                Profile { on: n > 0, every: if n > 1 { n } else { 10 }, ..Default::default() }
+            },
             fft,
             ifft,
             scratch: vec![Complex32::new(0.0, 0.0); scratch_len],
@@ -329,11 +399,13 @@ impl OfdmDemodulator {
             coherent_symbols: 0,
             differential_symbols: 0,
             spectrum_requested: Arc::new(AtomicBool::new(false)),
+            msc_symbols: Arc::new(MscSymbols::all()),
             symbols: vec![vec![Complex32::new(0.0, 0.0); T_U]; 2],
             frame: Frame {
                 fic: vec![0; FIC_BITS],
                 msc: vec![0; MSC_SYMBOLS * BITS_PER_SYMBOL],
                 null_fft: vec![Complex32::new(0.0, 0.0); T_U],
+                msc_mask: [u64::MAX; 2],
                 snr_db: 0.0,
                 freq_offset_hz: 0.0,
                 spectrum: None,
@@ -570,39 +642,7 @@ impl OfdmDemodulator {
     /// equally good positions the smallest shift wins, so a single path keeps
     /// the window advance.
     fn best_window_shift(&self, noise: f32) -> Option<i32> {
-        let floor = K as f32 * noise;
-        let paths: Vec<(i32, f32)> = self
-            .pdp
-            .iter()
-            .enumerate()
-            .filter(|(_, &p)| p > 3.0 * floor)
-            .map(|(i, &p)| (if i >= T_U / 2 { i as i32 - T_U as i32 } else { i as i32 }, p - floor))
-            .collect();
-        if paths.is_empty() {
-            return None;
-        }
-        let cost = |s: i32| -> f32 {
-            paths
-                .iter()
-                .map(|&(a, p)| {
-                    let a = a - s;
-                    let over = if a < 0 {
-                        -a
-                    } else if a > T_G as i32 {
-                        a - T_G as i32
-                    } else {
-                        0
-                    };
-                    p * over as f32
-                })
-                .sum()
-        };
-        let total: f32 = paths.iter().map(|p| p.1).sum();
-        let costs: Vec<(i32, f32)> = (-(T_G as i32)..=(T_G as i32)).map(|s| (s, cost(s))).collect();
-        let min = costs.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
-        // smallest shift within a tolerance (all power overlapping by one sample,
-        // about -33 dB of interference) of the best position
-        costs.iter().filter(|c| c.1 <= min + total).min_by_key(|c| c.0.abs()).map(|c| c.0)
+        best_window_shift(&self.pdp, noise)
     }
 
     /// Strongest tap of `self.cir` relative to the median tap power.
@@ -784,12 +824,61 @@ impl OfdmDemodulator {
         };
         let mut sig_power = 0f64;
         let mut constellation: Option<Vec<Complex32>> = None;
+        // The symbols demodulated: the FIC and the MSC symbols whose bits are
+        // used (the station heard, data services; all of them for an ETI
+        // recording or the spectrum view). A phone saves most of the work of
+        // this loop: one station of 192 kbit/s lies in 4 of the 18 symbols of a CIF.
+        let msc_mask = if want_spectrum || all_symbols() { [u64::MAX; 2] } else { self.msc_symbols.load() };
+        let wanted = |l: usize| {
+            l <= FIC_SYMBOLS || {
+                let i = l - 1 - FIC_SYMBOLS;
+                (msc_mask[i / 64] >> (i % 64)) & 1 == 1
+            }
+        };
+        self.frame.msc_mask = msc_mask;
+        let mut detected = 0usize;
         for l in 1..L {
+            let full = wanted(l);
+            // the symbol before a wanted one is its phase reference: transformed
+            // and (coherent detection) compensated, its bits not detected
+            let reference = !full && l + 1 < L && wanted(l + 1);
+            if !full {
+                let o = (l - 1 - FIC_SYMBOLS) * BITS_PER_SYMBOL;
+                self.frame.msc[o..o + BITS_PER_SYMBOL].fill(0);
+                if !reference {
+                    continue;
+                }
+            }
             let cur = l & 1;
             let prev = cur ^ 1;
             self.fft_window(at(T_NULL + l * T_S + T_G - adv), cur);
             let (a, b) = self.symbols.split_at(1);
             let (ycur, yprev) = if cur == 1 { (&b[0], &a[0]) } else { (&a[0], &b[0]) };
+            if reference {
+                if coherent {
+                    let mut cc4 = Complex32::new(0.0, 0.0);
+                    for &bin in &self.active {
+                        let c = ycur[bin] * self.hest[bin].conj();
+                        self.ccur[bin] = c;
+                        let a = c.norm();
+                        if a > 0.0 {
+                            let c2 = c * c;
+                            cc4 += c2 * c2 / (a * a * a);
+                        }
+                    }
+                    let mut phi = (if l & 1 == 1 { -cc4 } else { cc4 }).arg() / 4.0;
+                    let q = std::f32::consts::FRAC_PI_2;
+                    phi += ((theta - phi) / q).round() * q;
+                    theta = phi;
+                    let rot = Complex32::from_polar(1.0, -theta);
+                    for &bin in &self.active {
+                        self.ccur[bin] *= rot;
+                    }
+                    std::mem::swap(&mut self.cprev, &mut self.ccur);
+                }
+                continue;
+            }
+            detected += 1;
             if let Some(sp) = spectrum.as_mut() {
                 for (i, s) in ycur.iter().enumerate() {
                     sp[i] += s.norm_sqr();
@@ -989,7 +1078,7 @@ impl OfdmDemodulator {
         // power with the total null symbol power (TII carriers included).
         let null_mean: f32 = self.active.iter().map(|&b| self.frame.null_fft[b].norm_sqr()).sum::<f32>() / K as f32;
         let noise_pw = if self.snr_mode == 1 { noise_pw } else { null_mean };
-        let carrier_pw = (sig_power / ((L - 1) * K) as f64) as f32;
+        let carrier_pw = (sig_power / (detected.max(1) * K) as f64) as f32;
         // a perfectly clean signal (e.g. a software modulator) has no noise in the null symbol
         let snr = if carrier_pw <= 0.0 {
             0.0
@@ -1102,6 +1191,13 @@ fn chest_th() -> f32 {
     *V.get_or_init(|| std::env::var("MAGICDAB_CHESTTH").ok().and_then(|v| v.parse().ok()).unwrap_or(3.0))
 }
 
+/// MAGICDAB_ALL_SYMBOLS=1: every MSC symbol demodulated (comparisons).
+fn all_symbols() -> bool {
+    use std::sync::OnceLock;
+    static V: OnceLock<bool> = OnceLock::new();
+    *V.get_or_init(|| std::env::var("MAGICDAB_ALL_SYMBOLS").is_ok_and(|v| v == "1"))
+}
+
 fn hmode() -> u8 {
     use std::sync::OnceLock;
     static V: OnceLock<u8> = OnceLock::new();
@@ -1138,5 +1234,129 @@ fn proj(c: Complex32, m: usize) -> f32 {
         5 => -(c.re + c.im) * R,
         6 => -c.im,
         _ => (c.re - c.im) * R,
+    }
+}
+
+/// The window shift with the least intersymbol interference for a power
+/// delay profile (`pdp`, T_U taps from the start of the FFT window, the second
+/// half meaning negative delays) and the noise power of a tap: the cost of a
+/// shift `s` is the power of the paths outside the guard interval after it,
+/// times how far outside. Paths are the taps above 3x the noise floor.
+///
+/// The cost is piecewise linear in `s`, so it comes from prefix sums over the
+/// delays (linear time; the sum over the paths for every shift took 15 % of a
+/// Raspberry Pi 3's processor at a good signal, hundreds of paths).
+fn best_window_shift(pdp: &[f32], noise: f32) -> Option<i32> {
+    let floor = K as f32 * noise;
+    let n = pdp.len() as i32;
+    let half = n / 2;
+    // power and power x delay by delay, delays -half..half
+    let mut pw = vec![0f64; n as usize];
+    let mut any = false;
+    for (i, &p) in pdp.iter().enumerate() {
+        if p > 3.0 * floor {
+            let a = if i as i32 >= half { i as i32 - n } else { i as i32 };
+            pw[(a + half) as usize] += (p - floor) as f64;
+            any = true;
+        }
+    }
+    if !any {
+        return None;
+    }
+    // prefix sums: P[k] = sum of power of delays < k - half, A[k] the same of power x delay
+    let mut pp = vec![0f64; n as usize + 1];
+    let mut pa = vec![0f64; n as usize + 1];
+    for k in 0..n as usize {
+        let a = k as i32 - half;
+        pp[k + 1] = pp[k] + pw[k];
+        pa[k + 1] = pa[k] + pw[k] * a as f64;
+    }
+    let total = pp[n as usize];
+    let total_a = pa[n as usize];
+    // (index of the first delay >= d, clamped)
+    let idx = |d: i32| (d + half).clamp(0, n) as usize;
+    let g = T_G as i32;
+    let cost = |s: i32| -> f64 {
+        // paths before the window: delay a < s, (s - a) each
+        let k = idx(s);
+        let before = s as f64 * pp[k] - pa[k];
+        // paths after the guard: delay a > s + T_G, (a - s - T_G) each
+        let k = idx(s + g + 1);
+        let after = (total_a - pa[k]) - (s + g) as f64 * (total - pp[k]);
+        before + after
+    };
+    let costs: Vec<(i32, f64)> = (-g..=g).map(|s| (s, cost(s))).collect();
+    let min = costs.iter().map(|c| c.1).fold(f64::INFINITY, f64::min);
+    // smallest shift within a tolerance (all power overlapping by one sample,
+    // about -33 dB of interference) of the best position
+    costs.iter().filter(|c| c.1 <= min + total).min_by_key(|c| c.0.abs()).map(|c| c.0)
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    // the version of before (a sum over the paths for every shift), as it was
+    fn old_shift(pdp: &[f32], noise: f32) -> Option<i32> {
+        let floor = K as f32 * noise;
+        let paths: Vec<(i32, f32)> = pdp
+            .iter()
+            .enumerate()
+            .filter(|(_, &p)| p > 3.0 * floor)
+            .map(|(i, &p)| (if i >= T_U / 2 { i as i32 - T_U as i32 } else { i as i32 }, p - floor))
+            .collect();
+        if paths.is_empty() {
+            return None;
+        }
+        let cost = |s: i32| -> f32 {
+            paths
+                .iter()
+                .map(|&(a, p)| {
+                    let a = a - s;
+                    let over = if a < 0 {
+                        -a
+                    } else if a > T_G as i32 {
+                        a - T_G as i32
+                    } else {
+                        0
+                    };
+                    p * over as f32
+                })
+                .sum()
+        };
+        let total: f32 = paths.iter().map(|p| p.1).sum();
+        let costs: Vec<(i32, f32)> = (-(T_G as i32)..=(T_G as i32)).map(|s| (s, cost(s))).collect();
+        let min = costs.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
+        // smallest shift within a tolerance (all power overlapping by one sample,
+        // about -33 dB of interference) of the best position
+        costs.iter().filter(|c| c.1 <= min + total).min_by_key(|c| c.0.abs()).map(|c| c.0)
+    }
+
+    #[test]
+    fn the_window_shift_is_the_one_of_before() {
+        // pseudo-random profiles: a few strong paths (pre-echoes, echoes beyond
+        // the guard interval), a noise floor
+        let mut x = 12345u32;
+        let mut rnd = || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x as f32 / u32::MAX as f32
+        };
+        for case in 0..300 {
+            let noise = 0.01 + rnd() * 0.05;
+            let floor = K as f32 * noise;
+            let mut pdp: Vec<f32> = (0..T_U).map(|_| floor * (0.2 + rnd())).collect();
+            let paths = 1 + (rnd() * 40.0) as usize;
+            for _ in 0..paths {
+                let d = (rnd() * T_U as f32) as usize % T_U;
+                pdp[d] += floor * (2.0 + rnd() * 3000.0);
+            }
+            if case % 7 == 0 {
+                // an empty profile now and then
+                pdp.iter_mut().for_each(|p| *p = floor);
+            }
+            assert_eq!(best_window_shift(&pdp, noise), old_shift(&pdp, noise), "case {case}");
+        }
     }
 }

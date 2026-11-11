@@ -1,7 +1,14 @@
 //! Decode a raw IQ recording (.uff or plain u8 / s16 .raw) and
 //! print what the receiver sees. Used for development and comparison runs.
 //!
-//! usage: uffplay <file> [seconds] [--sid 0xXXXX] [--wav out.wav] [--all]
+//! usage: uffplay <file> [seconds] [--sid 0xXXXX]... [--wav out.wav] [--all] [--only]
+//!
+//! --sid more than once: those stations from the start (comparisons: --all
+//! starts the stations when the ensemble comes, which a faster receiver
+//! reports later in the recording, its events going by the clock).
+//!
+//! --only: nothing but the station of --sid (no DLS/slides of the others in
+//! the background, no data services), as the server decodes for one listener.
 
 use magicdab_dab::receiver::{ReceiverHandle, RxCommand, RxEvent, ServiceKey};
 use magicdab_dab::tables;
@@ -11,6 +18,8 @@ use std::io::{Read, Write};
 use std::time::Instant;
 
 fn main() {
+    // (RUST_LOG=info: the receiver's log, MAGICDAB_PROFILE=1 the demodulator's profile)
+    env_logger::init();
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
         eprintln!("usage: uffplay <file> [seconds] [--sid 0x...] [--wav out.wav] [--all]");
@@ -19,14 +28,17 @@ fn main() {
     let path = &args[1];
     let seconds: f64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1e9);
     let mut sid: Option<u32> = None;
+    let mut sids: Vec<u32> = Vec::new();
     let mut wav: Option<String> = None;
     let mut all = false;
+    let mut only = false;
     let mut window: Option<(f64, f64)> = None;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
             "--sid" => {
                 sid = u32::from_str_radix(args[i + 1].trim_start_matches("0x"), 16).ok();
+                sids.extend(sid);
                 i += 1;
             }
             "--wav" => {
@@ -34,6 +46,7 @@ fn main() {
                 i += 1;
             }
             "--all" => all = true,
+            "--only" => only = true,
             "--window" => {
                 window = Some((args[i + 1].parse().unwrap(), args[i + 2].parse().unwrap()));
                 i += 2;
@@ -64,7 +77,11 @@ fn main() {
 
     let started = Instant::now();
     let rx = ReceiverHandle::start();
-    if let Some(s) = sid {
+    if only {
+        rx.send(RxCommand::BackgroundPad(false));
+        rx.send(RxCommand::DataServices(false));
+    }
+    for &s in &sids {
         rx.send(RxCommand::StartService(ServiceKey { sid: s, scids: 0 }));
     }
     let total_samples = (seconds * 2_048_000.0) as u64;
@@ -105,7 +122,7 @@ fn main() {
 
     let mut ensemble = None;
     let mut labels = BTreeMap::new();
-    let mut started_services = Vec::new();
+    let mut started_services = sids.clone();
     let mut wav_data: Vec<i16> = Vec::new();
     let mut last_signal = None;
     let mut tii_hist: BTreeMap<(u8, u8), (u32, f32)> = BTreeMap::new();
@@ -137,8 +154,12 @@ fn main() {
                 RxEvent::Ensemble(e, _) => {
                     if e.eid.is_some() {
                         for (s_id, s) in &e.services {
-                            let want = all || sid == Some(*s_id);
+                            let want = all || sids.contains(s_id);
                             if want && s.is_audio() && !started_services.contains(s_id) {
+                                if std::env::var("STARTLOG").is_ok() {
+                                    let frames = last_signal.as_ref().map(|s: &magicdab_dab::receiver::SignalInfo| s.frames).unwrap_or(0);
+                                    println!("start {s_id:04X} at frame {frames} ({:.1} s of signal)", frames as f64 * 0.096);
+                                }
                                 started_services.push(*s_id);
                                 rx.send(RxCommand::StartService(ServiceKey { sid: *s_id, scids: 0 }));
                             }
@@ -247,6 +268,21 @@ fn main() {
     let elapsed = started.elapsed().as_secs_f64();
 
     println!("processing time {elapsed:.1}s");
+    {
+        // where the receiver thread's time went (CPU seconds)
+        let t = rx.timing.lock();
+        let ms = |d: std::time::Duration| d.as_secs_f64();
+        let (ch, au) = t.services.values().fold((0.0, 0.0), |(c, a), (x, y)| (c + ms(*x), a + ms(*y)));
+        println!(
+            "receiver CPU {:.2}s: fic {:.2}, sub-channels {ch:.2}, audio {au:.2}, background {:.2}, data {:.2}, tii {:.2}, the rest (OFDM) {:.2}",
+            ms(t.thread),
+            ms(t.fic),
+            ms(t.background),
+            ms(t.data),
+            ms(t.tii),
+            ms(t.thread) - ms(t.fic) - ch - au - ms(t.background) - ms(t.data) - ms(t.tii)
+        );
+    }
     if let Some(s) = &last_signal {
         println!(
             "signal: synced={} snr={:.1} dB freq_offset={:.1} Hz FIBs={} errors={} ({:.2}%)",

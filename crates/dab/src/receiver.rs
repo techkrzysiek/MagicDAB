@@ -14,7 +14,7 @@ use crate::fig::FigParser;
 use crate::mot::MotDecoder;
 use crate::mot::MotObject;
 use crate::msc::SubchannelDecoder;
-use crate::ofdm::{Frame, FrameSink, OfdmDemodulator, SampleSource};
+use crate::ofdm::{Frame, FrameSink, MscSymbols, OfdmDemodulator, SampleSource};
 use crate::packet::PacketDecoder;
 use crate::tii::{TiiCode, TiiDecoder, TiiMode};
 use crossbeam_channel::{Receiver, Sender};
@@ -384,6 +384,8 @@ struct Core {
     wanted: Vec<ServiceKey>,
     spectrum: bool,
     spectrum_flag: Arc<AtomicBool>,
+    /// The MSC symbols the demodulator works out (the ones the decoders below use).
+    msc_symbols: Arc<MscSymbols>,
     last_revision: u64,
     last_ensemble_sent: Instant,
     last_time_minute: Option<(u32, u8, u8)>,
@@ -694,8 +696,13 @@ impl FrameSink for Core {
         spent.fic = started.elapsed();
 
         // MSC
+        // (a decoder made for this frame, demodulated before it was there, starts with the next one)
+        let covered = |d: &SubchannelDecoder| MscSymbols::covers(&frame.msc_mask, d.subch.start as usize, d.subch.size as usize);
         for svc in self.services.iter_mut() {
             let (Some(dec), Some(audio)) = (svc.subch.as_mut(), svc.audio.as_mut()) else { continue };
+            if !covered(dec) {
+                continue;
+            }
             let (mut channel, mut decoding) = (Duration::ZERO, Duration::ZERO);
             for c in 0..CIFS_PER_FRAME {
                 let cif = &frame.msc[c * CIF_BITS..(c + 1) * CIF_BITS];
@@ -738,6 +745,9 @@ impl FrameSink for Core {
         let t = Instant::now();
         for svc in self.background.iter_mut() {
             let (Some(dec), Some(audio)) = (svc.subch.as_mut(), svc.audio.as_mut()) else { continue };
+            if !covered(dec) {
+                continue;
+            }
             for c in 0..CIFS_PER_FRAME {
                 let cif = &frame.msc[c * CIF_BITS..(c + 1) * CIF_BITS];
                 if let Some(data) = dec.push_cif(cif) {
@@ -766,6 +776,9 @@ impl FrameSink for Core {
         let t = Instant::now();
         for pc in self.packet_channels.iter_mut() {
             let Some(dec) = pc.subch.as_mut() else { continue };
+            if !covered(dec) {
+                continue;
+            }
             for c in 0..CIFS_PER_FRAME {
                 let cif = &frame.msc[c * CIF_BITS..(c + 1) * CIF_BITS];
                 if let Some(data) = dec.push_cif(cif) {
@@ -808,10 +821,22 @@ impl FrameSink for Core {
             self.send_data_progress();
         }
 
+        // what the next frame needs demodulated: the sub-channels decoded
+        // here, everything for an ETI recording
+        let geometry = |d: &Option<SubchannelDecoder>| d.as_ref().map(|d| (d.subch.start as usize, d.subch.size as usize));
+        self.msc_symbols.set(
+            self.services
+                .iter()
+                .chain(self.background.iter())
+                .filter_map(|s| geometry(&s.subch))
+                .chain(self.packet_channels.iter().filter_map(|p| geometry(&p.subch))),
+            self.eti_rec.is_some(),
+        );
+
         // the ETI recording: the sub-channels nothing else decodes, then the
         // frames of the CIFs whose data has come out of the deinterleaver
         let t = Instant::now();
-        if let Some(rec) = self.eti_rec.as_mut() {
+        if let Some(rec) = self.eti_rec.as_mut().filter(|_| MscSymbols::is_all(&frame.msc_mask)) {
             rec.fic(&self.fic.raw);
             for c in 0..CIFS_PER_FRAME {
                 rec.decode(c, &frame.msc[c * CIF_BITS..(c + 1) * CIF_BITS]);
@@ -1106,6 +1131,7 @@ impl ReceiverHandle {
                     wanted: Vec::new(),
                     spectrum: false,
                     spectrum_flag: demod.spectrum_requested.clone(),
+                    msc_symbols: demod.msc_symbols.clone(),
                     last_revision: u64::MAX,
                     last_ensemble_sent: Instant::now(),
                     last_time_minute: None,
