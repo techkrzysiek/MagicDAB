@@ -482,6 +482,14 @@ impl Store {
     }
 
     pub fn load(&self) -> Settings {
+        // (a file of an older version, readable by everyone, until it is saved again)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if std::fs::metadata(&self.path).is_ok_and(|m| m.permissions().mode() & 0o077 != 0) {
+                let _ = std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o600));
+            }
+        }
         match std::fs::read_to_string(&self.path) {
             Ok(s) => serde_json::from_str(&s).map(Self::fm_off_once).unwrap_or_else(|e| {
                 // (kept aside: the next save would overwrite the passwords and
@@ -568,6 +576,24 @@ mod tests {
         assert_eq!(default_port(&dir), OLD_DEFAULT_PORT);
         std::fs::write(dir.join("settings.json"), r#"{"listenPort": 9123}"#).unwrap();
         assert_eq!(default_port(&dir), 9123);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_its_user_reads_the_settings() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("magicdab-mode-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(&dir);
+        let mode = || std::fs::metadata(dir.join("settings.json")).unwrap().permissions().mode() & 0o777;
+        // written by an older version: everyone could read it
+        std::fs::write(dir.join("settings.json"), r#"{"stationName": "x"}"#).unwrap();
+        std::fs::set_permissions(dir.join("settings.json"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        store.load();
+        assert_eq!(mode(), 0o600);
+        store.save(&Settings::default());
+        assert_eq!(mode(), 0o600);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
