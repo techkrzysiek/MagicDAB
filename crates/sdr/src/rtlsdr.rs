@@ -32,6 +32,10 @@ struct Api {
     set_bias_tee: Option<unsafe extern "C" fn(Dev, c_int) -> c_int>,
     /// Android: a device the app opened (build/android/rtlsdr-open-fd.patch).
     open_fd: Option<unsafe extern "C" fn(*mut Dev, c_int) -> c_int>,
+    get_usb_strings: Option<unsafe extern "C" fn(Dev, *mut c_char, *mut c_char, *mut c_char) -> c_int>,
+    get_xtal_freq: Option<unsafe extern "C" fn(Dev, *mut u32, *mut u32) -> c_int>,
+    /// The file it was loaded from (for the log).
+    name: String,
 }
 
 unsafe impl Send for Api {}
@@ -93,6 +97,10 @@ fn load_api() -> Result<Api, String> {
                 }
                 let set_bias_tee = lib.get(b"rtlsdr_set_bias_tee\0").ok().map(|s: Symbol<unsafe extern "C" fn(Dev, c_int) -> c_int>| *s);
                 let open_fd = lib.get(b"rtlsdr_open_fd\0").ok().map(|s: Symbol<unsafe extern "C" fn(*mut Dev, c_int) -> c_int>| *s);
+                type Strings = unsafe extern "C" fn(Dev, *mut c_char, *mut c_char, *mut c_char) -> c_int;
+                let get_usb_strings = lib.get(b"rtlsdr_get_usb_strings\0").ok().map(|s: Symbol<Strings>| *s);
+                let get_xtal_freq =
+                    lib.get(b"rtlsdr_get_xtal_freq\0").ok().map(|s: Symbol<unsafe extern "C" fn(Dev, *mut u32, *mut u32) -> c_int>| *s);
                 let api = Api {
                     get_device_count: sym!(b"rtlsdr_get_device_count\0"),
                     get_device_name: sym!(b"rtlsdr_get_device_name\0"),
@@ -111,6 +119,9 @@ fn load_api() -> Result<Api, String> {
                     cancel_async: sym!(b"rtlsdr_cancel_async\0"),
                     set_bias_tee,
                     open_fd,
+                    get_usb_strings,
+                    get_xtal_freq,
+                    name: name.to_string_lossy().into_owned(),
                     _lib: lib,
                 };
                 return Ok(api);
@@ -153,6 +164,29 @@ pub fn list_devices() -> Vec<String> {
             )
         })
         .collect()
+}
+
+/// An RTL-SDR Blog V4 the library does not know (librtlsdr before 2.0.1): it
+/// takes the stick for a plain R828D with a 16 MHz crystal (the V4 has 28.8
+/// MHz), so it tunes 1.8 times too high on the wrong input and hears nothing.
+fn v4_unknown_to_library(manufacturer: &str, product: &str, tuner_xtal: u32) -> bool {
+    manufacturer == "RTLSDRBlog" && product == "Blog V4" && tuner_xtal < 20_000_000
+}
+
+/// The tuner crystal of an RTL-SDR Blog V4 the library does not know.
+fn v4_wrong_crystal(api: &Api, dev: Dev) -> Option<u32> {
+    let (strings, xtal) = (api.get_usb_strings?, api.get_xtal_freq?);
+    let mut m = [0 as c_char; 256];
+    let mut p = [0 as c_char; 256];
+    let mut s = [0 as c_char; 256];
+    let (mut rtl, mut tuner) = (0u32, 0u32);
+    unsafe {
+        if strings(dev, m.as_mut_ptr(), p.as_mut_ptr(), s.as_mut_ptr()) != 0 || xtal(dev, &mut rtl, &mut tuner) != 0 {
+            return None;
+        }
+        let (m, p) = (CStr::from_ptr(m.as_ptr()).to_string_lossy(), CStr::from_ptr(p.as_ptr()).to_string_lossy());
+        v4_unknown_to_library(m.trim(), p.trim(), tuner).then_some(tuner)
+    }
 }
 
 struct DevPtr(Dev);
@@ -210,6 +244,8 @@ pub struct RtlSdr {
     frequency: u32,
     mode: GainMode,
     error: Option<String>,
+    /// The stick will hear nothing (DeviceStatus::warning).
+    warning: Option<String>,
     name: String,
     /// Android: the device opened by the app (open while librtlsdr uses it).
     usb_fd: Option<crate::android_usb::UsbFd>,
@@ -228,6 +264,7 @@ impl RtlSdr {
             frequency: 0,
             mode: GainMode::Software,
             error: None,
+            warning: None,
             name: String::new(),
             usb_fd: None,
         }
@@ -338,6 +375,7 @@ impl InputDevice for RtlSdr {
             // no calibrated RF level estimate for this driver
             rf_level: None,
             error: self.error.clone(),
+            warning: self.warning.clone(),
             position: None,
             duration: None,
             ..Default::default()
@@ -346,6 +384,7 @@ impl InputDevice for RtlSdr {
 
     fn start(&mut self, frequency: u32, callback: SampleCallback) -> Result<(), String> {
         self.stop();
+        self.warning = None;
         let api = api().inspect_err(|e| {
             self.error = Some(e.clone());
         })?;
@@ -379,6 +418,15 @@ impl InputDevice for RtlSdr {
             return Err(e);
         }
         self.name = list_devices().get(self.index as usize).cloned().unwrap_or_else(|| "RTL-SDR".into());
+        self.warning = v4_wrong_crystal(api, dev).map(|xtal| {
+            log::warn!(
+                "RTL-SDR Blog V4 with a librtlsdr that does not know it ({}: tuner crystal {} MHz instead of 28.8): it tunes 1.8 times too high \
+                 and hears nothing; it needs librtlsdr 2.0.1 or newer, put next to the program or from the MagicDAB packages",
+                api.name,
+                xtal as f64 / 1e6
+            );
+            "v4_library".to_string()
+        });
         let gains = unsafe {
             let n = (api.get_tuner_gains)(dev, std::ptr::null_mut());
             let mut v = vec![0 as c_int; n.max(0) as usize];
@@ -502,5 +550,21 @@ impl InputDevice for RtlSdr {
 impl Drop for RtlSdr {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::v4_unknown_to_library;
+
+    #[test]
+    fn a_v4_tuned_with_a_16_mhz_crystal_is_reported() {
+        assert!(v4_unknown_to_library("RTLSDRBlog", "Blog V4", 16_000_000));
+        // (with the frequency correction applied)
+        assert!(v4_unknown_to_library("RTLSDRBlog", "Blog V4", 16_000_480));
+        assert!(!v4_unknown_to_library("RTLSDRBlog", "Blog V4", 28_800_000));
+        // other R828D sticks have 16 MHz, the V4 Lite is another product
+        assert!(!v4_unknown_to_library("Realtek", "RTL2838UHIDIR", 16_000_000));
+        assert!(!v4_unknown_to_library("RTLSDRBlog", "Blog V4L", 16_000_000));
     }
 }

@@ -95,6 +95,7 @@ impl InputDevice for RawFile {
             stalls: 0,
             last_stall_ms: None,
             stream_rate: None,
+            warning: None,
         }
     }
 

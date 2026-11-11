@@ -60,6 +60,9 @@ pub struct DeviceStatus {
     pub last_stall_ms: Option<u32>,
     /// Network inputs: sample rate actually received over the last seconds (kS/s).
     pub stream_rate: Option<f32>,
+    /// The device works but will hear nothing, as a kind for the interface
+    /// ("v4_library": an RTL-SDR Blog V4 with a librtlsdr that does not know it).
+    pub warning: Option<String>,
 }
 
 pub trait InputDevice: Send {

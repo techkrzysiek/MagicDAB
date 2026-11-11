@@ -86,6 +86,8 @@ export interface DeviceStatus {
   stalls?: number
   lastStallMs?: number | null
   streamRate?: number | null
+  /** the device works but will hear nothing (magicdab-sdr DeviceStatus::warning) */
+  warning?: 'v4_library' | null
 }
 
 export interface ScanState {

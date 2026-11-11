@@ -165,6 +165,7 @@ impl InputDevice for RtlTcp {
             stalls: self.shared.as_ref().map(|sh| sh.stalls.load(Ordering::Relaxed)).unwrap_or(0),
             last_stall_ms: self.shared.as_ref().map(|sh| sh.last_stall_ms.load(Ordering::Relaxed)).filter(|&v| v > 0),
             stream_rate: self.shared.as_ref().map(|sh| sh.rate.load(Ordering::Relaxed) as f32 / 1000.0).filter(|&v| v > 0.0),
+            warning: None,
         }
     }
 

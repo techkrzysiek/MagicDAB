@@ -224,12 +224,15 @@ function NavRail() {
   )
 }
 
-/** The tuner does not work (another program has it, not plugged in, no driver): why, not only "no signal". */
+/** The tuner does not work (another program has it, not plugged in, no driver)
+ *  or will hear nothing (an RTL-SDR Blog V4 with an old library): why, not only "no signal". */
 function DeviceBanner() {
   const t = useT()
   const p = useStore((s) => s.state?.deviceProblem)
-  if (!p) return null
-  return <div className="banner">{t(`dev_problem_${p}`)}</div>
+  const w = useStore((s) => s.state?.device?.warning)
+  if (p) return <div className="banner">{t(`dev_problem_${p}`)}</div>
+  if (w) return <div className="banner">{t(`dev_warning_${w}`)}</div>
+  return null
 }
 
 /** The computer is too slow for the receiver: gaps in the sound, a signal that looks worse than it is. */
