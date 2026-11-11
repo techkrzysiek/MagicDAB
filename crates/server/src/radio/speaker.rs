@@ -35,10 +35,17 @@ impl Radio {
         }
     }
 
-    /// The page asks for its sound from the program (or for Opus or PCM when
-    /// the program cannot play here).
-    pub(super) fn speaker_allowed(&self, client: u64) -> bool {
+    /// The program can play for this page (it says so in its hello, before
+    /// a login).
+    pub(super) fn speaker_possible(&self, client: u64) -> bool {
         self.hub.is_local(client) && speaker::available()
+    }
+
+    /// The page asks for its sound from the program (or for Opus or PCM when
+    /// the program cannot play here). On a phone other apps reach 127.0.0.1
+    /// too: there only the app's own page (logged in with its token first).
+    pub(super) fn speaker_allowed(&self, client: u64) -> bool {
+        self.speaker_possible(client) && (!cfg!(target_os = "android") || self.hub.is_admin(client))
     }
 
     /// `{type: "speaker", gain, target}` from a page on this computer: the

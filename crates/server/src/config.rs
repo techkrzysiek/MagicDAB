@@ -516,7 +516,13 @@ impl Store {
             Ok(txt) => {
                 // on the disk before it replaces the old file: a power cut must
                 // not leave an empty settings file (Windows does not see to that)
-                let written = std::fs::File::create(&tmp).and_then(|mut f| {
+                // (only its user reads it: the passwords' hashes, the tunnel's token)
+                let _ = std::fs::remove_file(&tmp);
+                let mut open = std::fs::OpenOptions::new();
+                open.write(true).create_new(true);
+                #[cfg(unix)]
+                std::os::unix::fs::OpenOptionsExt::mode(&mut open, 0o600);
+                let written = open.open(&tmp).and_then(|mut f| {
                     use std::io::Write;
                     f.write_all(txt.as_bytes())?;
                     f.sync_all()

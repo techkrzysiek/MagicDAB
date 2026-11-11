@@ -12,6 +12,18 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 
 const FRP_VERSION: &str = "0.61.1";
+/// SHA-256 of the archives of that release (frp_sha256_checksums.txt): a
+/// program downloaded and run must be the one checked here.
+const FRP_SHA256: &[(&str, &str)] = &[
+    ("darwin_amd64", "403a0ee5e92f083a863d984b7af1e9d70ba2aaa28e87f42f1fe085adf76b8491"),
+    ("darwin_arm64", "3e65f13a17a284bd6013e6bb6856bc2720074cea6094cc446c1f4c3932154c2d"),
+    ("freebsd_amd64", "cb5edf41be38bd47bd7f68210c34500f5dac74423d8084ed8d7e0f3bce050cf5"),
+    ("linux_amd64", "bff260b68ca7b1461182a46c4f34e9709ba32764eed30a15dd94ac97f50a2c40"),
+    ("linux_arm", "8c7ebb07916e69d959d2a90f80900850c41b6dc1decdb87ccba4bc2f3574f855"),
+    ("linux_arm64", "af6366f2b43920ebfe6235dba6060770399ed1fb18601e5818552bd46a7621f8"),
+    ("windows_amd64", "e0094cd0baf03d5ff9ce9739199406871ad8788cf51e766f00ad3a9e7a836f3a"),
+    ("windows_arm64", "099914b6f66b1d983a9402e3a9a116bccc683c877f6dbfbbb5c0f171b584675f"),
+];
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
@@ -270,7 +282,11 @@ fn download_frpc(data_dir: &Path) -> Result<PathBuf, String> {
         a => return Err(format!("unsupported architecture {a}")),
     };
     let ext = if os == "windows" { "zip" } else { "tar.gz" };
-    let url = format!("https://github.com/fatedier/frp/releases/download/v{FRP_VERSION}/frp_{FRP_VERSION}_{os}_{arch}.{ext}");
+    let platform = format!("{os}_{arch}");
+    let Some(&(_, sha256)) = FRP_SHA256.iter().find(|(p, _)| *p == platform) else {
+        return Err(format!("no frpc for {platform}"));
+    };
+    let url = format!("https://github.com/fatedier/frp/releases/download/v{FRP_VERSION}/frp_{FRP_VERSION}_{platform}.{ext}");
     log::info!("tunnel: downloading {url}");
     // (no request may hang forever: a server that accepts but never answers)
     let mut resp = ureq::get(&url)
@@ -281,6 +297,13 @@ fn download_frpc(data_dir: &Path) -> Result<PathBuf, String> {
         .call()
         .map_err(|e| e.to_string())?;
     let data = resp.body_mut().with_config().limit(64 << 20).read_to_vec().map_err(|e| e.to_string())?;
+    let got: String = {
+        use sha2::Digest;
+        sha2::Sha256::digest(&data).iter().map(|b| format!("{b:02x}")).collect()
+    };
+    if got != sha256 {
+        return Err(format!("{url}: wrong checksum {got}"));
+    }
     let bin = if ext == "zip" { extract_zip(&data, exe_name()) } else { extract_tar_gz(&data, exe_name()) }
         .ok_or("frpc not found in the archive")?;
     let dir = data_dir.join("bin");

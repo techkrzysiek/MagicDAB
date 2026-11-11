@@ -91,7 +91,11 @@ impl Radio {
             self.settings.notify_mute = m;
         }
         if let Some(v) = s.get("sourceUrl").and_then(|v| v.as_str()) {
-            self.settings.source_url = v.trim().to_string();
+            // (a link for every listener: a web address only, never javascript:)
+            let v = v.trim();
+            if v.is_empty() || v.starts_with("https://") || v.starts_with("http://") {
+                self.settings.source_url = v.to_string();
+            }
         }
         if let Some(v) = s.get("backgroundImage").and_then(|v| v.as_str()) {
             match config::background_url(v) {
@@ -189,9 +193,11 @@ impl Radio {
         }
         if let Some(v) = s.get("tunnel") {
             if let Ok(mut t) = serde_json::from_value::<crate::tunnel::TunnelConfig>(v.clone()) {
-                // (the interface never has the token: an empty one keeps it)
-                if t.token.is_empty() {
-                    t.token = self.settings.tunnel.token.clone();
+                // (the interface never has the token: an empty one keeps it, for
+                // the same server and user only, never sent to another one)
+                let old = &self.settings.tunnel;
+                if t.token.is_empty() && t.host == old.host && t.port == old.port && t.username == old.username {
+                    t.token = old.token.clone();
                 }
                 self.settings.tunnel = t;
                 let port = self.listen_port;

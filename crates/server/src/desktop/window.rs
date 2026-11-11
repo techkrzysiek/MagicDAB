@@ -160,7 +160,13 @@ fn make_webview(
     let (p_ipc, p_title) = (proxy.clone(), proxy.clone());
     WebViewBuilder::new_with_web_context(context)
         .with_url(format!("http://127.0.0.1:{port}/"))
-        .with_initialization_script(format!("window.__MAGICDAB_DESKTOP__ = {{ token: '{}', serverMode: {server_mode} }};", super::token()))
+        // (the admin's token for this program's page only, not for a page of
+        // another site the window might come to)
+        .with_initialization_script(format!(
+            "if (location.origin === '{}') window.__MAGICDAB_DESKTOP__ = {{ token: '{}', serverMode: {server_mode} }};",
+            if port == 80 { "http://127.0.0.1".to_string() } else { format!("http://127.0.0.1:{port}") },
+            super::token()
+        ))
         .with_ipc_handler(move |req| {
             let _ = p_ipc.send_event(UserEvent::Ipc(req.body().clone()));
         })

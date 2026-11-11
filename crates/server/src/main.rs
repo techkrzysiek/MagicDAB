@@ -355,7 +355,7 @@ async fn main() {
     let port = listener.local_addr().map_or(listen_port, |a| a.port());
     // a second start finds this one with the token in the data folder, and
     // (Windows application) from any folder in the user's (show_other)
-    let _ = std::fs::write(desktop::instance_file(&data_dir), desktop::token());
+    write_private(&desktop::instance_file(&data_dir), desktop::token().as_bytes());
     #[cfg(all(windows, feature = "desktop"))]
     if let Some(f) = running_file() {
         let _ = std::fs::create_dir_all(f.parent().unwrap_or(&data_dir));
@@ -586,6 +586,19 @@ async fn terminate() {
     std::future::pending::<()>().await
 }
 
+/// A file only its user may read (a token that logs in as admin).
+fn write_private(path: &std::path::Path, data: &[u8]) {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path).and_then(|mut f| f.write_all(data));
+    }
+    #[cfg(not(unix))]
+    let _ = std::fs::write(path, data);
+}
+
 /// Public origin of a request (behind tunnels / reverse proxies: forwarded headers).
 fn origin(headers: &axum::http::HeaderMap) -> String {
     let get = |k: &str| headers.get(k).and_then(|v| v.to_str().ok()).map(|v| v.split(',').next().unwrap_or("").trim().to_string());
@@ -794,9 +807,14 @@ async fn stream_handler(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: axum::http::HeaderMap,
     axum::extract::Path(name): axum::extract::Path<String>,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Response {
     use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
     use axum::http::{HeaderValue, StatusCode};
+    // a private server: for those let in only (`?token=` of their login, as the chat)
+    if state.public.read().private && !query.get("token").is_some_and(|t| state.hub.is_token_in(t)) {
+        return (StatusCode::FORBIDDEN, "This receiver is private.\n").into_response();
+    }
     let hex = name.trim_end_matches(".opus").trim_end_matches(".ogg");
     let Ok(sid) = u32::from_str_radix(hex, 16) else { return StatusCode::NOT_FOUND.into_response() };
     let sub = match state.streams.subscribe(sid) {
@@ -980,6 +998,11 @@ fn loopback_host(host: &str) -> bool {
     name.eq_ignore_ascii_case("localhost") || name.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
+/// An Origin header (`http://127.0.0.1:3222`) naming the host of the request.
+fn same_origin_host(origin: &str, host: &str) -> bool {
+    origin.split_once("://").is_some_and(|(scheme, rest)| matches!(scheme, "http" | "https") && rest.eq_ignore_ascii_case(host))
+}
+
 async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
@@ -992,7 +1015,10 @@ async fn ws_handler(
     let local = host.split(':').next().map(|h| h == "localhost" || h.parse::<std::net::IpAddr>().is_ok()).unwrap_or(true);
     // on this computer: a loopback connection that no proxy or tunnel forwarded
     let forwarded = ["x-forwarded-for", "x-real-ip", "forwarded", "x-forwarded-host"].iter().any(|k| headers.contains_key(*k));
-    let same_computer = addr.ip().to_canonical().is_loopback() && !forwarded && loopback_host(&host);
+    // (a page of another site in a browser here may open a WebSocket to
+    // 127.0.0.1 too: its Origin names that site)
+    let origin_here = get("origin").is_none_or(|o| same_origin_host(&o, &host));
+    let same_computer = addr.ip().to_canonical().is_loopback() && !forwarded && loopback_host(&host) && origin_here;
     let meta = hub::ClientMeta {
         ip,
         agent: ws::short_agent(&get("user-agent").unwrap_or_default()),
@@ -1001,4 +1027,21 @@ async fn ws_handler(
     };
     // listeners send small messages (the transmitter list comes in parts)
     ws.max_message_size(1 << 20).max_frame_size(1 << 20).on_upgrade(move |socket| ws::handle(socket, state.hub, state.radio, meta))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_page_of_this_computer_is_local() {
+        assert!(loopback_host("127.0.0.1:3222") && loopback_host("localhost") && loopback_host("[::1]:3222"));
+        assert!(!loopback_host("evil.example:3222"));
+        assert!(same_origin_host("http://127.0.0.1:3222", "127.0.0.1:3222"));
+        assert!(same_origin_host("http://LOCALHOST:3222", "localhost:3222"));
+        // another site in a browser here, a page from a file, another port
+        assert!(!same_origin_host("https://evil.example", "127.0.0.1:3222"));
+        assert!(!same_origin_host("null", "127.0.0.1:3222"));
+        assert!(!same_origin_host("http://127.0.0.1:8080", "127.0.0.1:3222"));
+    }
 }

@@ -3,6 +3,7 @@ import { Eye, EyeOff, LockKeyhole, WandSparkles } from 'lucide-react'
 import { useStore, sessionGet } from '../store'
 import { useT } from '../i18n'
 import { enter, stopAudio } from '../actions'
+import { safeUrl } from './common'
 
 /**
  * The gate of a private server: the whole page until the administrator or the
@@ -93,7 +94,7 @@ export function PrivateGate() {
           {sourceUrl && (
             <>
               {', '}
-              <a href={sourceUrl} target="_blank" rel="noreferrer">
+              <a href={safeUrl(sourceUrl)} target="_blank" rel="noreferrer">
                 {t('source_code')}
               </a>
             </>

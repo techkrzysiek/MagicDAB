@@ -196,7 +196,7 @@ impl Radio {
             "description": self.settings.description,
             "admin": self.hub.is_admin(client),
             // the program can play the sound itself (a page on this computer)
-            "speaker": self.speaker_allowed(client),
+            "speaker": self.speaker_possible(client),
             "chat": self.settings.chat_enabled,
             "tunerLocked": self.settings.tuner_locked,
             "fixedChannel": self.fixed_channel,

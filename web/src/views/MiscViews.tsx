@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
-import { ViewHeader, Markdown } from '../components/common'
+import { ViewHeader, Markdown, safeUrl } from '../components/common'
 
 export function LogView() {
   const lines = useStore((s) => s.logLines)
@@ -56,7 +56,7 @@ export function AboutView() {
         {hello?.sourceUrl && (
           <p>
             {t('source_code')}:{' '}
-            <a href={hello.sourceUrl} target="_blank" rel="noreferrer">
+            <a href={safeUrl(hello.sourceUrl)} target="_blank" rel="noreferrer">
               {hello.sourceUrl}
             </a>
           </p>
