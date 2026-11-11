@@ -11,6 +11,7 @@ num-complex.workspace = true
 log.workspace = true
 serde.workspace = true
 libloading = "0.8"
+libc = "0.2"
 
 [lints]
 workspace = true

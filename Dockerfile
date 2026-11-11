@@ -41,7 +41,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # ---- runtime ----
 FROM debian:trixie-slim
-RUN apt-get update && apt-get install -y --no-install-recommends librtlsdr0 libusb-1.0-0 libopus0 libasound2t64 \
+RUN apt-get update && apt-get install -y --no-install-recommends librtlsdr0 libhackrf0 libusb-1.0-0 libopus0 libasound2t64 \
     ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
 COPY --from=build /usr/local/bin/magicdab /usr/local/bin/magicdab
 COPY --from=web /web/dist /usr/share/magicdab/web

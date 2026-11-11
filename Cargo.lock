@@ -1555,6 +1555,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "libc",
+ "libloading",
  "log",
  "magicdab-codecs",
  "magicdab-dab",
@@ -1618,6 +1619,7 @@ dependencies = [
 name = "magicdab-sdr"
 version = "0.3.0"
 dependencies = [
+ "libc",
  "libloading",
  "log",
  "num-complex",

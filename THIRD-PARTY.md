@@ -13,10 +13,12 @@ program licensed under the AGPL.
 | libopus (Opus encoder) | 1.5.2 | BSD-3-Clause | linked into magicdab.exe; Linux: system library | https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz |
 | minimp3 (MPEG Layer II decoder) | - | CC0-1.0 | built in (`third_party/minimp3`) | this repository |
 | librdsparser (RDS decoder) by Konrad Kosmatka | see `third_party/librdsparser/VERSION` | LGPL-2.1-or-later | built in (`third_party/librdsparser`) | this repository |
-| librtlsdr (rtl-sdr-blog: rtlsdr.dll, rtl_test.exe) | V1.4.0 | GPL-2.0-or-later | Windows package; Linux: system library | https://github.com/rtlsdrblog/rtl-sdr-blog/releases/tag/V1.4.0 |
-| libusb (inside rtlsdr.dll) | - | LGPL-2.1-or-later | Windows package | https://github.com/libusb/libusb |
-| pthreads-win32 (pthreadVC2.dll) | 2 | LGPL-2.1-or-later | Windows package | https://sourceware.org/pthreads-win32/ |
-| Microsoft Visual C++ 2010 runtime (msvcr100.dll) | - | Microsoft redistributable | Windows package (used by rtlsdr.dll) | - |
+| librtlsdr (osmocom rtl-sdr: rtlsdr.dll, rtl_test.exe, built with MinGW) | 2.0.3 | GPL-2.0-or-later | Windows package; Linux: system library | https://github.com/osmocom/rtl-sdr/releases/tag/v2.0.3 |
+| libhackrf (HackRF One, loaded when present) | Debian package | GPL-2.0-or-later | Docker image; Linux: system library | https://github.com/greatscottgadgets/hackrf |
+| libusb (inside rtlsdr.dll) | 1.0.27 | LGPL-2.1-or-later | Windows package | https://github.com/libusb/libusb/releases/tag/v1.0.27 |
+| Zadig (zadig.exe, the WinUSB driver of the dongle; LICENSE-Zadig.txt) | 2.9 | GPL-3.0 | Windows package | https://github.com/pbatard/libwdi/tree/v1.5.1 |
+| librtlsdr (osmocom rtl-sdr, librtlsdr.so with build/android/rtlsdr-open-fd.patch) | 2.0.3 | GPL-2.0-or-later | Android app | https://github.com/osmocom/rtl-sdr/releases/tag/v2.0.3 |
+| libusb (inside librtlsdr.so) | 1.0.27 | LGPL-2.1-or-later | Android app | https://github.com/libusb/libusb/releases/tag/v1.0.27 |
 | Microsoft Edge WebView2 Loader (WebView2Loader.dll) | - | Microsoft WebView2 SDK | Windows package (the window) | - |
 
 The GPL and LGPL components are distributed unmodified; their source is

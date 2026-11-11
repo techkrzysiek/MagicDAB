@@ -3,12 +3,15 @@
 //! All devices deliver complex baseband samples at 2.048 MS/s through a
 //! callback. RTL-SDR support loads `librtlsdr` at runtime, so the same
 //! binary runs on systems without the library (the device is then reported
-//! as unavailable). The exception is the DTR-100 (`dtr100`): a USB dongle
+//! as unavailable); so does the HackRF One (`libhackrf`, receive only). The
+//! exception is the DTR-100 (`dtr100`): a USB dongle
 //! with a DAB chip that demodulates by itself and hands out the FIC and one
 //! sub-channel; the server drives it directly.
 
 pub mod agc;
+pub mod android_usb;
 pub mod dtr100;
+pub mod hackrf;
 pub mod rawfile;
 pub mod rtlsdr;
 pub mod rtltcp;
@@ -111,6 +114,17 @@ pub enum DeviceConfig {
     },
     /// No tuner: only channels mapped to ETI / EDI streams.
     None,
+    /// HackRF One: receive only, its amplifier always off, fixed LNA and VGA
+    /// gains (hackrf.rs); `serial` empty for the first one.
+    #[serde(rename = "hackrf")]
+    HackRf {
+        #[serde(default)]
+        serial: String,
+        #[serde(default = "default_lna")]
+        lna: u32,
+        #[serde(default = "default_vga")]
+        vga: u32,
+    },
     /// DTR-100 / C100 USB DAB dongle (16c0:05dc): demodulates by itself, one
     /// sub-channel at a time; no samples (the server drives it, see `dtr100`).
     Dtr100,
@@ -120,14 +134,17 @@ fn default_true() -> bool {
     true
 }
 
+fn default_lna() -> u32 {
+    16
+}
+
+fn default_vga() -> u32 {
+    30
+}
+
 impl Default for DeviceConfig {
     fn default() -> Self {
-        // Android: apps cannot open USB devices with librtlsdr; the "RTL-SDR
-        // driver" app serves the stick as rtl_tcp on the phone (the MagicDAB
-        // app starts it on this port)
-        if cfg!(target_os = "android") {
-            return DeviceConfig::RtlTcp { host: "127.0.0.1".into(), port: 1234 };
-        }
+        // (Android too: the app opens the stick and hands it over, android_usb.rs)
         DeviceConfig::RtlSdr { index: 0, ppm: 0, bias_tee: false }
     }
 }
@@ -153,6 +170,7 @@ pub fn open(config: &DeviceConfig) -> Box<dyn InputDevice> {
         DeviceConfig::RawFile { path, looping } => Box::new(rawfile::RawFile::new(path.clone(), *looping)),
         DeviceConfig::None => Box::new(NoDevice),
         DeviceConfig::Dtr100 => Box::new(HardwareReceiver),
+        DeviceConfig::HackRf { serial, lna, vga } => Box::new(hackrf::HackRf::new(serial.clone(), *lna, *vga)),
     }
 }
 

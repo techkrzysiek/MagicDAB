@@ -30,6 +30,8 @@ struct Api {
     read_async: unsafe extern "C" fn(Dev, ReadCb, *mut c_void, u32, u32) -> c_int,
     cancel_async: unsafe extern "C" fn(Dev) -> c_int,
     set_bias_tee: Option<unsafe extern "C" fn(Dev, c_int) -> c_int>,
+    /// Android: a device the app opened (build/android/rtlsdr-open-fd.patch).
+    open_fd: Option<unsafe extern "C" fn(*mut Dev, c_int) -> c_int>,
 }
 
 unsafe impl Send for Api {}
@@ -38,6 +40,9 @@ unsafe impl Sync for Api {}
 fn library_names() -> Vec<std::ffi::OsString> {
     let names: &[&str] = if cfg!(target_os = "windows") {
         &["rtlsdr.dll", "librtlsdr.dll"]
+    } else if cfg!(target_os = "android") {
+        // (next to the server in the app's native library folder)
+        &["librtlsdr.so"]
     } else if cfg!(target_os = "macos") {
         &["librtlsdr.0.dylib", "librtlsdr.dylib", "/opt/homebrew/lib/librtlsdr.dylib", "/usr/local/lib/librtlsdr.dylib"]
     } else {
@@ -50,8 +55,33 @@ fn library_names() -> Vec<std::ffi::OsString> {
     own.into_iter().map(|p| p.into_os_string()).chain(names.iter().map(|n| n.into())).collect()
 }
 
+/// The error with its cause ("LoadLibraryExW failed" alone does not say
+/// whether the file or one of its DLLs is missing).
+fn describe(e: &libloading::Error) -> String {
+    let mut s = e.to_string();
+    let mut cause = std::error::Error::source(e);
+    while let Some(c) = cause {
+        s += &format!(": {c}");
+        cause = c.source();
+    }
+    s
+}
+
 fn load_api() -> Result<Api, String> {
-    let mut last_err = String::new();
+    // Windows: the package brings rtlsdr.dll next to the program; started
+    // from inside the zip (Explorer unpacks only the program) it is not there
+    if cfg!(windows) {
+        if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())) {
+            if !dir.join("rtlsdr.dll").exists() {
+                return Err(format!(
+                    "rtlsdr.dll is not next to the program in {}: unpack the whole zip and start magicdab.exe from there",
+                    dir.display()
+                ));
+            }
+        }
+    }
+    // (the first error is that of the package's own library)
+    let mut first_err = None;
     for name in library_names() {
         match unsafe { Library::new(&name) } {
             Ok(lib) => unsafe {
@@ -62,6 +92,7 @@ fn load_api() -> Result<Api, String> {
                     }};
                 }
                 let set_bias_tee = lib.get(b"rtlsdr_set_bias_tee\0").ok().map(|s: Symbol<unsafe extern "C" fn(Dev, c_int) -> c_int>| *s);
+                let open_fd = lib.get(b"rtlsdr_open_fd\0").ok().map(|s: Symbol<unsafe extern "C" fn(*mut Dev, c_int) -> c_int>| *s);
                 let api = Api {
                     get_device_count: sym!(b"rtlsdr_get_device_count\0"),
                     get_device_name: sym!(b"rtlsdr_get_device_name\0"),
@@ -79,14 +110,17 @@ fn load_api() -> Result<Api, String> {
                     read_async: sym!(b"rtlsdr_read_async\0"),
                     cancel_async: sym!(b"rtlsdr_cancel_async\0"),
                     set_bias_tee,
+                    open_fd,
                     _lib: lib,
                 };
                 return Ok(api);
             },
-            Err(e) => last_err = e.to_string(),
+            Err(e) => {
+                first_err.get_or_insert_with(|| format!("{}: {}", name.to_string_lossy(), describe(&e)));
+            }
         }
     }
-    Err(format!("librtlsdr not found ({last_err})"))
+    Err(format!("librtlsdr not found ({})", first_err.unwrap_or_default()))
 }
 
 fn api() -> Result<&'static Api, String> {
@@ -96,6 +130,10 @@ fn api() -> Result<&'static Api, String> {
 }
 
 pub fn list_devices() -> Vec<String> {
+    if cfg!(target_os = "android") {
+        // (the server sees no USB devices there: the app lists them)
+        return crate::android_usb::list();
+    }
     let Ok(api) = api() else { return Vec::new() };
     let n = unsafe { (api.get_device_count)() };
     (0..n)
@@ -173,6 +211,8 @@ pub struct RtlSdr {
     mode: GainMode,
     error: Option<String>,
     name: String,
+    /// Android: the device opened by the app (open while librtlsdr uses it).
+    usb_fd: Option<crate::android_usb::UsbFd>,
 }
 
 impl RtlSdr {
@@ -189,6 +229,7 @@ impl RtlSdr {
             mode: GainMode::Software,
             error: None,
             name: String::new(),
+            usb_fd: None,
         }
     }
 
@@ -309,9 +350,31 @@ impl InputDevice for RtlSdr {
             self.error = Some(e.clone());
         })?;
         let mut dev: Dev = std::ptr::null_mut();
-        let r = unsafe { (api.open)(&mut dev, self.index) };
+        let r = if cfg!(target_os = "android") {
+            // the app opens the stick (android_usb.rs)
+            let fd = crate::android_usb::request_fd().inspect_err(|e| self.error = Some(e.clone()))?;
+            let open_fd = api.open_fd.ok_or("librtlsdr without rtlsdr_open_fd")?;
+            let r = unsafe { open_fd(&mut dev, crate::android_usb::raw(&fd)) };
+            self.usb_fd = Some(fd);
+            r
+        } else {
+            unsafe { (api.open)(&mut dev, self.index) }
+        };
         if r < 0 || dev.is_null() {
-            let e = format!("cannot open RTL-SDR device #{} (error {r})", self.index);
+            self.usb_fd = None;
+            // (libusb's codes: what the admin can do about them)
+            let why = match r {
+                -3 if cfg!(windows) => {
+                    ": no access, another program uses the stick (a second MagicDAB, an SDR program) or it has no WinUSB driver (Zadig)"
+                }
+                -3 => ": no access, another program uses the stick or the user may not open it (udev rule, plugdev group)",
+                -6 => ": busy, another program uses the stick",
+                -1 => ": no stick found (plugged in?)",
+                -4 | -5 => ": the stick is gone (unplugged?)",
+                -12 => ": no driver for the stick (Windows: WinUSB with Zadig)",
+                _ => "",
+            };
+            let e = format!("cannot open RTL-SDR device #{} (error {r}){why}", self.index);
             self.error = Some(e.clone());
             return Err(e);
         }
@@ -405,6 +468,7 @@ impl InputDevice for RtlSdr {
             }
             unsafe { (api.close)(sh.dev.0) };
         }
+        self.usb_fd = None;
     }
 
     fn set_gain_mode(&mut self, mode: GainMode) {

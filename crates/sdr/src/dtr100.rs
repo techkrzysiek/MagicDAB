@@ -318,12 +318,24 @@ pub struct Dtr100 {
     /// Times the chip's sub-channel buffer ran over (read too late) and
     /// started again: audio lost.
     pub overruns: u64,
+    /// The longest replies (small requests, the sub-channel's 2 kB) since
+    /// replies() was last asked, in ms: what the waits above may be.
+    reply_max: [u32; 2],
+    /// Since the last overrun: when, and the empty polls of the buffer since
+    /// (logged when the data comes again).
+    after_overrun: Option<(Instant, u32)>,
 }
 
 /// Time a reply of the controller gets while a sub-channel streams (normally
 /// a few milliseconds); then the request is made again. A request it lets go
 /// unanswered (now and then on a Raspberry Pi) is answered at once the next time.
-const STEADY_REPLY_MS: u32 = 250;
+const STEADY_REPLY_MS: u32 = 30;
+/// The same for a big read (the chip's sub-channel buffer, 2 kB the
+/// controller fetches over SPI first): on a Raspberry Pi 3B+ the longest of
+/// hours at 192 kbit/s took 73 ms (registers 17 ms). A lost one costs the
+/// chip's buffer (about 85 ms at 192 kbit/s) in any case: the shorter the
+/// wait, the shorter the gap it leaves (250 ms gave 0.6 s).
+const STEADY_BIG_REPLY_MS: u32 = 120;
 /// Requests made again before the dongle counts as lost.
 const ASK_AGAIN: usize = 2;
 
@@ -353,6 +365,8 @@ impl Dtr100 {
             chip_sig_at: None,
             streaming: false,
             overruns: 0,
+            reply_max: [0; 2],
+            after_overrun: None,
         };
         let stale = d.drain_stale(64);
         if stale > 0 {
@@ -392,17 +406,25 @@ impl Dtr100 {
     /// what is left of the exchange is read away: reopening the dongle costs
     /// about 8 s of audio.
     fn xfer(&mut self, req: &[u8], reply_len: usize, timeout_out: u32, timeout_in: u32) -> Result<Vec<u8>, String> {
-        let timeout_in = if self.streaming { timeout_in.min(STEADY_REPLY_MS) } else { timeout_in };
+        let steady = if reply_len > 512 { STEADY_BIG_REPLY_MS } else { STEADY_REPLY_MS };
+        let timeout_in = if self.streaming { timeout_in.min(steady) } else { timeout_in };
+        let t0 = Instant::now();
         let mut result = self.xfer_once(req, reply_len, timeout_out, timeout_in);
+        if result.is_ok() && self.streaming {
+            let m = &mut self.reply_max[usize::from(reply_len > 512)];
+            *m = (*m).max(t0.elapsed().as_millis() as u32);
+        }
         let mut tries = 0;
         while tries < ASK_AGAIN && result.as_ref().is_err_and(|e| e.ends_with("(timeout)")) {
             tries += 1;
-            let stale = self.drain_stale(8);
+            // (while streaming every millisecond counts: a reply left over comes at once)
+            let stale = self.drain_stale(if self.streaming { 2 } else { 8 });
             result = self.xfer_once(req, reply_len, timeout_out, timeout_in);
             if result.is_ok() {
                 log::info!(
-                    "DTR-100: no reply to {:02x?}; asked again ({tries}), answered ({stale} bytes left over)",
-                    &req[..req.len().min(5)]
+                    "DTR-100: no reply to {:02x?}; asked again ({tries}), answered ({stale} bytes left over) after {} ms",
+                    &req[..req.len().min(5)],
+                    t0.elapsed().as_millis()
                 );
             }
         }
@@ -432,12 +454,17 @@ impl Dtr100 {
         Ok(())
     }
 
+    /// The longest replies since the last call (small, 2 kB), in ms.
+    pub fn replies(&mut self) -> [u32; 2] {
+        std::mem::take(&mut self.reply_max)
+    }
+
     /// Replies a previous session left queued; only reads.
     fn drain_stale(&mut self, max_reads: usize) -> usize {
         let mut buf = vec![0u8; 16 * 1024];
         let mut total = 0;
         for _ in 0..max_reads {
-            match self.link.read(&mut buf, 30) {
+            match self.link.read(&mut buf, if self.streaming { 10 } else { 30 }) {
                 Ok(Some(n)) if n > 0 => total += n,
                 _ => break,
             }
@@ -1039,6 +1066,9 @@ impl Dtr100 {
         self.subch = Some(subchannel);
         self.audio_at = None;
         if self.chip_audio {
+            // (the short waits for a reply hold for the chip's audio too: a
+            // reply the controller lets go unanswered cost 4 s of audio)
+            self.streaming = true;
             return Ok(());
         }
         if self.fw > 1 {
@@ -1128,11 +1158,15 @@ impl Dtr100 {
             let st = self.rreg(0x33, 3)?[0];
             self.last_chip_status = st;
             if st & 0x70 == 0 {
+                if let Some((_, polls)) = &mut self.after_overrun {
+                    *polls += 1;
+                }
                 return Ok(Vec::new());
             }
             if st & 0x60 != 0 {
                 // under/overrun: the buffer starts again
                 self.overruns += 1;
+                self.after_overrun = Some((Instant::now(), 0));
                 self.wlist(&[0x48, 0x00, 0x48, 0x05])?;
                 self.page(9)?;
                 self.wreg(0x35, 0x04)?;
@@ -1143,6 +1177,12 @@ impl Dtr100 {
             let data = self.rreg(0x10, n)?;
             self.page(9)?;
             self.wreg(0x35, 0x04)?;
+            if let Some((at, polls)) = self.after_overrun.take() {
+                log::info!(
+                    "DTR-100: sub-channel data again {} ms after the overrun ({polls} empty polls, status {st:#04x})",
+                    at.elapsed().as_millis()
+                );
+            }
             return Ok(data);
         }
         let seq = self.next_seq();

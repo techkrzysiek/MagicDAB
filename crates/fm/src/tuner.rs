@@ -177,7 +177,7 @@ mod win {
     pub fn open(name: &str) -> std::io::Result<std::fs::File> {
         let dev = if name.starts_with(r"\\") { name.to_string() } else { format!(r"\\.\{name}") };
         let f = std::fs::OpenOptions::new().read(true).write(true).open(dev)?;
-        let h = f.as_raw_handle() as *mut c_void;
+        let h: *mut c_void = f.as_raw_handle();
         let t = CommTimeouts { read_interval: u32::MAX, read_multiplier: 0, read_constant: 100, write_multiplier: 0, write_constant: 1000 };
         unsafe {
             SetCommTimeouts(h, &t);
