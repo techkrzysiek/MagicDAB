@@ -18,6 +18,13 @@ listeners in the browser, each on the station of their choice.
 - **Packages:** Docker, Linux, Windows application with updates, Android app
   (an RTL-SDR stick on USB OTG), macOS (untested).
 
+<p>
+  <a href="https://github.com/techkrzysiek/MagicDAB/releases/latest"><img alt="Download for Windows" src="https://img.shields.io/badge/Windows-download-0078D6?style=for-the-badge"></a>
+  <a href="https://github.com/techkrzysiek/MagicDAB/releases/latest"><img alt="Download for Linux (x64, arm64)" src="https://img.shields.io/badge/Linux_x64,_arm64-download-FCC624?style=for-the-badge&logo=linux&logoColor=black"></a>
+  <a href="https://github.com/techkrzysiek/MagicDAB/releases/latest"><img alt="Download for Android" src="https://img.shields.io/badge/Android-download-3DDC84?style=for-the-badge&logo=android&logoColor=white"></a>
+  <a href="https://github.com/techkrzysiek/MagicDAB/pkgs/container/magicdab"><img alt="Docker image" src="https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=for-the-badge&logo=docker&logoColor=white"></a>
+</p>
+
 ![Listening: the station with its slideshow and text, the stations of the multiplex and of all multiplexes](docs/screenshots/listen.png)
 
 | Ensemble | Spectrum |
