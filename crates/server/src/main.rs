@@ -288,6 +288,7 @@ async fn main() {
             if update::supervised() {
                 // (the container is started again by its restart policy, the
                 // server of the Android app by the app)
+                tunnel::kill_frpc();
                 std::process::exit(70);
             }
             update::restart();

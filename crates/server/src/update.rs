@@ -285,6 +285,8 @@ pub fn restart_pending() -> bool {
 /// Start the (new) program with the same arguments and end this one; under a
 /// supervisor only end it (not 0: Restart=on-failure starts it again too).
 pub fn restart() -> ! {
+    // (its frpc first: the new one would find the tunnel's name taken)
+    crate::tunnel::kill_frpc();
     if supervised() {
         crate::logbuf::flush();
         std::process::exit(75);
