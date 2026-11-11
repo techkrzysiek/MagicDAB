@@ -133,6 +133,11 @@ jobs:
     if: ${{ !cancelled() && needs.windows.result == 'success' }}
     runs-on: ubuntu-26.04
     steps:
+      # (the keys the program believes, for the check of the signing key)
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: crates/server/src/update.rs
+          sparse-checkout-cone-mode: false
       # (ours only: the Docker job leaves a build record that is no zip)
       - uses: actions/download-artifact@v8
         with:
@@ -159,6 +164,22 @@ jobs:
           json.dump(manifest, open("dist/latest.json", "w"), indent=2)
           print(json.dumps(manifest, indent=2))
           PY
+      # installed copies believe a manifest only with its signature
+      # (crates/server/src/update.rs, SIGNING_KEYS): Ed25519 of its bytes
+      - name: Signature of the manifest
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          test -n "$UPDATE_SIGNING_KEY" || { echo "::error::no UPDATE_SIGNING_KEY secret: installed copies would refuse this release"; exit 1; }
+          umask 077
+          key=$(mktemp)
+          printf '%s\n' "$UPDATE_SIGNING_KEY" > "$key"
+          openssl pkeyutl -sign -inkey "$key" -rawin -in dist/latest.json -out dist/latest.json.sig
+          # the key of the program, checked before anything is published
+          pub=$(openssl pkey -in "$key" -pubout -outform DER | tail -c 32 | od -An -tx1 | tr -d ' \n')
+          rm -f "$key"
+          grep -q "\"$pub\"" crates/server/src/update.rs || { echo "::error::the signing key is not one of SIGNING_KEYS in update.rs"; exit 1; }
+          test "$(wc -c < dist/latest.json.sig)" -eq 64
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -166,7 +187,7 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           gh release create "v$VERSION" --target "$GITHUB_SHA" --title "MagicDAB $VERSION" --notes-file dist/notes.md \
-            dist/MagicDAB-$VERSION-*.zip dist/latest.json
+            dist/MagicDAB-$VERSION-*.zip dist/latest.json dist/latest.json.sig
 
   # the image for x64 and arm64 (Raspberry Pi), each built on its own runner,
   # then one tag for both

@@ -86,7 +86,11 @@ publishes them with the release notes; a `v*` tag also builds the Android
 APK (`.github/workflows/android.yml`, signed when the repository has the
 signing secrets) and adds it to the release. Installed copies find new versions in
 the update manifest of the latest release and install them from Settings >
-Internet > Updates.
+Internet > Updates. The manifest is signed (`latest.json.sig`, Ed25519, with
+the key in the `UPDATE_SIGNING_KEY` secret): a copy installs a package only
+when the signature matches a public key built into it (`SIGNING_KEYS` in
+`crates/server/src/update.rs`), so a fork publishing its own updates puts its
+own key there.
 
 ## License
 

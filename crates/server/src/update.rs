@@ -5,6 +5,12 @@
 //! Windows allows renaming them, not overwriting — the new files written in
 //! their place and the program started again. In a container the image is
 //! updated instead.
+//!
+//! The manifest is signed (`latest.json.sig` next to it: the Ed25519
+//! signature of its bytes, made by the release workflow with the key of its
+//! secret UPDATE_SIGNING_KEY): its checksums are believed only with a
+//! signature of one of SIGNING_KEYS, so a changed manifest or package on the
+//! way or where it is kept installs nothing.
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -16,6 +22,19 @@ use tokio::sync::Notify;
 
 static RESTART: LazyLock<Notify> = LazyLock::new(Notify::new);
 static RESTART_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// Public keys of the manifest's signature (hex, 32 bytes); a second one
+/// while a new key takes over from an old one.
+const SIGNING_KEYS: &[&str] = &["feaffbb99bab2f7320bc2d602f19fd60e2eaea244606d3ba407bf7214cb86acc"];
+
+/// `manifest` signed (`sig`, 64 bytes) by one of `keys`.
+fn signed(manifest: &[u8], sig: &[u8], keys: &[&str]) -> bool {
+    use ring::signature::{UnparsedPublicKey, ED25519};
+    let hex = |k: &str| -> Option<Vec<u8>> {
+        (k.len() == 64).then(|| (0..32).map(|i| u8::from_str_radix(&k[2 * i..2 * i + 2], 16).ok()).collect::<Option<Vec<u8>>>())?
+    };
+    keys.iter().filter_map(|k| hex(k)).any(|k| UnparsedPublicKey::new(&ED25519, k).verify(manifest, sig).is_ok())
+}
 
 /// Manifest address built into a package (`UPDATE_URL` of the build): used
 /// while the settings name none, so a later version can move it.
@@ -113,6 +132,10 @@ pub fn check(manifest: &str, current: &str) -> Result<Option<Available>, String>
         return Err(format!("{manifest}: updates only over https"));
     }
     let data = get(manifest, 1 << 20)?;
+    let sig = get(&format!("{manifest}.sig"), 1024).map_err(|e| format!("manifest without a signature: {e}"))?;
+    if !signed(&data, &sig, SIGNING_KEYS) {
+        return Err(format!("{manifest}: wrong signature, nothing installed"));
+    }
     let v: serde_json::Value = serde_json::from_slice(&data).map_err(|e| format!("manifest: {e}"))?;
     let version = v["version"].as_str().ok_or("manifest: no version")?.to_string();
     let Some(p) = platform().and_then(|p| v.get(p)) else {
@@ -327,6 +350,34 @@ fn zip_files(data: &[u8]) -> Option<Vec<(String, Vec<u8>)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_manifest_signed_with_our_key_counts() {
+        // (a key made for this test with openssl, signed as the release workflow does)
+        let key = "7a83fbe8ae39ec92d8cd31068bad1d3d180dadd7ef39a561dc2d6e80d15703ae";
+        let manifest = br#"{"version": "0.3.99", "windows-x64": {"url": "MagicDAB-0.3.99-windows-x64.zip", "sha256": "00"}}"#;
+        let sig: Vec<u8> = (0..64)
+            .map(|i| {
+                let h = "1f6f5dc5efd25112a78199e9fac6f867723262c8673b20e9aa10385e28d0e202\
+                         675cb25bf4ad99f3ca2f0f02a4a41ba1d7d178d8b1ba09b4e7fe2c46fbd7f20e";
+                u8::from_str_radix(&h[2 * i..2 * i + 2], 16).unwrap()
+            })
+            .collect();
+        assert!(signed(manifest, &sig, &[key]));
+        assert!(signed(manifest, &sig, &["not a key", key]));
+        // another manifest, another key, a damaged signature, none
+        let mut changed = manifest.to_vec();
+        changed[14] = b'8';
+        assert!(!signed(&changed, &sig, &[key]));
+        assert!(!signed(manifest, &sig, SIGNING_KEYS));
+        let mut bad = sig.clone();
+        bad[0] ^= 1;
+        assert!(!signed(manifest, &bad, &[key]));
+        assert!(!signed(manifest, b"", &[key]));
+        assert!(!signed(manifest, &sig, &[]));
+        // the built-in keys are keys
+        assert!(SIGNING_KEYS.iter().all(|k| k.len() == 64 && k.bytes().all(|b| b.is_ascii_hexdigit())));
+    }
 
     #[test]
     fn files_replaced_or_left_as_they_were() {

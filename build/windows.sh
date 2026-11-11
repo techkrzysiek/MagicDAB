@@ -9,6 +9,10 @@
 #
 #   PUBLISH=data/updates build/windows.sh
 #
+# Installed copies take a manifest only with its signature (latest.json.sig,
+# crates/server/src/update.rs): SIGNING_KEY=FILE (the Ed25519 key, PEM) signs
+# it here; without it the manifest is for a release, which signs it itself.
+#
 # Release builds (.github/workflows/release.yml) also set SOURCE_URL (shown in
 # About), PACKAGE_URL (the folder the package is published in; without it the
 # manifest points next to itself) and NOTES (shown with the update).
@@ -25,9 +29,9 @@ rm -rf "$OUT/build"
 # JOBS=1: leave a core to a receiver running on the same host
 docker build -f build/windows/Dockerfile --build-arg VERSION="$VERSION" --build-arg UPDATE_URL="$UPDATE_URL" --build-arg SOURCE_URL="$SOURCE_URL" \
     --build-arg CARGO_BUILD_JOBS="${JOBS:-}" ${FEATURES:+--build-arg FEATURES="$FEATURES"} -o "$OUT/build" .
-python3 - "$OUT" "$VERSION" "${PUBLISH:-}" "${PACKAGE_URL:-}" "${NOTES:-}" <<'PY'
-import glob, hashlib, json, os, shutil, sys, zipfile
-out, version, publish, package_url, notes = sys.argv[1:6]
+python3 - "$OUT" "$VERSION" "${PUBLISH:-}" "${PACKAGE_URL:-}" "${NOTES:-}" "${SIGNING_KEY:-}" <<'PY'
+import glob, hashlib, json, os, shutil, subprocess, sys, zipfile
+out, version, publish, package_url, notes, signing_key = sys.argv[1:7]
 name = f"MagicDAB-{version}-windows-x64.zip"
 path = os.path.join(out, name)
 with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
@@ -42,13 +46,20 @@ if notes:
     manifest["notes"] = notes
 json.dump(manifest, open(os.path.join(out, "latest.json"), "w"), indent=2)
 print(name, sha)
+sig = os.path.join(out, "latest.json.sig")
+if os.path.exists(sig):
+    os.remove(sig)
+if signing_key:
+    subprocess.run(["openssl", "pkeyutl", "-sign", "-inkey", signing_key, "-rawin", "-in", os.path.join(out, "latest.json"), "-out", sig], check=True)
 if publish:
     os.makedirs(publish, exist_ok=True)
     shutil.copy(path, publish)
     # the manifest last: clients never see a package that is not there yet
-    tmp = os.path.join(publish, "latest.json.tmp")
-    shutil.copy(os.path.join(out, "latest.json"), tmp)
-    os.replace(tmp, os.path.join(publish, "latest.json"))
+    # (its signature just before it)
+    for f in ["latest.json.sig", "latest.json"] if os.path.exists(sig) else ["latest.json"]:
+        tmp = os.path.join(publish, f + ".tmp")
+        shutil.copy(os.path.join(out, f), tmp)
+        os.replace(tmp, os.path.join(publish, f))
     old = sorted(glob.glob(os.path.join(publish, "MagicDAB-*-windows-x64.zip")), key=os.path.getmtime)
     for f in old[:-2]:
         os.remove(f)

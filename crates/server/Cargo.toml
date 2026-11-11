@@ -35,6 +35,8 @@ sha2 = "0.10"
 rand = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 ureq = "3"
+# Ed25519 of the update manifest (update.rs); already in through ureq's TLS
+ring = "0.17"
 rust-embed = { version = "8", features = ["mime-guess"], optional = true }
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
