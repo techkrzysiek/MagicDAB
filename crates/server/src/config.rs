@@ -118,7 +118,7 @@ pub struct Settings {
     /// --channel / --service.
     pub lock_channel: Option<String>,
     pub lock_service: Option<String>,
-    /// The --channel / --service last applied ("5B/3B0D"): a start with
+    /// The --channel / --service last applied ("12C/4A91"): a start with
     /// other ones applies those, with the same ones the settings stay as the
     /// admin left them.
     pub locks_from_args: Option<String>,
