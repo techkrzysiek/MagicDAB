@@ -39,6 +39,7 @@ in /etc/systemd/system/magicdab.service:
     User=radio
     ExecStart=/opt/MagicDAB/magicdab --no-browser
     Restart=on-failure
+    RestartSec=2
 
     [Install]
     WantedBy=multi-user.target

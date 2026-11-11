@@ -76,9 +76,24 @@ pub fn in_container() -> bool {
 }
 
 /// Something starts the program again when it ends (a container's restart
-/// policy, the Android app): it exits instead of starting itself.
+/// policy, the Android app, a systemd service): it exits instead of starting
+/// itself.
 pub fn supervised() -> bool {
-    in_container() || cfg!(target_os = "android")
+    in_container() || cfg!(target_os = "android") || systemd_service()
+}
+
+/// The main process of a systemd service: a copy started by the program would
+/// end with the service (systemd stops everything left of it), its Restart=
+/// starts the new version. (Not a program started in a terminal that is
+/// itself a service: its parent is the shell.)
+fn systemd_service() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::env::var_os("INVOCATION_ID").is_some()
+            && std::fs::read_to_string(format!("/proc/{}/comm", std::os::unix::process::parent_id())).is_ok_and(|c| c.trim() == "systemd")
+    }
+    #[cfg(not(target_os = "linux"))]
+    false
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -267,8 +282,13 @@ pub fn restart_pending() -> bool {
     RESTART_PENDING.load(Ordering::SeqCst)
 }
 
-/// Start the (new) program with the same arguments and end this one.
+/// Start the (new) program with the same arguments and end this one; under a
+/// supervisor only end it (not 0: Restart=on-failure starts it again too).
 pub fn restart() -> ! {
+    if supervised() {
+        crate::logbuf::flush();
+        std::process::exit(75);
+    }
     if let Ok(exe) = std::env::current_exe() {
         let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
         let mut cmd = std::process::Command::new(exe);
