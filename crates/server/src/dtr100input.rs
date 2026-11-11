@@ -84,6 +84,8 @@ impl Dtr100Input {
                     fic_at: now,
                     last_fic: now,
                     full: false,
+                    overruns_seen: 0,
+                    overruns_at: now,
                 };
                 w.run(&st);
             })
@@ -135,6 +137,9 @@ struct Worker {
     last_fic: Instant,
     /// The receiver's queue was full (reported once).
     full: bool,
+    /// The chip's buffer overruns counted at the last report, and when.
+    overruns_seen: u64,
+    overruns_at: Instant,
 }
 
 impl Worker {
@@ -296,9 +301,28 @@ impl Worker {
             self.status.lock().subchannel = self.playing.map(|s| s.subch);
         }
         let mut busy = false;
-        // the FIC as it comes; next to a sub-channel every 50 ms (the vendor's
-        // library serialises the two reads too)
-        if self.playing.is_none() || self.fic_at.elapsed() >= Duration::from_millis(50) {
+        // the sub-channel first: its buffer in the chip holds a fraction of a
+        // second of a 192 kbit/s station, read too late it starts again (audio
+        // lost); what is there is read until it is empty
+        if let Some(s) = self.playing {
+            for _ in 0..4 {
+                let data = d.msc_read()?;
+                if data.is_empty() {
+                    break;
+                }
+                busy = true;
+                let mut frames = Vec::new();
+                self.framer.push(&data, &s, |f| frames.push(f));
+                for f in frames {
+                    let fic = std::mem::take(&mut self.fic);
+                    self.send(EtiFrame { fic, streams: vec![(s.subch, f)] });
+                }
+            }
+        }
+        // the FIC as it comes; next to a sub-channel every 150 ms (the vendor's
+        // library serialises the two reads too; the stations' names come from
+        // it, not their audio)
+        if self.playing.is_none() || self.fic_at.elapsed() >= Duration::from_millis(150) {
             self.fic_at = Instant::now();
             if let Some(raw) = d.fic_read()? {
                 busy = true;
@@ -323,16 +347,14 @@ impl Worker {
                 }
             }
         }
-        if let Some(s) = self.playing {
-            let data = d.msc_read()?;
-            if !data.is_empty() {
-                busy = true;
-                let mut frames = Vec::new();
-                self.framer.push(&data, &s, |f| frames.push(f));
-                for f in frames {
-                    let fic = std::mem::take(&mut self.fic);
-                    self.send(EtiFrame { fic, streams: vec![(s.subch, f)] });
-                }
+        // audio lost to a full buffer: in the log once a minute
+        if self.overruns_at.elapsed() >= Duration::from_secs(60) {
+            self.overruns_at = Instant::now();
+            let n = d.overruns - self.overruns_seen;
+            self.overruns_seen = d.overruns;
+            if n > 0 {
+                let kbps = self.playing.map_or(0, |s| s.bitrate);
+                log::info!("DTR-100: the chip's sub-channel buffer ran over {n} time(s) in the last minute ({kbps} kbit/s): audio lost");
             }
         }
         if let Some(sig) = d.signal() {

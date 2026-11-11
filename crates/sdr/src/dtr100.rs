@@ -315,6 +315,9 @@ pub struct Dtr100 {
     /// wait for a reply as long as normal ones take, not as long as the
     /// chip's start (STEADY_REPLY_MS).
     streaming: bool,
+    /// Times the chip's sub-channel buffer ran over (read too late) and
+    /// started again: audio lost.
+    pub overruns: u64,
 }
 
 /// Time a reply of the controller gets while a sub-channel streams (normally
@@ -349,6 +352,7 @@ impl Dtr100 {
             chip_sig: None,
             chip_sig_at: None,
             streaming: false,
+            overruns: 0,
         };
         let stale = d.drain_stale(64);
         if stale > 0 {
@@ -1128,6 +1132,7 @@ impl Dtr100 {
             }
             if st & 0x60 != 0 {
                 // under/overrun: the buffer starts again
+                self.overruns += 1;
                 self.wlist(&[0x48, 0x00, 0x48, 0x05])?;
                 self.page(9)?;
                 self.wreg(0x35, 0x04)?;
@@ -1169,7 +1174,8 @@ impl Dtr100 {
     pub fn msc_read(&mut self) -> Result<Vec<u8>, String> {
         let data = self.msc_read_raw(4096)?;
         if self.chip_audio {
-            if self.chip_sig_at.is_none_or(|t| t.elapsed() >= Duration::from_millis(500)) {
+            // (a dozen register reads: not too often next to the audio)
+            if self.chip_sig_at.is_none_or(|t| t.elapsed() >= Duration::from_millis(1000)) {
                 self.chip_sig_at = Some(Instant::now());
                 self.chip_sig = Some(self.chip_signal()?);
             }
