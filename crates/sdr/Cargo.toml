@@ -11,6 +11,9 @@ num-complex.workspace = true
 log.workspace = true
 serde.workspace = true
 libloading = "0.8"
+
+# the USB bridge of the Android app (android_usb.rs)
+[target.'cfg(target_os = "android")'.dependencies]
 libc = "0.2"
 
 [lints]

@@ -6,35 +6,35 @@
 //! build/android/rtlsdr-open-fd.patch).
 
 /// The device opened by the app, open while librtlsdr uses it.
-#[cfg(unix)]
+#[cfg(target_os = "android")]
 pub type UsbFd = std::os::fd::OwnedFd;
-#[cfg(not(unix))]
+#[cfg(not(target_os = "android"))]
 pub struct UsbFd;
 
 /// Its number for librtlsdr.
-#[cfg(unix)]
+#[cfg(target_os = "android")]
 pub fn raw(fd: &UsbFd) -> i32 {
     std::os::fd::AsRawFd::as_raw_fd(fd)
 }
-#[cfg(not(unix))]
+#[cfg(not(target_os = "android"))]
 pub fn raw(_fd: &UsbFd) -> i32 {
     -1
 }
 
-#[cfg(not(unix))]
+#[cfg(not(target_os = "android"))]
 pub fn request_fd() -> Result<UsbFd, String> {
     Err("only on Android".into())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(target_os = "android"))]
 pub fn list() -> Vec<String> {
     Vec::new()
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "android")]
 pub use imp::{list, request_fd};
 
-#[cfg(unix)]
+#[cfg(target_os = "android")]
 mod imp {
     use std::io::Write;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -55,16 +55,10 @@ mod imp {
         }
     }
 
-    #[cfg(target_os = "android")]
     fn connect(name: &str) -> std::io::Result<UnixStream> {
         use std::os::android::net::SocketAddrExt;
         let addr = std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes())?;
         UnixStream::connect_addr(&addr)
-    }
-
-    #[cfg(not(target_os = "android"))]
-    fn connect(_name: &str) -> std::io::Result<UnixStream> {
-        Err(std::io::Error::other("only on Android"))
     }
 
     /// The sticks plugged in, as the app sees them (no permission needed):
