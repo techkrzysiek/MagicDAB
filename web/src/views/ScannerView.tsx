@@ -1,4 +1,4 @@
-import { useStore } from '../store'
+import { useStore, fixedChannelOf } from '../store'
 import { useT } from '../i18n'
 import { ViewHeader } from '../components/common'
 import { TuneLockButton } from '../components/TuneDialog'
@@ -14,7 +14,7 @@ export default function ScannerView() {
   const t = useT()
   const list = useStore((s) => s.serviceList)
   const scan = useStore((s) => s.state?.scan)
-  const fixed = useStore((s) => s.state?.fixedChannel ?? s.hello?.fixedChannel)
+  const fixed = useStore(fixedChannelOf)
   const admin = useStore((s) => s.admin)
   const current = useStore((s) => s.ensemble)
   const total = list.reduce((a, e) => a + e.services.length, 0)

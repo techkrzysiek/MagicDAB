@@ -480,7 +480,7 @@ function ServiceList() {
   const listMode = useStore((s) => s.listMode)
   const dlsAll = useStore((s) => s.dlsAll)
   const set = useStore((s) => s.set)
-  const fixed = state?.fixedChannel ?? hello?.fixedChannel
+  const fixed = state ? state.fixedChannel : hello?.fixedChannel
   const allowed = useChannelAllowed()
   // the tuner is locked, own multiplexes are allowed: only the mapped channels
   const mappedOnly = useStore((s) => tuningLocked(s) && !!s.hello?.listenerMultiplex)

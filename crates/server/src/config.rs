@@ -113,6 +113,15 @@ pub struct Settings {
     pub admin_password_hash: Option<String>,
     /// When locked only the admin may change the multiplex.
     pub tuner_locked: bool,
+    /// A receiver kept on one channel and on one station (hex SId), e.g. one
+    /// whose stream another multiplex takes: set in the interface, or by
+    /// --channel / --service.
+    pub lock_channel: Option<String>,
+    pub lock_service: Option<String>,
+    /// The --channel / --service last applied ("5B/3B0D"): a start with
+    /// other ones applies those, with the same ones the settings stay as the
+    /// admin left them.
+    pub locks_from_args: Option<String>,
     /// Anyone may listen. Off (a private server): a visitor gives the admin
     /// or the tuning password first and gets nothing before (radio/gate.rs);
     /// the server is not listed on the public map.
@@ -307,6 +316,9 @@ impl Default for Settings {
             admin_password_hash: None,
             // (everyone may change the multiplex until the admin locks it)
             tuner_locked: false,
+            lock_channel: None,
+            lock_service: None,
+            locks_from_args: None,
             public_server: true,
             idle_check: IdleCheck::default(),
             location: None,

@@ -384,6 +384,12 @@ const ALL_CHANNELS: string[] = []
 
 /** The channels this client may tune to: a test, true for every one for the
  *  admin or without a limit (Settings > Access). */
+/** The channel the receiver is kept on (settings, or an input of one
+ *  multiplex): the state's, which follows changes, else the greeting's. */
+export function fixedChannelOf(s: Store): string | null {
+  return s.state ? (s.state.fixedChannel ?? null) : (s.hello?.fixedChannel ?? null)
+}
+
 export function useChannelAllowed() {
   const allowed = useStore((s) => (s.admin ? ALL_CHANNELS : s.hello?.allowedChannels ?? ALL_CHANNELS))
   return useCallback((channel: string | null | undefined) => !allowed.length || (!!channel && allowed.includes(channel)), [allowed])

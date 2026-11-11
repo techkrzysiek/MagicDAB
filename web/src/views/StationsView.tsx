@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeftRight, ChevronDown, ChevronRight, Lock, Search, X } from 'lucide-react'
-import { useStore, load, save, useChannelAllowed } from '../store'
+import { useStore, load, save, useChannelAllowed, fixedChannelOf } from '../store'
 import { useT } from '../i18n'
 import { Logo, FavStar, SignalBars, scrollIntoList } from '../components/common'
 import { selectService, tuningLocked } from '../actions'
@@ -94,7 +94,7 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
   const favorites = useStore((s) => s.favorites)
   const dlsAll = useStore((s) => s.dlsAll)
   const admin = useStore((s) => s.admin)
-  const locked = useStore((s) => tuningLocked(s) || !!(s.state?.fixedChannel ?? s.hello?.fixedChannel))
+  const locked = useStore((s) => tuningLocked(s) || !!fixedChannelOf(s))
   // multiplexes this listener may tune to (and the current one)
   const allowed = useChannelAllowed()
   // mapped channels a listener plays on a receiver of its own (the lock is for the main one)

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
-import { useStore, useChannelAllowed } from '../store'
+import { useStore, useChannelAllowed, fixedChannelOf } from '../store'
 import { useT } from '../i18n'
 import { send } from '../ws'
 import { downloadText, kw, mhz } from '../util'
@@ -18,7 +18,7 @@ export default function DxScanner() {
   const hello = useStore((s) => s.hello)
   const results = useStore((s) => s.dxResults)
   const scan = useStore((s) => s.state?.scan)
-  const fixed = useStore((s) => s.state?.fixedChannel ?? s.hello?.fixedChannel)
+  const fixed = useStore(fixedChannelOf)
   // (listeners: the channels they may tune to)
   const allowed = useChannelAllowed()
   const all = (hello?.channels ?? []).map((c) => c.name).filter((n) => !n.endsWith('N') && allowed(n))

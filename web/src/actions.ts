@@ -1,4 +1,4 @@
-import { useStore, save, sessionSet } from './store'
+import { useStore, save, sessionSet, fixedChannelOf } from './store'
 import { dropSlide, send } from './ws'
 import { player } from './audio/player'
 import { initMediaSession, mediaStart, mediaStop } from './audio/mediasession'
@@ -129,7 +129,7 @@ export function tune(channel: string) {
 
 export function stepChannel(dir: 1 | -1) {
   const s = useStore.getState()
-  if (s.state?.fixedChannel ?? s.hello?.fixedChannel) {
+  if (fixedChannelOf(s)) {
     s.notify('warning', 'channel_fixed')
     return
   }

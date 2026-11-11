@@ -117,6 +117,42 @@ impl Radio {
         self.settings.channel_maps.iter().filter(|m| m.file().is_some()).map(|m| m.channel.clone()).collect()
     }
 
+    /// The fixed channel and station of the settings, now: the receiver goes
+    /// there, its listeners with it.
+    pub(super) fn apply_locks(&mut self) {
+        self.channel_arg = self.settings.lock_channel.clone().filter(|c| channel_frequency(c).is_some());
+        self.service_lock = self.settings.lock_service.as_deref().and_then(|s| u32::from_str_radix(s, 16).ok()).filter(|s| *s != 0);
+        log::info!(
+            "fixed channel {}, fixed station {}",
+            self.channel_arg.as_deref().unwrap_or("none"),
+            self.service_lock.map(|s| format!("{s:X}")).unwrap_or_else(|| "none".into())
+        );
+        let fixed = self.compute_fixed_channel();
+        if fixed != self.fixed_channel {
+            self.fixed_channel = fixed;
+            if let Some(ch) = self.fixed_channel.clone().filter(|ch| self.channel.as_deref() != Some(ch.as_str())) {
+                if self.scan.is_some() {
+                    self.stop_scan();
+                }
+                self.channel = None;
+                self.tune(&ch);
+            }
+        }
+        if let Some(k) = self.service_lock.map(|sid| ServiceKey { sid, scids: 0 }) {
+            if self.main_service != Some(k) {
+                self.main_service = Some(k);
+                for id in self.hub.ids_in(0) {
+                    self.hub.update(id, |c| c.service = Some(k));
+                }
+                self.hub.broadcast_main(text(&json!({"type": "select", "sid": k.sid, "scids": k.scids, "reason": "fixed"})));
+                self.update_decoding();
+            }
+        }
+        // (listeners' own multiplexes need a receiver that may tune)
+        self.check_slots();
+        self.broadcast_state();
+    }
+
     /// rtl_tcp servers usually stream one fixed multiplex (e.g. a modulator)
     /// and recordings contain a single channel: such inputs stay on one channel.
     /// (rtl_tcp on this machine is a stick of its own: it tunes.)

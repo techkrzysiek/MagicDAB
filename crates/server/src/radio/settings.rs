@@ -153,6 +153,20 @@ impl Radio {
         if let Some(v) = s.get("internet").and_then(|v| v.as_bool()) {
             self.settings.internet = v;
         }
+        // a receiver kept on one channel, one station (null or empty: none)
+        let mut locks = false;
+        if let Some(v) = s.get("lockChannel") {
+            self.settings.lock_channel = v.as_str().map(|c| c.trim().to_uppercase()).filter(|c| channel_frequency(c).is_some());
+            locks = true;
+        }
+        if let Some(v) = s.get("lockService") {
+            self.settings.lock_service =
+                v.as_str().map(|x| x.trim().to_uppercase()).filter(|x| u32::from_str_radix(x, 16).is_ok_and(|n| n != 0));
+            locks = true;
+        }
+        if locks {
+            self.apply_locks();
+        }
         // (the interface never has it: empty keeps it, null removes it)
         match s.get("discordWebhook") {
             Some(Value::Null) => self.settings.discord_webhook.clear(),

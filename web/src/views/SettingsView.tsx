@@ -22,7 +22,7 @@ const SERVER_TABS: Tab[] = ['station', 'receiver', 'fm', 'tii', 'internet', 'acc
 /** Where each field of the draft is (a mark on the tab with changes). */
 const TAB_OF: Record<string, Tab> = {
   stationName: 'station', description: 'station', location: 'station', backgroundImage: 'station', serverMap: 'station', sourceUrl: 'station', openBrowser: 'station',
-  device: 'receiver', ppm: 'receiver', channelMaps: 'receiver', etiDelayMs: 'receiver', listenerMultiplex: 'receiver', listenerMultiplexLimit: 'receiver', idleScan: 'receiver', maxServices: 'receiver', streams: 'receiver', backgroundPad: 'receiver', spi: 'receiver', opusBitrate: 'receiver',
+  device: 'receiver', ppm: 'receiver', lockChannel: 'receiver', lockService: 'receiver', channelMaps: 'receiver', etiDelayMs: 'receiver', listenerMultiplex: 'receiver', listenerMultiplexLimit: 'receiver', idleScan: 'receiver', maxServices: 'receiver', streams: 'receiver', backgroundPad: 'receiver', spi: 'receiver', opusBitrate: 'receiver',
   fmEnabled: 'fm', fmPort: 'fm', fmAudio: 'fm', fmAntennas: 'fm', linkingEnabled: 'fm', linkingMatchLevel: 'fm',
   tiiMode: 'tii', tiiLog: 'tii',
   internet: 'internet', radioVis: 'internet', discordWebhook: 'internet', chatEnabled: 'internet', noIndex: 'internet', updateUrl: 'internet', updateAuto: 'internet',
@@ -422,10 +422,40 @@ function Receiver() {
   const [spi, setSpi] = useField('spi', s?.spi ?? true)
   const [opus, setOpus] = useField('opusBitrate', s?.opusBitrate ?? 192000)
   const [streams, setStreams] = useField('streams', s?.streams ?? { enabled: false, max: 2, bitrate: 128 })
+  const [lockCh, setLockCh] = useField<string | null>('lockChannel', s?.lockChannel ?? null)
+  const [lockSvc, setLockSvc] = useField<string | null>('lockService', s?.lockService ?? null)
+  const channels = useStore((st) => st.hello?.channels ?? EMPTY)
+  const ensemble = useStore((st) => st.ensemble)
   if (!s) return null
   const d = state?.device
+  // the stations of the multiplex received (and the one kept, if not on it)
+  // (by the SId as the server writes it: hex, no leading zeros)
+  const stations = (ensemble.services ?? []).filter((x) => !x.isData).map((x) => ({ sid: x.sid.toString(16).toUpperCase(), label: x.label }))
+  if (lockSvc && !stations.some((x) => x.sid === lockSvc)) stations.push({ sid: lockSvc, label: lockSvc })
   return (
     <>
+      <Card title={t('set_card_lock')} note={t('set_lock_note')}>
+        <Row label={t('set_lock_channel')}>
+          <select value={lockCh ?? ''} onChange={(e) => setLockCh(e.target.value || null)}>
+            <option value="">{t('set_lock_none')}</option>
+            {channels.map((c: any) => (
+              <option key={c.name} value={c.name}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </Row>
+        <Row label={t('set_lock_service')}>
+          <select value={lockSvc ?? ''} onChange={(e) => setLockSvc(e.target.value || null)}>
+            <option value="">{t('set_lock_none')}</option>
+            {stations.map((x) => (
+              <option key={x.sid} value={x.sid}>
+                {x.label} ({x.sid})
+              </option>
+            ))}
+          </select>
+        </Row>
+      </Card>
       <Card title={t('set_card_input')}>
         <Row label={t('device')}>
           <select

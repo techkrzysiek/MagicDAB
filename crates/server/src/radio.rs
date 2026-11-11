@@ -409,6 +409,16 @@ impl Radio {
     ) -> Self {
         let store = Store::new(&data_dir);
         let mut settings = store.load();
+        // --channel / --service: once, as settings (the interface changes them)
+        let args = format!("{}/{}", fixed_channel.as_deref().unwrap_or(""), service_lock.map(|s| format!("{s:X}")).unwrap_or_default());
+        if settings.locks_from_args.as_deref().unwrap_or("/") != args {
+            log::info!("fixed channel and station from the command line: {args}");
+            settings.lock_channel = fixed_channel.clone();
+            settings.lock_service = service_lock.map(|s| format!("{s:X}"));
+            settings.locks_from_args = Some(args);
+        }
+        let fixed_channel = settings.lock_channel.clone();
+        let service_lock = settings.lock_service.as_deref().and_then(|s| u32::from_str_radix(s, 16).ok()).filter(|s| *s != 0);
         let device_from_args = settings_override.is_some();
         if let Some(d) = settings_override {
             settings.device = d;

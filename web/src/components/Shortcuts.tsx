@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { Keyboard, X } from 'lucide-react'
-import { useStore } from '../store'
+import { useStore, fixedChannelOf } from '../store'
 import { useT } from '../i18n'
 import { stepChannel, stepService, stepVolume, toggleAudio, toggleMute } from '../actions'
 
@@ -80,7 +80,7 @@ function onKey(e: KeyboardEvent) {
 export function Shortcuts() {
   const t = useT()
   const open = useStore((s) => s.shortcutsOpen)
-  const fixed = useStore((s) => !!(s.state?.fixedChannel ?? s.hello?.fixedChannel))
+  const fixed = useStore((s) => !!fixedChannelOf(s))
   const locked = useStore((s) => !!s.hello?.tunerLocked && !s.admin)
   const set = useStore((s) => s.set)
   useEffect(() => {
