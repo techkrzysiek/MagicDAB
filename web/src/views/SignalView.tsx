@@ -274,7 +274,7 @@ export default function SignalView() {
     [spectrum, t],
   )
   const offset = signal?.synced ? signal.freqOffset : null
-  const ber = (v: number | undefined) => (v === undefined ? '–' : v.toExponential(2))
+  const ber = (v: number | undefined) => (v === undefined ? '' : v.toExponential(2))
 
   const specRef = useCanvas(
     (g, w, h, dpr) => {
@@ -470,7 +470,7 @@ export default function SignalView() {
           </div>
           <div className="bigsnr">
             <small>SNR</small>
-            {signal?.synced ? `${signal.snr.toFixed(1)} dB` : '–'}
+            {signal?.synced ? `${signal.snr.toFixed(1)} dB` : ''}
           </div>
         </div>
         <div className="signal-extra">
@@ -478,8 +478,7 @@ export default function SignalView() {
             <div className="card-title">
               {t('constellation')}
               <span className="hint" title={t('mer_hint')}>
-                {' '}
-                · MER {merDb !== null ? `${merDb.toFixed(1)} dB` : '–'}
+                , MER {merDb !== null ? `${merDb.toFixed(1)} dB` : ''}
               </span>
             </div>
             <div className="cons-plot">
@@ -521,7 +520,7 @@ export default function SignalView() {
                   </tbody>
                 </table>
               ) : (
-                <div className="hint">{impulse ? t('sfn_none') : '–'}</div>
+                <div className="hint">{impulse ? t('sfn_none') : ''}</div>
               )}
             </div>
           </div>
@@ -529,16 +528,16 @@ export default function SignalView() {
             <Kv
               title={t('error_correction')}
               rows={[
-                [t('fic_ber'), signal?.synced ? ber(signal.ficBer) : '–'],
-                [t('fib_error_rate'), signal?.synced ? ber(signal.fibErrorRate) : '–'],
-                [t('rs_ber'), data?.stats ? rates.rsBer.toExponential(2) : '–'],
-                [t('rs_uncorrectable'), data?.stats?.rsUncorrectable ?? '–'],
-                [t('audio_error_rate'), data?.stats ? rates.auErrRate.toExponential(2) : '–'],
+                [t('fic_ber'), signal?.synced ? ber(signal.ficBer) : ''],
+                [t('fib_error_rate'), signal?.synced ? ber(signal.fibErrorRate) : ''],
+                [t('rs_ber'), data?.stats ? rates.rsBer.toExponential(2) : ''],
+                [t('rs_uncorrectable'), data?.stats?.rsUncorrectable ?? ''],
+                [t('audio_error_rate'), data?.stats ? rates.auErrRate.toExponential(2) : ''],
               ]}
             />
             <div className="card-title">{t('freq_offset')}</div>
             <div className="big-value">
-              {offset !== null ? `${offset >= 0 ? '+' : ''}${offset.toFixed(1)} Hz` : '–'}
+              {offset !== null ? `${offset >= 0 ? '+' : ''}${offset.toFixed(1)} Hz` : ''}
               {offset !== null && state?.frequency ? (
                 <small>
                   {' '}
@@ -552,11 +551,11 @@ export default function SignalView() {
       <div className="signal-info">
         <span>
           <span className="k">{t('rf_level')}</span>
-          {signal?.rfLevel !== null && signal?.rfLevel !== undefined ? `${signal.rfLevel.toFixed(1)} dBm` : '–'}
+          {signal?.rfLevel !== null && signal?.rfLevel !== undefined ? `${signal.rfLevel.toFixed(1)} dBm` : ''}
         </span>
         <span>
           <span className="k">{t('agc_gain')}</span>
-          {signal?.gain !== null && signal?.gain !== undefined ? `${signal.gain.toFixed(1)} dB` : '–'}
+          {signal?.gain !== null && signal?.gain !== undefined ? `${signal.gain.toFixed(1)} dB` : ''}
         </span>
         <span style={{ flex: 1 }} />
         {signal?.duration ? (
@@ -567,11 +566,11 @@ export default function SignalView() {
         ) : null}
         <span>
           <span className="k">{t('frequency')}</span>
-          {state ? `${state.frequency} kHz` : '–'}
+          {state ? `${state.frequency} kHz` : ''}
         </span>
         <span>
           <span className="k">{t('freq_offset')}</span>
-          {signal?.synced ? `${signal.freqOffset.toFixed(1)} Hz` : '–'}
+          {signal?.synced ? `${signal.freqOffset.toFixed(1)} Hz` : ''}
         </span>
       </div>
     </>

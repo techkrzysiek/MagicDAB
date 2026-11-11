@@ -74,7 +74,7 @@ function MuxChips({ muxes, current }: { muxes: MuxRef[]; current: string | null 
           <span
             key={m.channel + m.eid}
             className={'mux-chip' + (m.channel === current ? ' current' : '') + (fresh ? '' : ' stale')}
-            title={`${m.label} · ${fresh && m.snr ? m.snr.toFixed(1) + ' dB · ' : ''}${ageShort(m.lastSeen, lang)}`}
+            title={`${m.label}, ${fresh && m.snr ? m.snr.toFixed(1) + ' dB, ' : ''}${ageShort(m.lastSeen, lang)}`}
           >
             {fresh && m.snr > 0 && <SignalBars level={snrLevel(m.snr)} synced />}
             {m.channel}
@@ -253,7 +253,7 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
         <div className="own-mux hint">
           {t('own_mux_note')
             .replace('{c}', own.channel ?? '')
-            .replace('{m}', own.mainChannel ?? '–')}
+            .replace('{m}', own.mainChannel ?? '')}
         </div>
       )}
       <div className="st-tools">
@@ -288,7 +288,19 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
 
       {mode === 'mux' && (
         <ul className="st-list" ref={listRef} onScroll={onScroll}>
-          {!ensemble.valid && <li className="st-empty">{t('no_ensemble')}</li>}
+          {!ensemble.valid && (
+            <li className="st-empty">
+              {t('no_ensemble')}
+              {/* (the stations found before are a tap away) */}
+              {stations.length > 0 && (
+                <div>
+                  <button className="btn" onClick={() => setMode('all')}>
+                    {t('show_all_stations').replace('{n}', String(stations.length))}
+                  </button>
+                </div>
+              )}
+            </li>
+          )}
           {muxServices.map((s) => (
             <li
               key={s.sid}
@@ -361,7 +373,7 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
                           <div className="st-txt">
                             <div className="st-name">{s.label}</div>
                             <div className="st-sub hint">
-                              {s.codec} {s.bitrate ? `· ${s.bitrate} kbps` : ''}
+                              {s.codec}{s.bitrate ? `, ${s.bitrate} kbps` : ''}
                             </div>
                           </div>
                           {blocked && <Lock size={16} className="st-lock" />}

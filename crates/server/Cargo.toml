@@ -42,6 +42,10 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# the program's own sound output (speaker.rs): AAudio, ALSA, loaded at run time
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+libloading = "0.8"
+
 [target.'cfg(windows)'.dependencies]
 wry = { version = "0.57", default-features = false, optional = true }
 tao = { version = "0.37", default-features = false, features = ["rwh_06"], optional = true }

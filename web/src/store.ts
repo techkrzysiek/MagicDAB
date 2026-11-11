@@ -226,6 +226,10 @@ export interface Store {
   volume: number
   muted: boolean
   codec: 'opus' | 'pcm'
+  /** the program plays the sound where it can (audio/speaker.ts) */
+  nativeAudio: boolean
+  /** why the program's output plays nothing */
+  speakerError: string | null
   // ui
   view: View
   theme: Theme
@@ -330,10 +334,12 @@ export const useStore = create<Store>((set, get) => ({
   audioEnabled: false,
   audioPlaying: false,
   audioBuffer: 0,
-  volume: load('volume', 0.8),
+  volume: load('volume', 1),
   muted: false,
   // (the Android app: PCM next to the server spares the phone encoding and decoding Opus)
   codec: isLocal() ? load('codec', androidApp ? 'pcm' : 'opus') : 'opus',
+  nativeAudio: load('nativeAudio', true),
+  speakerError: null,
   view: 'service',
   theme: load('theme', 'dark'),
   lang: load('lang', defaultLang),

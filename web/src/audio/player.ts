@@ -468,6 +468,19 @@ class Player {
         const { m, s, i, peak, max } = e.data as { m: number; s: number; i: number; peak: number; max: number }
         useStore.getState().set({ meter: { m, s, i, peak, max } })
       }
+      // measured only while it can be seen (the phone's battery): out of the
+      // sound's way while the page is hidden
+      const meter = this.meter
+      const follow = () => {
+        try {
+          if (document.hidden) this.pre?.disconnect(meter)
+          else this.pre?.connect(meter)
+        } catch {
+          // (not connected: nothing to do)
+        }
+      }
+      document.addEventListener('visibilitychange', follow)
+      if (document.hidden) follow()
     } catch (e) {
       console.warn('loudness meter unavailable', e)
     }

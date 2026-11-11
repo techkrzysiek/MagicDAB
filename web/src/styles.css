@@ -1285,6 +1285,11 @@ input[type='range'] {
   font-size: 15px;
 }
 
+/* the channel above the multiplex: only on a phone (InfoView) */
+.chan-row.chan-row-phone {
+  display: none;
+}
+
 /* the listener's own multiplex: where the main receiver is */
 .own-mux {
   padding: 0 12px 8px;
@@ -1378,6 +1383,8 @@ input[type='range'] {
 .svc-item .dls-line {
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   letter-spacing: 0;
+  /* (apart from the name by space, no separator sign) */
+  margin-left: 0.7em;
 }
 
 .star {
@@ -2601,10 +2608,50 @@ table.table {
 
 .close-actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
   margin-top: 4px;
+}
+
+.close-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* each choice a wide button: what it is, and below it what goes on and what ends */
+.close-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 14px;
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  background: var(--bg-light);
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.close-opt span {
+  color: var(--text-secondary);
+  font-size: 0.88em;
+}
+
+.close-opt:hover,
+.close-opt:focus-visible {
+  border-color: var(--accent);
+}
+
+.close-opt.primary {
+  border-color: var(--accent);
+}
+
+.close-opt.primary b {
+  color: var(--accent);
 }
 
 /* the FM tuner over the linking view */
@@ -2831,6 +2878,17 @@ table.table {
 
 .play-row {
   flex-wrap: wrap;
+}
+
+.play-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.play-stats {
+  white-space: nowrap;
 }
 
 .chip-btn {
@@ -3257,6 +3315,10 @@ table.table {
   font-size: 14px;
 }
 
+.st-empty .btn {
+  margin-top: 12px;
+}
+
 .mux-chips {
   display: inline-flex;
   flex-wrap: wrap;
@@ -3450,6 +3512,7 @@ table.table {
   .mp-dls {
     overflow: hidden;
     text-overflow: ellipsis;
+    margin-left: 6px;
   }
   .mp-play {
     flex: none;
@@ -3516,6 +3579,13 @@ table.table {
     font-size: 15px;
     border-radius: 10px;
   }
+  .chan-row.chan-row-phone {
+    display: flex;
+    padding: 0 0 10px;
+  }
+  .chan-row.chan-row-phone select {
+    font-size: 16px;
+  }
   /* listen view: only the playing station, fixed heights (no jumping) */
   .service-view .list-pane,
   .service-view .tree-pane,
@@ -3547,6 +3617,13 @@ table.table {
   .play-row .btn,
   .play-row button {
     min-height: 40px;
+  }
+  /* the buffer and the dropouts on a line of their own, the meter below */
+  .play-info {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    flex: 1;
   }
   /* stations: big rows */
   .stations.full .st-row {
@@ -4498,6 +4575,46 @@ button.spi-logo:disabled {
 .listeners-table tr.ban-row td {
   border-top: none;
   padding-top: 0;
+}
+
+.lst-who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.lst-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* phones: a card for each listener, the buttons under it */
+@media (max-width: 760px) {
+  .listeners-table thead {
+    display: none;
+  }
+  .listeners-table,
+  .listeners-table tbody,
+  .listeners-table tr,
+  .listeners-table td {
+    display: block;
+    width: 100%;
+  }
+  .listeners-table tr {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--divider-soft);
+  }
+  .listeners-table td {
+    border: none;
+    padding: 2px 0;
+  }
+  .lst-actions {
+    justify-content: flex-start;
+    margin-top: 4px;
+  }
 }
 
 /* phones: each label above its field (long labels and hints) */

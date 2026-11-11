@@ -978,6 +978,11 @@ impl Radio {
             RxEvent::Audio { key, pcm } => {
                 let (o, p) = s.wants.get(&key).copied().unwrap_or((false, false));
                 s.audio.push(&self.hub, key, &pcm, o, p);
+                if self.speaker_on == Some((id, key)) {
+                    if let Some(sp) = &self.speaker {
+                        sp.push(&pcm);
+                    }
+                }
             }
             RxEvent::AudioFormat { key, format, bitrate } => {
                 let m = text(&format_json(key, &format, bitrate));

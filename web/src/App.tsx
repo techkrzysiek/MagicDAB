@@ -5,7 +5,7 @@ import {
   MessagesSquare, LockKeyhole, Activity, Keyboard, Gauge, History,
 } from 'lucide-react'
 import { useStore, type View } from './store'
-import { desktop, desktopToken } from './desktop'
+import { androidApp, desktop, desktopToken } from './desktop'
 import { useT, weekday } from './i18n'
 import { setVolume, toggleMute, toggleAudio, logout, stopScan, tuningLocked } from './actions'
 import { setSubscriptions, send, reconnectAfterKick } from './ws'
@@ -204,7 +204,7 @@ function NavRail() {
               <LockKeyhole /> {t('tune_title')}
             </button>
           )}
-          {admin ? (
+          {androidApp ? null : admin ? (
             <button onClick={() => { logout(); setMenu(false) }}>
               <LogOut /> {t('logout')}
             </button>
@@ -224,6 +224,14 @@ function NavRail() {
   )
 }
 
+/** The tuner does not work (another program has it, not plugged in, no driver): why, not only "no signal". */
+function DeviceBanner() {
+  const t = useT()
+  const p = useStore((s) => s.state?.deviceProblem)
+  if (!p) return null
+  return <div className="banner">{t(`dev_problem_${p}`)}</div>
+}
+
 /** The computer is too slow for the receiver: gaps in the sound, a signal that looks worse than it is. */
 function OverloadBanner() {
   const t = useT()
@@ -240,6 +248,8 @@ function dongleLevel(s: Signal): 0 | 1 | 2 | 3 {
 }
 
 function signalText(signal: Signal | null | undefined, t: (k: string) => string) {
+  // (a tuner that does not open: not "no signal", DeviceBanner says why)
+  if (useStore.getState().state?.deviceProblem) return t('dev_unavailable')
   // a DX recording: the signal as recorded, when the recording kept it
   if (signal?.input === 'file') return signal.recorded && signal.synced ? `${signal.snr.toFixed(1)} dB` : t('playback_file')
   if (signal?.input === 'eti' && signal.synced) return 'ETI/EDI'
@@ -278,7 +288,7 @@ function MiniPlayer() {
             {playback && <History size={13} className="pb-mark" />}
             <SignalBars level={lvl} synced={!!signal?.synced} />
             {signalText(signal, t)}
-            {dls ? <span className="mp-dls"> · {dls}</span> : null}
+            {dls ? <span className="mp-dls">{dls}</span> : null}
           </span>
         </span>
       </button>
@@ -380,7 +390,7 @@ function StatusBar() {
   const listeners = useStore((s) => s.listeners)
   const admin = useStore((s) => s.admin)
   const protection = useStore((s) => findService(s.ensemble, s.selected?.sid)?.protection)
-  const ensLabel = useStore((s) => (s.ensemble.valid ? `${s.ensemble.label} · ${s.ensemble.channel}` : s.state?.channel ?? ''))
+  const ensLabel = useStore((s) => (s.ensemble.valid ? `${s.ensemble.label}, ${s.ensemble.channel}` : s.state?.channel ?? ''))
   const lvl = barsOf(signal, protection)
   const playback = useStore((s) => !!s.state?.playbackInfo)
   return (
@@ -446,7 +456,7 @@ function ScanBanner() {
   return (
     <div className="scan-banner">
       <span>
-        {t('scan_running')} {scan.channel} ({scan.index + 1}/{scan.total}) · {t('found')}: {scan.found}
+        {t('scan_running')} {scan.channel} ({scan.index + 1}/{scan.total}), {t('found')}: {scan.found}
       </span>
       <div className="progress">
         <div style={{ width: `${((scan.index + 1) / scan.total) * 100}%` }} />
@@ -480,7 +490,7 @@ function StationHeader() {
       {named && <b className="station-name">{name}</b>}
       {description && (
         <span className="station-desc">
-          <Markdown text={open ? description : description.split(/\n+/).join('  ·  ')} />
+          <Markdown text={open ? description : description.split(/\n+/).join('  ')} />
         </span>
       )}
     </div>
@@ -540,11 +550,17 @@ export default function App() {
   const gated = useStore((s) => !!s.hello?.private && !s.admin && !s.tuner && !desktopToken)
 
   useEffect(() => {
-    document.title = svcLabel ? `${svcLabel} – ${station ?? 'MagicDAB'}` : station ?? 'MagicDAB'
+    document.title = svcLabel ? `${svcLabel}, ${station ?? 'MagicDAB'}` : station ?? 'MagicDAB'
   }, [svcLabel, station])
 
   useEffect(() => {
-    setSubscriptions({ spectrum: view === 'signal', tiiPairs: view === 'tii', log: view === 'log', linking: view === 'linking', serverStats: view === 'stats' })
+    setSubscriptions({
+      spectrum: view === 'signal',
+      tiiPairs: view === 'tii',
+      log: view === 'log',
+      linking: view === 'linking',
+      serverStats: view === 'stats',
+    })
   }, [view])
 
   // linking is the admin's: logged out (or never in) its view goes away
@@ -591,6 +607,7 @@ export default function App() {
         <UpdateBanner />
         <ScanBanner />
         <PlaybackBar />
+        <DeviceBanner />
         <OverloadBanner />
         {view === 'service' && <ServiceView />}
         {view === 'stations' && <StationsView />}

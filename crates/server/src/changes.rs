@@ -932,7 +932,7 @@ pub struct Posted {
 pub type DiscordMsg = std::sync::Arc<parking_lot::Mutex<Posted>>;
 
 fn discord_header(station: &str, ev: &ChangeEvent) -> String {
-    format!("**{} · {}** · {} ({})", station, ev.channel, ev.ensemble.trim(), ev.eid)
+    format!("**{}, {}**, {} ({})", station, ev.channel, ev.ensemble.trim(), ev.eid)
 }
 
 /// The webhook's URL with `path` after it and `query` among its parameters
@@ -1058,10 +1058,10 @@ fn report_lines(r: &Report, base: Option<&str>) -> Vec<String> {
         _ => {}
     }
     if r.fib_errors >= 0.005 {
-        head.push_str(&format!(" · błędy FIC {:.0}%", r.fib_errors * 100.0));
+        head.push_str(&format!(", błędy FIC {:.0}%", r.fib_errors * 100.0));
     }
     if let Some(c) = &r.country {
-        head.push_str(&format!(" · {} {c}", flag(c)));
+        head.push_str(&format!(", {} {c}", flag(c)));
     }
     let mut lines = vec![head];
     if r.transmitters.is_empty() {
@@ -1071,17 +1071,17 @@ fn report_lines(r: &Report, base: Option<&str>) -> Vec<String> {
     for t in r.transmitters.iter().take(SHOWN) {
         let mut l = format!("📡 TII {}", t.code);
         match &t.location {
-            Some(loc) => l.push_str(&format!(" · {}{loc}", t.country.as_deref().map(|c| format!("{} ", flag(c))).unwrap_or_default())),
-            None => l.push_str(" · nie ma w bazie"),
+            Some(loc) => l.push_str(&format!(", {}{loc}", t.country.as_deref().map(|c| format!("{} ", flag(c))).unwrap_or_default())),
+            None => l.push_str(", nie ma w bazie"),
         }
         if let (Some(d), Some(a)) = (t.distance, t.azimuth) {
-            l.push_str(&format!(" · {d:.0} km, {a:.0}°"));
+            l.push_str(&format!(", {d:.0} km, {a:.0}°"));
         }
         if let Some(p) = t.power_kw.filter(|p| *p > 0.0) {
-            l.push_str(&format!(" · {p} kW"));
+            l.push_str(&format!(", {p} kW"));
         }
         // (its own signal: the multiplex' SNR plus its TII level, as in the TII view)
-        l.push_str(&format!(" · ≈{:.1} dB", r.snr_mean + t.level));
+        l.push_str(&format!(", ≈{:.1} dB", r.snr_mean + t.level));
         lines.push(l);
     }
     if r.transmitters.len() > SHOWN {
@@ -1482,9 +1482,9 @@ mod tests {
             recording: Some("2026-01-02_030405_12C_1234.eti".into()),
         };
         let l = report_lines(&r, Some("https://rx.example.org/"));
-        assert_eq!(l[0], "📶 SNR śr. 6.0 dB, max 9.5 dB przez 23 s, potem zanik · błędy FIC 2% · 🇨🇿 CZ");
-        assert_eq!(l[1], "📡 TII 5-2 · 🇨🇿 Hill A · 123 km, 250° · 5 kW · ≈6.0 dB");
-        assert_eq!(l[2], "📡 TII 7-1 · nie ma w bazie · ≈0.0 dB");
+        assert_eq!(l[0], "📶 SNR śr. 6.0 dB, max 9.5 dB przez 23 s, potem zanik, błędy FIC 2%, 🇨🇿 CZ");
+        assert_eq!(l[1], "📡 TII 5-2, 🇨🇿 Hill A, 123 km, 250°, 5 kW, ≈6.0 dB");
+        assert_eq!(l[2], "📡 TII 7-1, nie ma w bazie, ≈0.0 dB");
         assert_eq!(l[3], "🎙 nagranie: <https://rx.example.org/?dxrec=2026-01-02_030405_12C_1234.eti>");
         assert_eq!(l.len(), 4);
     }

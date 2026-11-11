@@ -96,7 +96,7 @@ export default function AccessSettings() {
           label={t('block_tor')}
           hint={
             access.blockTor
-              ? (tor?.count ? t('tor_status').replace('{n}', String(tor.count)).replace('{t}', tor.updated ? when(tor.updated) : '') : t('tor_unavailable')) + (tor?.error ? ` – ${tor.error}` : '')
+              ? (tor?.count ? t('tor_status').replace('{n}', String(tor.count)).replace('{t}', tor.updated ? when(tor.updated) : '') : t('tor_unavailable')) + (tor?.error ? `: ${tor.error}` : '')
               : undefined
           }
         >
@@ -107,7 +107,7 @@ export default function AccessSettings() {
           hint={
             t('blocked_asns_help') +
             (access.blockedAsns?.length
-              ? ' ' + (nets?.asns ? t('asn_status').replace('{p}', String(nets.prefixes)).replace('{n}', String(nets.asns)).replace('{t}', nets.updated ? when(nets.updated) : '') : t('asn_unavailable')) + (nets?.error ? ` – ${nets.error}` : '')
+              ? ' ' + (nets?.asns ? t('asn_status').replace('{p}', String(nets.prefixes)).replace('{n}', String(nets.asns)).replace('{t}', nets.updated ? when(nets.updated) : '') : t('asn_unavailable')) + (nets?.error ? `: ${nets.error}` : '')
               : '')
           }
         >

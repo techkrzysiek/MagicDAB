@@ -130,6 +130,9 @@ impl Radio {
             "channel": self.channel,
             "frequency": self.frequency,
             "device": dev,
+            // why the tuner does not work, as a kind (the error itself, with
+            // hosts or paths, is the admin's: the log)
+            "deviceProblem": self.device_error.as_deref().filter(|_| !self.device_running).map(device_problem),
             // only the kind: hosts and file paths are for the admin (settings)
             "deviceConfig": {"type": serde_json::to_value(&self.settings.device).ok().and_then(|v| v["type"].as_str().map(String::from))},
             "gain": self.settings.gain,
@@ -192,6 +195,8 @@ impl Radio {
             "stationName": self.settings.station_name,
             "description": self.settings.description,
             "admin": self.hub.is_admin(client),
+            // the program can play the sound itself (a page on this computer)
+            "speaker": self.speaker_allowed(client),
             "chat": self.settings.chat_enabled,
             "tunerLocked": self.settings.tuner_locked,
             "fixedChannel": self.fixed_channel,
@@ -258,6 +263,8 @@ impl Radio {
             // set again at every start: changing them here lasts until then
             "passwordFromEnv": std::env::var("MAGICDAB_ADMIN_PASSWORD").is_ok_and(|p| !p.is_empty()),
             "deviceFromArgs": self.device_from_args,
+            // Windows: whether the firewall lets other devices in (null elsewhere)
+            "firewall": crate::firewall::status(),
         })
     }
 
@@ -471,4 +478,25 @@ pub(super) fn stats_json(key: ServiceKey, s: &AudioStats) -> Value {
     v["sid"] = json!(key.sid);
     v["scids"] = json!(key.scids);
     v
+}
+
+/// The kind of an input device's error, for the interface: another program
+/// has it, it is not plugged in, no driver, the library or its DLL missing.
+fn device_problem(e: &str) -> &'static str {
+    let code = |c: &str| e.contains(&format!("(error {c})"));
+    if code("-3") {
+        "access"
+    } else if code("-6") {
+        "busy"
+    } else if code("-1") || code("-4") || code("-5") {
+        "missing"
+    } else if code("-12") {
+        "driver"
+    } else if e.contains("is not next to the program") {
+        "unzip"
+    } else if e.contains("librtlsdr not found") {
+        "library"
+    } else {
+        "other"
+    }
 }

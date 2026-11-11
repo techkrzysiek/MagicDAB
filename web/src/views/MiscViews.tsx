@@ -43,7 +43,7 @@ export function AboutView() {
         ) : null}
         <div className="section-title">MagicDAB</div>
         <p>
-          {t('version')}: {hello?.version} · © 2026 techkrzysiek
+          {t('version')}: {hello?.version}, © 2026 techkrzysiek
         </p>
         <p>
           Web based DAB/DAB+ receiver written from scratch (OFDM demodulator, FIC/MSC, DAB+, PAD/MOT, TII). MagicDAB is

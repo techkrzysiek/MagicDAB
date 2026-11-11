@@ -159,6 +159,15 @@ impl Radio {
                 self.send_service_data(client, key);
                 self.log_activity(client);
             }
+            "speaker" => self.on_speaker_message(client, &msg),
+            // Windows: the firewall exception (Settings > Setup), the admin's
+            "firewall" => {
+                let Some(tx) = self.commands_tx.clone().filter(|_| self.hub.is_admin(client) && cfg!(windows)) else { return };
+                log::info!("client {client}: asks for the Windows firewall exception");
+                crate::firewall::allow(move |result| {
+                    let _ = tx.send(Command::Firewall { client, result });
+                });
+            }
             "audio" => {
                 let enabled = msg["enabled"].as_bool().unwrap_or(false);
                 // someone listens: the background scan gives the tuner back
@@ -167,7 +176,12 @@ impl Radio {
                     self.stop_scan();
                     self.idle_since = None;
                 }
-                let codec = if msg["codec"].as_str() == Some("pcm") { hub::Codec::Pcm } else { hub::Codec::Opus };
+                let codec = match msg["codec"].as_str() {
+                    Some("pcm") => hub::Codec::Pcm,
+                    // (the program plays it: only for a page on this computer)
+                    Some("native") if self.speaker_allowed(client) => hub::Codec::Native,
+                    _ => hub::Codec::Opus,
+                };
                 self.hub.update(client, |c| {
                     c.audio = enabled;
                     c.codec = codec;
@@ -181,7 +195,11 @@ impl Radio {
                 let log = msg["log"].as_bool();
                 let linking = msg["linking"].as_bool();
                 let stats = msg["serverStats"].as_bool();
+                let speaker = msg["speaker"].as_bool();
                 self.hub.update(client, |c| {
+                    if let Some(v) = speaker {
+                        c.subs.speaker = v;
+                    }
                     if let Some(v) = stats {
                         c.subs.stats = v;
                     }
@@ -265,8 +283,12 @@ impl Radio {
                     log::info!("client {client} ({}) started a band scan", self.client_ip(client));
                     let only = self.only_channels(client);
                     let limited = !only.is_empty();
-                    if self.scan.is_none() && !self.start_scan_with(false, None, None, only) && limited {
-                        self.notice(client, "warning", "channel_not_allowed");
+                    if self.scan.is_none() && !self.start_scan_with(false, None, None, only) {
+                        if self.device_error.is_some() && !self.device_running {
+                            self.notice(client, "warning", "scan_no_device");
+                        } else if limited {
+                            self.notice(client, "warning", "channel_not_allowed");
+                        }
                     }
                 }
             }

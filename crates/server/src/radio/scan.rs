@@ -20,6 +20,11 @@ impl Radio {
         if self.scan.is_some() || self.fixed_channel.is_some() {
             return false;
         }
+        // (a tuner that does not open: the scan would find nothing, and say so)
+        if self.device_error.is_some() && !self.device_running && self.eti_input.is_none() && self.dtr100.is_none() {
+            log::info!("band scan not started: the input device does not work");
+            return false;
+        }
         let mut channels: Vec<String> = if let Some(c) = channels_override.filter(|c| !c.is_empty()) {
             c
         } else if self.settings.scan_channels.is_empty() {
@@ -110,7 +115,18 @@ impl Radio {
             self.logos_dirty = true;
             self.logos_changed = Some(Instant::now());
         }
-        if let Some((ch, svc)) = scan.return_to {
+        // back where it was; but from an empty channel and with no station
+        // chosen (the first scan of a new installation) to the strongest
+        // multiplex found, not to silence
+        let return_to = scan.return_to.map(|(ch, svc)| {
+            let empty = svc.is_none() && !self.service_list.ensembles.iter().any(|e| e.channel == ch);
+            let best = self.service_list.ensembles.iter().max_by(|a, b| a.snr.total_cmp(&b.snr)).map(|e| e.channel.clone());
+            match best.filter(|_| empty && scan.dx.is_none()) {
+                Some(b) => (b, None),
+                None => (ch, svc),
+            }
+        });
+        if let Some((ch, svc)) = return_to {
             self.channel = None;
             self.tune(&ch);
             self.main_service = svc;

@@ -5,14 +5,34 @@ import { androidApp, toHost } from './desktop'
 
 export function initAndroid() {
   if (!androidApp) return
-  // the play state (notification, audio focus, staying awake) and the tuner:
-  // the app starts the "RTL-SDR driver" app again when the stick is gone
+  // the play state (notification, audio focus, staying awake), a scan (the
+  // receiver is not stopped for want of a listener while it runs) and the tuner
   let playing = false
+  let scanning = false
   let device = ''
+  // the app's loading cover goes once the page shows the multiplex (or the
+  // receiver's state a while, when there is none yet: a new installation)
+  let ready = false
+  let readyTimer = 0
+  const sendReady = () => {
+    if (ready) return
+    ready = true
+    // (under the app's cover the page is hidden: no animation frames then)
+    if (document.hidden) setTimeout(() => toHost({ type: 'ready' }), 0)
+    else requestAnimationFrame(() => requestAnimationFrame(() => toHost({ type: 'ready' })))
+  }
   useStore.subscribe((s) => {
+    if (!ready && s.hello && s.state) {
+      if (s.ensemble.services?.length) sendReady()
+      else if (!readyTimer) readyTimer = window.setTimeout(sendReady, 2000)
+    }
     if (s.audioEnabled !== playing) {
       playing = s.audioEnabled
       toHost({ type: 'playing', value: playing })
+    }
+    if (!!s.state?.scan !== scanning) {
+      scanning = !!s.state?.scan
+      toHost({ type: 'scanning', value: scanning })
     }
     const d = s.state?.device
     const key = d ? `${d.kind}|${d.connected}` : ''

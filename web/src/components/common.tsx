@@ -117,7 +117,7 @@ export function CacheTag({ time }: { time?: number }) {
   const t = useT()
   return (
     <span className="chip cache-tag" title={time ? `${t('from_cache')}: ${new Date(time * 1000).toLocaleString()}` : t('from_cache')}>
-      cache{time ? ` · ${whenShort(time)}` : ''}
+      cache{time ? `, ${whenShort(time)}` : ''}
     </span>
   )
 }

@@ -8,6 +8,7 @@ import { TuneLockButton } from '../components/TuneDialog'
 import { selectService, tune, stepChannel, tuningLocked } from '../actions'
 import { startRecording, stopRecording } from '../audio/recorder'
 import { player } from '../audio/player'
+import { audioCodec } from '../audio/speaker'
 import { useEffect, useRef } from 'react'
 import { audioCoding, fullSid, hex, mhz, fmMhz, ageShort } from '../util'
 import type { Service, Linking, LinkInfo } from '../types'
@@ -99,7 +100,7 @@ function LinkingInfo({ linking, cacheTime }: { linking: Linking; cacheTime?: num
             {ensembles.map((e) => (
               <span key={e.eid} className="chip" title={e.frequencies.map((x) => fmtFreq('DAB', x)).join(', ')}>
                 EId {e.eid}
-                {e.frequencies.length ? ' · ' + e.frequencies.map((x) => x.channel ?? mhz(x.khz)).join(', ') : ''}
+                {e.frequencies.length ? ', ' + e.frequencies.map((x) => x.channel ?? mhz(x.khz)).join(', ') : ''}
               </span>
             ))}
           </div>
@@ -150,7 +151,7 @@ function LevelMeter() {
       </span>
       {meter && !silent && (
         <span className="meter-values">
-          I <b>{fmt(meter.i)}</b> LUFS · S {fmt(meter.s)} · max <b className={meter.max > -1 ? 'over' : ''}>{fmt(meter.max)}</b> dBFS
+          I <b>{fmt(meter.i)}</b> LUFS, S {fmt(meter.s)}, max <b className={meter.max > -1 ? 'over' : ''}>{fmt(meter.max)}</b> dBFS
         </span>
       )}
       {silent && <span className="silence">{t('silence')}</span>}
@@ -162,7 +163,7 @@ function RecordButtons() {
   const t = useT()
   const rec = useStore((s) => s.recording)
   // (the Opus recording is made of the audio sent to this browser)
-  const codec = useStore((s) => s.codec)
+  const codec = useStore((s) => audioCodec(s))
   const [, force] = useState(0)
   useEffect(() => {
     if (!rec) return
@@ -173,7 +174,7 @@ function RecordButtons() {
     const secs = Math.floor((Date.now() - rec.started) / 1000)
     return (
       <button className="btn rec on" onClick={stopRecording} title={t('stop_record')}>
-        ● {Math.floor(secs / 60)}:{(secs % 60).toString().padStart(2, '0')} · {(rec.bytes / 1048576).toFixed(1)} MB · {rec.format.toUpperCase()}
+        ● {Math.floor(secs / 60)}:{(secs % 60).toString().padStart(2, '0')}, {(rec.bytes / 1048576).toFixed(1)} MB, {rec.format.toUpperCase()}
       </button>
     )
   }
@@ -182,7 +183,7 @@ function RecordButtons() {
       <button className="btn rec" onClick={() => startRecording('aac')} title={t('record_aac')}>
         ● AAC
       </button>
-      {codec !== 'pcm' && (
+      {codec === 'opus' && (
         <button className="btn rec" onClick={() => startRecording('opus')} title={t('record_opus')}>
           ● Opus
         </button>
@@ -237,7 +238,7 @@ function OtherMuxes({ svc }: { svc: Service }) {
       {open && (
         <div className="dropdown-menu mux-menu">
           <div className="dropdown-title">
-            {t('other_mux')} · {svc.label} ({(ecc ? hex(ecc, 2) : '') + svc.sidHex})
+            {t('other_mux')}, {svc.label} ({(ecc ? hex(ecc, 2) : '') + svc.sidHex})
           </div>
           {items.map((e) => {
             const cur = isCurrent(e)
@@ -255,7 +256,7 @@ function OtherMuxes({ svc }: { svc: Service }) {
                 <span className="mux-main">
                   <span className="mux-label">{e.label}</span>
                   <span className="hint">
-                    {mhz(e.frequency)} MHz · EId {hex(e.ecc, 2)}
+                    {mhz(e.frequency)} MHz, EId {hex(e.ecc, 2)}
                     {hex(e.eid)}
                   </span>
                 </span>
@@ -285,7 +286,8 @@ function ServicePanel({ svc }: { svc?: Service }) {
   const buffer = useStore((s) => s.audioBuffer)
   const underruns = useStore((s) => s.audioUnderruns)
   const lost = useStore((s) => s.audioLost)
-  const codec = useStore((s) => s.codec)
+  const codec = useStore((s) => audioCodec(s))
+  const speakerError = useStore((s) => s.speakerError)
   const useRadioDns = useStore((s) => s.useRadioDns)
   const [preferVis, setPreferVis] = useState(false)
   const linkInfo = useStore((s) => s.linkInfo)
@@ -354,7 +356,7 @@ function ServicePanel({ svc }: { svc?: Service }) {
       <div className="pty-line">
         <Flag code={svc.country} />
         {svc.ptyName && svc.pty ? <span>{svc.ptyName}</span> : null}
-        {svc.language && <span className="hint">{svc.pty ? '· ' : ''}{svc.language}</span>}
+        {svc.language && <span className="hint">{svc.pty ? ', ' : ''}{svc.language}</span>}
         {svc.cachedFields?.some((f) => f === 'pty' || f === 'language') && <CacheTag time={cacheTime} />}
       </div>
       <div className="badges">
@@ -413,19 +415,20 @@ function ServicePanel({ svc }: { svc?: Service }) {
         )}
         <SlideLoading p={data?.slideProgress} />
       </div>
-      {dls?.text ? (
+      {dls?.text && (
         <div className="dls">
           <Music2 />
           <span>{dls.text}</span>
         </div>
-      ) : useRadioDns && data?.visText ? (
+      )}
+      {/* the RadioVIS text under the DLS (unless it says the same) */}
+      {useRadioDns && data?.visText && data.visText.trim() !== dls?.text?.trim() && (
         <div className="dls vis" title={t('vis_text')}>
           <Globe />
           <span>{data.visText}</span>
         </div>
-      ) : (
-        <div className="dls empty" />
       )}
+      {!dls?.text && !(useRadioDns && data?.visText) && <div className="dls empty" />}
       {mobile ? (
         (fields.some(([, v]) => v) || hasLinking) && (
           <details className="sp-details">
@@ -443,16 +446,22 @@ function ServicePanel({ svc }: { svc?: Service }) {
       <div className="play-row">
         {audioEnabled ? (
           audioPlaying ? (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-              ▶ {codec.toUpperCase()} · {t('buffer')} {buffer.toFixed(2)} s
-              {underruns > 0 && <span className="hint"> · {t('underruns')}: {underruns}</span>}
-              {lost > 0 && (
-                <span className="hint" title={t('audio_lost_help')}>
-                  {' '}
-                  · {t('audio_lost')}: {lost}
-                </span>
-              )}{' '}
+            <span className="play-info">
+              {/* (one line that does not break; on a phone the meter goes below it) */}
+              <span className="play-stats">
+                ▶ {codec === 'native' ? t('audio_native_short') : codec.toUpperCase()}, {t('buffer')} {buffer.toFixed(2)} s
+                {underruns > 0 && <span className="hint">, {t('underruns')}: {underruns}</span>}
+                {lost > 0 && (
+                  <span className="hint" title={t('audio_lost_help')}>
+                    , {t('audio_lost')}: {lost}
+                  </span>
+                )}
+              </span>
               <LevelMeter />
+            </span>
+          ) : speakerError && codec === 'native' ? (
+            <span className="hint" title={speakerError}>
+              {t('audio_native_error')}
             </span>
           ) : (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -469,22 +478,63 @@ function ServicePanel({ svc }: { svc?: Service }) {
   )
 }
 
+/**
+ * The channel: chosen from the list or stepped, its frequency, the lock of the
+ * tuner. Beside the stations on a computer, above the multiplex on a phone.
+ */
+export function ChannelRow({ className }: { className?: string }) {
+  const t = useT()
+  const state = useStore((s) => s.state)
+  const hello = useStore((s) => s.hello)
+  const fixed = state ? state.fixedChannel : hello?.fixedChannel
+  const allowed = useChannelAllowed()
+  // the tuner is locked, own multiplexes are allowed: only the mapped channels
+  const mappedOnly = useStore((s) => tuningLocked(s) && !!s.hello?.listenerMultiplex)
+  const mapped = state?.mappedChannels ?? EMPTY
+  return (
+    <div className={'chan-row' + (className ? ' ' + className : '')}>
+      <select value={state?.channel ?? ''} onChange={(e) => tune(e.target.value)} disabled={!!fixed} title={fixed ? t('channel_fixed') : undefined}>
+        {(hello?.channels ?? [])
+          .filter((c) => !state?.noTuner || mapped.includes(c.name))
+          .filter((c) => allowed(c.name) || c.name === state?.channel)
+          .map((c) => (
+            <option key={c.name} value={c.name} disabled={mappedOnly && !mapped.includes(c.name) && c.name !== state?.channel}>
+              {c.name}
+              {mapped.includes(c.name) ? ', ETI/EDI' : ''}
+            </option>
+          ))}
+      </select>
+      {fixed ? (
+        <span className="chip fixed-chip" title={t('channel_fixed')}>
+          <Lock size={13} /> {t('fixed_source')}
+        </span>
+      ) : (
+        <button className="icon-btn" onClick={() => stepChannel(-1)}>
+          <ChevronLeft />
+        </button>
+      )}
+      <span className="freq">{state ? `${mhz(state.frequency)} MHz` : ''}</span>
+      {!fixed && (
+        <button className="icon-btn" onClick={() => stepChannel(1)}>
+          <ChevronRight />
+        </button>
+      )}
+      {!fixed && <TuneLockButton />}
+    </div>
+  )
+}
+
 function ServiceList() {
   const t = useT()
   const ensemble = useStore((s) => s.ensemble)
   const state = useStore((s) => s.state)
-  const hello = useStore((s) => s.hello)
   const selected = useStore((s) => s.selected)
   const favorites = useStore((s) => s.favorites)
   const serviceList = useStore((s) => s.serviceList)
   const listMode = useStore((s) => s.listMode)
   const dlsAll = useStore((s) => s.dlsAll)
   const set = useStore((s) => s.set)
-  const fixed = state ? state.fixedChannel : hello?.fixedChannel
   const allowed = useChannelAllowed()
-  // the tuner is locked, own multiplexes are allowed: only the mapped channels
-  const mappedOnly = useStore((s) => tuningLocked(s) && !!s.hello?.listenerMultiplex)
-  const mapped = state?.mappedChannels ?? EMPTY
   const services = (ensemble.services ?? []).filter((s) => s.isAudio)
   const listRef = useRef<HTMLUListElement>(null)
 
@@ -517,40 +567,12 @@ function ServiceList() {
         {ensemble.valid ? <Logo label={ensemble.label ?? ''} sid={ensemble.eid ?? 0} small /> : <span className="logo-space" />}
         <div className="ens-name">{ensemble.valid ? ensemble.label : state?.channel ? '…' : ''}</div>
       </div>
-      <div className="chan-row">
-        <select value={state?.channel ?? ''} onChange={(e) => tune(e.target.value)} disabled={!!fixed} title={fixed ? t('channel_fixed') : undefined}>
-          {(hello?.channels ?? [])
-            .filter((c) => !state?.noTuner || mapped.includes(c.name))
-            .filter((c) => allowed(c.name) || c.name === state?.channel)
-            .map((c) => (
-              <option key={c.name} value={c.name} disabled={mappedOnly && !mapped.includes(c.name) && c.name !== state?.channel}>
-                {c.name}
-                {mapped.includes(c.name) ? ' · ETI/EDI' : ''}
-              </option>
-            ))}
-        </select>
-        {fixed ? (
-          <span className="chip fixed-chip" title={t('channel_fixed')}>
-            <Lock size={13} /> {t('fixed_source')}
-          </span>
-        ) : (
-          <button className="icon-btn" onClick={() => stepChannel(-1)}>
-            <ChevronLeft />
-          </button>
-        )}
-        <span className="freq">{state ? `${mhz(state.frequency)} MHz` : ''}</span>
-        {!fixed && (
-          <button className="icon-btn" onClick={() => stepChannel(1)}>
-            <ChevronRight />
-          </button>
-        )}
-        {!fixed && <TuneLockButton />}
-      </div>
+      <ChannelRow />
       {!!state?.slot && (
         <div className="own-mux hint">
           {t('own_mux_note')
             .replace('{c}', state.channel ?? '')
-            .replace('{m}', state.mainChannel ?? '–')}
+            .replace('{m}', state.mainChannel ?? '')}
         </div>
       )}
       <div className="tabs">
@@ -574,7 +596,7 @@ function ServiceList() {
                 <div className="lbl">{s.label || s.sidHex}</div>
                 <div className="sid" title={dlsAll[s.sid] ?? ''}>
                   {fullSid(s)}
-                  {dlsAll[s.sid] ? <span className="dls-line"> · {dlsAll[s.sid]}</span> : null}
+                  {dlsAll[s.sid] ? <span className="dls-line">{dlsAll[s.sid]}</span> : null}
                 </div>
               </div>
               <FavStar sid={s.sid} />
@@ -592,7 +614,7 @@ function ServiceList() {
                 <div className="lbl">{r.label}</div>
                 <div className="sid">
                   SID: {r.ecc ? hex(r.ecc, 2) : ''}
-                  {hex(r.sid)} · {r.channel}
+                  {hex(r.sid)}, {r.channel}
                 </div>
               </div>
               <FavStar sid={r.sid} />
@@ -666,9 +688,9 @@ function LinkRow({ info }: { info: LinkInfo }) {
   } else {
     switch (info.phase) {
       case 'locked': {
-        const ant = (info.antennas ?? 1) > 1 && info.antenna != null ? ` · ${t('li_antenna')} ${info.antenna + 1}` : ''
+        const ant = (info.antennas ?? 1) > 1 && info.antenna != null ? `, ${t('li_antenna')} ${info.antenna + 1}` : ''
         const al = info.aligned ? `${t('li_aligned')}${info.delay != null ? `, FM +${info.delay.toFixed(1)} s` : ''}` : t('li_aligning')
-        text = `FM ${mhz(info.khz)}${ant} · ${al} · ${t('li_heard')} ${(info.source ?? 'dab').toUpperCase()}`
+        text = `FM ${mhz(info.khz)}${ant}, ${al}, ${t('li_heard')} ${(info.source ?? 'dab').toUpperCase()}`
         break
       }
       case 'scanning':
@@ -686,7 +708,7 @@ function LinkRow({ info }: { info: LinkInfo }) {
       default:
         text = info.reason ? `${pis}: ${info.reason}` : `${pis}: ${t('li_searching')}…`
     }
-    if (info.mode && info.mode !== 'auto') text += ` · ${t('li_mode')} ${info.mode.toUpperCase()}`
+    if (info.mode && info.mode !== 'auto') text += `, ${t('li_mode')} ${info.mode.toUpperCase()}`
   }
   return (
     <button

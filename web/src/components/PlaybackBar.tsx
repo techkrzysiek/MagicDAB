@@ -41,7 +41,7 @@ export function PlaybackBar() {
     <div className="playback-bar">
       <History size={16} className="pb-icon" />
       <span className="pb-what" title={info.name}>
-        <b>{t('playback_title')}</b> {[info.label, info.channel, when].filter(Boolean).join(' · ')}
+        <b>{t('playback_title')}</b> {[info.label, info.channel, when].filter(Boolean).join(', ')}
       </span>
       {duration ? (
         <>

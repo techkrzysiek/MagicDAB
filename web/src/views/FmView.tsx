@@ -58,7 +58,7 @@ export default function FmView() {
             <input className="fm-input" inputMode="decimal" placeholder="MHz" value={input} onChange={(e) => setInput(e.target.value)} />
           </form>
         </div>
-        <div className="fm-ps">{rds.ps || '—'}</div>
+        <div className="fm-ps">{rds.ps || ''}</div>
         <div className="fm-rt">{rds.rt}</div>
         <div className="badges">
           {pi && <span className={'badge' + (fm.piErrors ? ' warn' : '')}>PI {pi}{'?'.repeat(fm.piErrors ?? 0)}</span>}

@@ -3,7 +3,8 @@
 A DAB/DAB+ receiver with a web interface. One receiver serves many
 listeners in the browser, each on the station of their choice.
 
-- **Inputs:** RTL-SDR, rtl_tcp, ETI/EDI streams, raw IQ recordings.
+- **Inputs:** RTL-SDR, rtl_tcp, HackRF One, DTR-100, ETI/EDI streams, raw
+  IQ recordings.
 - **Decoding:** written from scratch in Rust: OFDM, FIC/MSC, DAB+,
   slideshow, DLS/DL+, SPI/EPG, TII.
 - **DX:** band scan and DX scan, TII with a transmitter database and map, a
@@ -11,9 +12,11 @@ listeners in the browser, each on the station of their choice.
   multiplexes heard for the first time and a report of their first minute
   (mean and peak SNR, transmitters by TII with distance and bearing).
 - **Extras:** RadioDNS and RadioVIS, DAB/FM service following with an
-  FM-DX-Tuner (TEF668x), loudness meter (EBU R128), public tunnel.
-- **Packages:** Docker, Linux, Windows application with updates, macOS
-  (untested).
+  FM-DX-Tuner (TEF668x), loudness meter (EBU R128), public tunnel; on the
+  computer it runs on the program plays the sound itself (Windows, Linux
+  desktop, Android), the browser decodes nothing.
+- **Packages:** Docker, Linux, Windows application with updates, Android app
+  (an RTL-SDR stick on USB OTG), macOS (untested).
 
 ![Listening: the station with its slideshow and text, the stations of the multiplex and of all multiplexes](docs/screenshots/listen.png)
 
@@ -35,8 +38,9 @@ listeners in the browser, each on the station of their choice.
 
 | Input | Notes |
 |---|---|
-| RTL-SDR USB sticks (RTL2832U with R820T / R828D) | e.g. RTL-SDR Blog V3 and V4, with bias-T; the packages bring librtlsdr (rtl-sdr-blog) |
+| RTL-SDR USB sticks (RTL2832U with R820T / R828D) | e.g. RTL-SDR Blog V3 and V4, with bias-T; the packages bring librtlsdr 2.0.3 (osmocom), the Windows one also Zadig |
 | rtl_tcp | an RTL-SDR on another computer, over the network |
+| HackRF One | receive only, the amplifier always off, fixed LNA and VGA gains (`--hackrf`); Linux and Docker (libhackrf) |
 | DTR-100 / wRadio C100 USB DAB+ dongle | the dongle demodulates by itself: no spectrum, TII, DX scan or gain control |
 | ETI / EDI streams | `eti+tcp://host:port`, `edi+tcp://host:port`, mapped to channels |
 | IQ recordings | `.uff`, raw u8 / s16 at 2.048 MS/s, played as channels |
@@ -44,15 +48,22 @@ listeners in the browser, each on the station of their choice.
 
 ## Running
 
+- Port: 3222, DAB+ on a phone's keys (8080 is often FM-DX-Webserver's on
+  the same computer); an installation from before 0.3.23 keeps 8080,
+  `--listen` sets another one.
 - Docker: `docker compose up -d` (see `docker-compose.yml`), web interface on
-  port 8080; the admin password is logged at the first start. The image is
-  `ghcr.io/techkrzysiek/magicdab`; Watchtower in the same file installs each new
-  release at night.
+  port 3222 of the host (8080 inside the container); the admin password is
+  logged at the first start. The image is `ghcr.io/techkrzysiek/magicdab`;
+  Watchtower in the same file installs each new release at night.
 - Windows: `build/windows.sh` builds `dist/windows/MagicDAB-<version>-windows-x64.zip`
   (see `build/windows/README.txt`).
 - Linux (x64, arm64): `build/linux.sh` builds `dist/linux/MagicDAB-<version>-linux-<arch>.zip`
   for the architecture of the build host: one program with the interface
   inside and the RTL-SDR library next to it (see `build/linux/README.txt`).
+- Android: `build/android.sh` builds the APK in Docker (see
+  `docs/android.md`). The app opens the RTL-SDR stick on USB OTG itself (no
+  driver app) and plays in the background with the screen off; its receiver
+  is for the phone only: no tunnel, no server map, no chat.
 - macOS (untested): `build/macos.sh` on a Mac builds one program for Apple
   silicon and Intel (see `build/macos/README.txt`).
 - From source: `cargo build --release -p magicdab` (needs libfaad, libopus,
@@ -64,7 +75,9 @@ The Release workflow (each push to main that changes the program, a pushed
 `v*` tag, or the Actions tab) builds the packages for Windows, Linux (x64,
 and arm64 in a public repository) and macOS and the Docker image
 (`ghcr.io/techkrzysiek/magicdab`, the server alone, x64 and arm64) and
-publishes them with the release notes. Installed copies find new versions in
+publishes them with the release notes; a `v*` tag also builds the Android
+APK (`.github/workflows/android.yml`, signed when the repository has the
+signing secrets) and adds it to the release. Installed copies find new versions in
 the update manifest of the latest release and install them from Settings >
 Internet > Updates.
 

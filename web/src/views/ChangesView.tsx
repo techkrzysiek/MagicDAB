@@ -40,10 +40,10 @@ function Report({ t, r }: { t: (k: string) => string; r: ChangeReport }) {
   return (
     <>
       <div className="change-item">
-        <span className="change-kind">{t('chg_report_signal')}</span> SNR {r.snrMean.toFixed(1)} dB (max {r.snrMax.toFixed(1)} dB) · {r.seconds} s
+        <span className="change-kind">{t('chg_report_signal')}</span> SNR {r.snrMean.toFixed(1)} dB (max {r.snrMax.toFixed(1)} dB), {r.seconds} s
         {r.ended ? `, ${t('chg_report_' + r.ended)}` : ''}
-        {r.fibErrors >= 0.005 ? ` · FIC ${(r.fibErrors * 100).toFixed(0)}%` : ''}
-        {r.country ? ` · ${r.country}` : ''}
+        {r.fibErrors >= 0.005 ? `, FIC ${(r.fibErrors * 100).toFixed(0)}%` : ''}
+        {r.country ? `, ${r.country}` : ''}
       </div>
       {r.transmitters.length === 0 && (
         <div className="change-item">
@@ -54,8 +54,8 @@ function Report({ t, r }: { t: (k: string) => string; r: ChangeReport }) {
         <div key={x.code} className="change-item">
           <span className="change-kind">TII {x.code}</span>{' '}
           {x.location ? <b>{x.location + (x.country ? ` (${x.country})` : '')}</b> : <span className="hint">{t('chg_report_unknown_tx')}</span>}
-          {x.distance != null && x.azimuth != null ? ` · ${x.distance.toFixed(0)} km, ${x.azimuth.toFixed(0)}°` : ''}
-          {x.powerKw ? ` · ${kw(x.powerKw)} kW` : ''} · ≈{(r.snrMean + x.level).toFixed(1)} dB
+          {x.distance != null && x.azimuth != null ? `, ${x.distance.toFixed(0)} km, ${x.azimuth.toFixed(0)}°` : ''}
+          {x.powerKw ? `, ${kw(x.powerKw)} kW` : ''}, ≈{(r.snrMean + x.level).toFixed(1)} dB
         </div>
       ))}
       {r.recording && <Recording t={t} name={r.recording} />}
@@ -108,7 +108,7 @@ export default function ChangesView() {
       {log.map((ev, i) => (
         <div key={i} className="change-ev">
           <div className="change-head">
-            <b>{ev.channel}</b> {ev.ensemble} <span className="hint">({ev.eid}) · {new Date(ev.time * 1000).toLocaleString()}</span>
+            <b>{ev.channel}</b> {ev.ensemble} <span className="hint">({ev.eid}), {new Date(ev.time * 1000).toLocaleString()}</span>
             {admin && (
               <button className="icon-btn change-mute" title={t('chg_mute_mux')} aria-label={t('chg_mute_mux')} onClick={() => muteEnsemble(ev.eid, ev.ensemble)}>
                 <BellOff size={14} />

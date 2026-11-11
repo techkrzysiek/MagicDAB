@@ -32,17 +32,24 @@ impl Radio {
         match self.device.start(freq_khz * 1000, cb) {
             Ok(()) => {
                 self.device_running = true;
-                self.device_error = None;
+                if self.device_error.take().is_some() {
+                    self.broadcast_state();
+                }
                 self.device.set_gain_mode(self.settings.gain.clone());
                 log::info!("input device started: {}", self.device.status().name);
             }
             Err(e) => {
                 self.device_running = false;
                 let e = e.to_string();
-                if self.device_error.as_ref() != Some(&e) {
-                    log::error!("cannot start input device: {e} (trying again every 10 s)");
+                let new = self.device_error.as_ref() != Some(&e);
+                if new {
+                    log::error!("cannot start input device: {e} (trying again)");
                 }
                 self.device_error = Some(e);
+                // (the interface shows why: radio/outgoing.rs, the state's device)
+                if new {
+                    self.broadcast_state();
+                }
             }
         }
     }
@@ -331,6 +338,7 @@ impl Radio {
     }
 
     pub(super) fn update_decoding(&mut self) {
+        self.update_speaker();
         self.update_side_decoding();
         self.update_vis();
         let wanted = self.hub.wanted_services(0);

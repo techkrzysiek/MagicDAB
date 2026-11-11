@@ -1,4 +1,4 @@
-# MagicDAB with an RTL-SDR stick: `docker compose up -d`, then http://localhost:8080
+# MagicDAB with an RTL-SDR stick: `docker compose up -d`, then http://localhost:3222
 # The admin password is logged at the first start (or set MAGICDAB_ADMIN_PASSWORD).
 # Watchtower below keeps the image up to date: it updates only the containers with
 # the label com.centurylinklabs.watchtower.scope=magicdab, so it leaves the other
@@ -15,7 +15,8 @@ services:
     # the receiver before other work on the host (audio without gaps)
     cpu_shares: 8192
     ports:
-      - "8080:8080"
+      # (3222 on this computer: 8080 is often FM-DX-Webserver's)
+      - "3222:8080"
     volumes:
       - ./data:/data
       # USB devices; together with the cgroup rule this survives re-plugging the stick

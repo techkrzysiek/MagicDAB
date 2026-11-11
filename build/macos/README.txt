@@ -9,8 +9,8 @@ It is not signed by Apple, so macOS refuses it at first. Once, in Terminal:
 
 (or right-click magicdab, Open, Open). Then start magicdab by double-click
 or ./magicdab in Terminal: the receiver starts and the interface opens in
-the browser (http://localhost:8080/). Other devices in the network reach it
-at http://<this Mac>:8080/. Closing the Terminal window stops it.
+the browser (http://localhost:3222/). Other devices in the network reach it
+at http://<this Mac>:3222/. Closing the Terminal window stops it.
 
 Settings, the station list and the log (magicdab.log) are kept in the
 "data" folder next to the program (in ~/Library/Application Support/MagicDAB
@@ -27,5 +27,5 @@ The FM tuner for DAB/FM linking is not supported on macOS yet.
 Updates: Settings > Internet > Updates checks for a new version and
 installs it with one click (the settings stay).
 
-Options: ./magicdab --listen 0.0.0.0:8080 --data-dir DIR --rtltcp HOST:PORT
+Options: ./magicdab --listen 0.0.0.0:3222 --data-dir DIR --rtltcp HOST:PORT
          --channel 12D --no-browser --verbose

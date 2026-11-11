@@ -2,8 +2,8 @@ MagicDAB for Linux
 ==================
 
 Start ./magicdab in this folder: the receiver starts and, on a desktop, the
-interface opens in the browser (http://localhost:8080/). Other devices in
-the network reach it at http://<this computer>:8080/. Ctrl+C stops it.
+interface opens in the browser (http://localhost:3222/). Other devices in
+the network reach it at http://<this computer>:3222/. Ctrl+C stops it.
 
 Settings, the station list and the log (magicdab.log) are kept in the
 "data" folder next to the program (in ~/.local/share/magicdab when that
@@ -20,8 +20,8 @@ the dongle without root, install the udev rules once and plug it in again:
     sudo cp 60-rtl-sdr.rules /etc/udev/rules.d/
     sudo udevadm control --reload-rules
 
-FM tuner (FM-DX-Tuner / TEF668x headless USB, for DAB/FM linking): found by
-itself; the serial port needs your user in the "dialout" group
+FM tuner (FM-DX-Tuner / TEF668x headless USB, for DAB/FM linking): off at
+first; once turned on in Settings > FM and linking it is found by itself; the serial port needs your user in the "dialout" group
 (sudo usermod -aG dialout $USER, then log in again).
 
 Updates: Settings > Internet > Updates checks for a new version and
@@ -45,5 +45,5 @@ in /etc/systemd/system/magicdab.service:
 
 then: sudo systemctl enable --now magicdab
 
-Options: ./magicdab --listen 0.0.0.0:8080 --data-dir DIR --rtltcp HOST:PORT
+Options: ./magicdab --listen 0.0.0.0:3222 --data-dir DIR --rtltcp HOST:PORT
          --channel 12D --no-browser --verbose

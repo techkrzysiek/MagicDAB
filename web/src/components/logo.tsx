@@ -87,7 +87,7 @@ export function LogoDialog() {
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <b>{label ?? sid.toString(16).toUpperCase()}</b>
-          <span className="hint"> · {t('logos')}</span>
+          <span className="hint">, {t('logos')}</span>
           <span style={{ flex: 1 }} />
           <button className="icon-btn" onClick={() => set({ logoDialog: null })}>
             <X />
@@ -96,7 +96,7 @@ export function LogoDialog() {
         {text && (text.longName || text.description) && (
           <div className="hint" style={{ marginBottom: 10 }}>
             {text.longName ?? text.mediumName}
-            {text.description ? ` – ${text.description}` : ''}
+            {text.description ? `: ${text.description}` : ''}
           </div>
         )}
         {!variants?.length && <div className="hint">{t('no_logos')}</div>}
@@ -113,7 +113,7 @@ export function LogoDialog() {
                 <span className="hint">{v.mime.replace('image/', '').toUpperCase()}</span>
               </div>
               <div className="hint">
-                {(v.size / 1024).toFixed(1)} kB · <span className={'src-tag ' + (v.source === 'SPI' ? 'air' : 'net')}>{v.source === 'SPI' ? 'SPI (DAB)' : 'RadioDNS'}</span>
+                {(v.size / 1024).toFixed(1)} kB, <span className={'src-tag ' + (v.source === 'SPI' ? 'air' : 'net')}>{v.source === 'SPI' ? 'SPI (DAB)' : 'RadioDNS'}</span>
               </div>
               <div className="hint">{new Date(v.received * 1000).toLocaleString()}</div>
               <div className="hint" style={{ wordBreak: 'break-all' }}>{v.url}</div>

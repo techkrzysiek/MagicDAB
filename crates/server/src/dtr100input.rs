@@ -86,6 +86,9 @@ impl Dtr100Input {
                     full: false,
                     overruns_seen: 0,
                     overruns_at: now,
+                    overruns_known: 0,
+                    overrun_at: None,
+                    replies_at: now,
                 };
                 w.run(&st);
             })
@@ -140,6 +143,12 @@ struct Worker {
     /// The chip's buffer overruns counted at the last report, and when.
     overruns_seen: u64,
     overruns_at: Instant,
+    /// The overruns the framer knows of; when the last one was (until its
+    /// frames come again).
+    overruns_known: u64,
+    overrun_at: Option<Instant>,
+    /// The longest replies were last logged (Dtr100::replies).
+    replies_at: Instant,
 }
 
 impl Worker {
@@ -307,12 +316,23 @@ impl Worker {
         if let Some(s) = self.playing {
             for _ in 0..4 {
                 let data = d.msc_read()?;
+                if d.overruns != self.overruns_known {
+                    // the buffer started again: the stream jumped, its
+                    // superframes are looked for at once
+                    self.overruns_known = d.overruns;
+                    self.overrun_at = Some(Instant::now());
+                    self.framer.lost();
+                }
                 if data.is_empty() {
                     break;
                 }
                 busy = true;
                 let mut frames = Vec::new();
                 self.framer.push(&data, &s, |f| frames.push(f));
+                if let Some(at) = self.overrun_at.filter(|_| !frames.is_empty()) {
+                    self.overrun_at = None;
+                    log::info!("DTR-100: audio frames again {} ms after the overrun", at.elapsed().as_millis());
+                }
                 for f in frames {
                     let fic = std::mem::take(&mut self.fic);
                     self.send(EtiFrame { fic, streams: vec![(s.subch, f)] });
@@ -323,8 +343,11 @@ impl Worker {
         // library serialises the two reads too; the stations' names come from
         // it, not their audio)
         if self.playing.is_none() || self.fic_at.elapsed() >= Duration::from_millis(150) {
-            self.fic_at = Instant::now();
             if let Some(raw) = d.fic_read()? {
+                // (not ready yet: asked again in the next round, not 150 ms
+                // later, or the ready moments are missed time after time and
+                // the stick is tuned again for want of FIC)
+                self.fic_at = Instant::now();
                 busy = true;
                 self.last_fic = Instant::now();
                 self.note_fic(&raw, khz);
@@ -346,6 +369,12 @@ impl Worker {
                     }
                 }
             }
+        }
+        // how long the replies take while streaming: in the log every 10 minutes
+        if self.playing.is_some() && self.replies_at.elapsed() >= Duration::from_secs(600) {
+            self.replies_at = Instant::now();
+            let [small, big] = d.replies();
+            log::info!("DTR-100: longest replies in 10 minutes: {small} ms (registers), {big} ms (2 kB of the sub-channel)");
         }
         // audio lost to a full buffer: in the log once a minute
         if self.overruns_at.elapsed() >= Duration::from_secs(60) {
@@ -473,10 +502,25 @@ struct Framer {
     phase: usize,
     /// Superframe starts in a row whose firecode failed.
     fails: u32,
+    /// Frames given out, and where among them (modulo 5) the superframes
+    /// started before the sync was lost: the receiver's decoder keeps that
+    /// grid, so the next superframe found is put on it (empty frames before
+    /// it) and the decoder stays in sync (the frames between are lost audio,
+    /// not a new search of 4 superframes).
+    emitted: usize,
+    grid: Option<usize>,
 }
 
 impl Framer {
     fn reset(&mut self) {
+        *self = Framer::default();
+    }
+
+    /// The stream jumped (bytes lost): the superframes are looked for again.
+    fn lost(&mut self) {
+        if self.synced {
+            self.grid = Some((self.emitted + 5 - self.phase % 5) % 5);
+        }
         self.buf.clear();
         self.synced = false;
         self.phase = 0;
@@ -509,6 +553,12 @@ impl Framer {
                         self.synced = true;
                         self.phase = 0;
                         self.fails = 0;
+                        if let Some(g) = self.grid.take() {
+                            for _ in 0..(g + 5 - self.emitted % 5) % 5 {
+                                out(vec![0; n]);
+                                self.emitted += 1;
+                            }
+                        }
                     }
                     None => {
                         self.buf.drain(..=limit);
@@ -527,6 +577,7 @@ impl Framer {
                     // what it can); more in a row: the stream moved
                     self.fails += 1;
                     if self.fails > 3 {
+                        self.grid = Some(self.emitted % 5);
                         self.synced = false;
                         self.buf.drain(..1);
                         continue;
@@ -534,6 +585,7 @@ impl Framer {
                 }
             }
             out(self.buf.drain(..n).collect());
+            self.emitted += 1;
             self.phase = (self.phase + 1) % 5;
         }
     }
@@ -574,6 +626,27 @@ mod tests {
         assert!(check_firecode(&frames[0][..11]));
         assert!(check_firecode(&frames[5][..11]));
         assert!(!check_firecode(&frames[1][..11]));
+    }
+
+    #[test]
+    fn after_a_jump_the_superframes_stay_on_the_decoders_grid() {
+        let s = Stream { subch: 3, bitrate: 48, dabplus: true };
+        let stream = superframes(48, 12);
+        let n = 48 * 3;
+        let mut f = Framer::default();
+        let mut frames = Vec::new();
+        f.push(&stream[1000..20 * n + 1000], &s, |x| frames.push(x));
+        let first = frames.iter().position(|x| check_firecode(&x[..11])).unwrap();
+        let before = frames.len();
+        // the buffer started again: 777 bytes lost, picked up mid-frame
+        f.lost();
+        f.push(&stream[20 * n + 1777..], &s, |x| frames.push(x));
+        assert!(frames.len() > before);
+        let starts: Vec<usize> = (before..frames.len()).filter(|&i| check_firecode(&frames[i][..11])).collect();
+        assert!(!starts.is_empty());
+        assert!(starts.iter().all(|&i| i % 5 == first % 5), "{first} {starts:?}");
+        // (the empty frames that put it there)
+        assert!(frames[before..starts[0]].iter().all(|x| x.iter().all(|&b| b == 0)));
     }
 
     fn fib(k: u8) -> Vec<u8> {

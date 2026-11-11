@@ -282,6 +282,7 @@ impl Snapshot {
                 DeviceConfig::RawFile { .. } => "file",
                 DeviceConfig::None => "none",
                 DeviceConfig::Dtr100 => "dtr100",
+                DeviceConfig::HackRf { .. } => "hackrf",
             },
             locked: s.tuner_locked,
             listeners: p.listeners,

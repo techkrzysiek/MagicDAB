@@ -34,8 +34,7 @@ export function ListenerTable() {
   // the reason of a ban: a row of its own under the listener (the table stays narrow)
   const banRow = (c: Listener) => (
     <tr key={c.id + '-ban'} className="ban-row">
-      <td />
-      <td colSpan={6}>
+      <td colSpan={4}>
         <form
           className="ban-inline"
           onSubmit={(e) => {
@@ -57,32 +56,35 @@ export function ListenerTable() {
   )
   const row = (c: Listener) => [
     <tr key={c.id}>
-      <td className="hint">#{c.id}</td>
+      {/* (four columns: the buttons fit without moving the table sideways; a card each on a phone) */}
       <td>
-        <div className="mono">{c.address}</div>
+        <div className="lst-who">
+          <span className="mono">{c.address}</span>
+          {c.admin && <span className="chip">{t('admin')}</span>}
+          {c.tuner && <span className="chip">{t('tuner_badge')}</span>}
+          {c.gated && <span className="chip">{t('gated_badge')}</span>}
+          {c.id === list?.self && <span className="chip">{t('you')}</span>}
+        </div>
         <div className="hint">
-          {c.asn?.asns.length ? `AS${c.asn.asns.join(', AS')}${c.asn.country ? ` · ${c.asn.country}` : ''}` : ''}
-          {c.via ? `${c.asn?.asns.length ? ' · ' : ''}${c.via}` : ''}
+          #{c.id}
+          {c.asn?.asns.length ? `, AS${c.asn.asns.join(', AS')}${c.asn.country ? `, ${c.asn.country}` : ''}` : ''}
+          {c.via ? `, ${c.via}` : ''}
         </div>
       </td>
-      <td>{c.agent}</td>
-      <td className="nowrap">{since(c.connectedSecs)}</td>
+      <td>
+        <div>{c.agent}</div>
+        <div className="hint nowrap">{since(c.connectedSecs)}</div>
+      </td>
       <td>
         {c.audio && <Play size={12} className="listening" aria-label={t('play')} />} {c.station ?? ''}
-        {c.channel && <span className="hint"> · {c.channel}</span>}
+        {c.channel && <span className="hint">, {c.channel}</span>}
       </td>
       <td>
-        {c.admin && <span className="chip">{t('admin')}</span>}
-        {c.tuner && <span className="chip">{t('tuner_badge')}</span>}
-        {c.gated && <span className="chip">{t('gated_badge')}</span>}
-        {c.id === list?.self && <span className="chip">{t('you')}</span>}
-      </td>
-      <td className="nowrap">
         {c.address !== own && (
-          <>
+          <div className="lst-actions">
             <button className="btn" onClick={() => kickAddress(c.address)} title={t('kick_help')}>
               {t('kick')}
-            </button>{' '}
+            </button>
             <button
               className="btn danger"
               disabled={banning === c.address}
@@ -93,7 +95,7 @@ export function ListenerTable() {
             >
               {t('ban')}
             </button>
-          </>
+          </div>
         )}
       </td>
     </tr>,
@@ -105,12 +107,9 @@ export function ListenerTable() {
       <table className="table listeners-table">
         <thead>
           <tr>
-            <th />
             <th>{t('address')}</th>
             <th>{t('browser')}</th>
-            <th>{t('since')}</th>
             <th>{t('station')}</th>
-            <th />
             <th />
           </tr>
         </thead>

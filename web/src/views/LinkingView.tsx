@@ -5,7 +5,7 @@ import { useT } from '../i18n'
 import { linkingCommand } from '../actions'
 import FmView from './FmView'
 
-const mhz = (khz?: number) => (khz ? (khz / 1000).toFixed(1) + ' MHz' : '—')
+const mhz = (khz?: number) => (khz ? (khz / 1000).toFixed(1) + ' MHz' : '')
 
 /** Small line plot on a canvas; `mark` draws a vertical line at that index. */
 function Plot({ data, mark, height = 90, points }: { data: number[]; mark?: number; height?: number; points?: { x: number; y: number; ok: boolean }[] }) {
@@ -99,7 +99,7 @@ export default function LinkingView() {
         </div>
         <label className="check">
           <input type="checkbox" checked={!!l?.ab} onChange={(e) => linkingCommand({ ab: e.target.checked })} /> {t('link_ab')}
-          {l?.ab && <span className="hint"> · {t(l.abFm ? 'link_ab_fm' : 'link_ab_dab')}</span>}
+          {l?.ab && <span className="hint">, {t(l.abFm ? 'link_ab_fm' : 'link_ab_dab')}</span>}
         </label>
         <label className="check">
           <input type="checkbox" checked={s.enabled} onChange={(e) => linkingCommand({ enabled: e.target.checked })} /> {t('link_enabled')}
@@ -128,11 +128,11 @@ export default function LinkingView() {
       <div className="link-cards">
         <div className="link-card">
           <div className="k">DAB</div>
-          <div className="v">{s.service ? `${s.service.label} (${s.service.sid})` : '—'}</div>
+          <div className="v">{s.service ? `${s.service.label} (${s.service.sid})` : ''}</div>
           <div className="row2">
             <span className={'dot ' + (s.dab.good ? 'good' : s.dab.bad ? 'bad' : 'mid')} />
-            {s.dab.synced ? `SNR ${s.dab.snr.toFixed(1)} dB` : 'no sync'} · {t('link_au_errors')} {(s.dab.auErrorRate * 100).toFixed(1)}%
-            {s.service?.ecc && ` · ECC ${s.service.ecc}`}
+            {s.dab.synced ? `SNR ${s.dab.snr.toFixed(1)} dB` : 'no sync'}, {t('link_au_errors')} {(s.dab.auErrorRate * 100).toFixed(1)}%
+            {s.service?.ecc && `, ECC ${s.service.ecc}`}
           </div>
         </div>
         <div className="link-card">
@@ -142,13 +142,13 @@ export default function LinkingView() {
           </div>
           <div className="row2">
             <span className={'dot ' + (piOk ? 'good' : 'bad')} />
-            PI {s.fm.pi ?? '—'}
-            {'?'.repeat(s.fm.piErrors ?? 0)} · {s.fm.level.toFixed(1)} dBf
-            {s.fm.antennas > 1 ? ` · ${t('fm_antenna')} ${s.fm.antenna + 1}` : ''} ·{' '}
+            PI {s.fm.pi ?? ''}
+            {'?'.repeat(s.fm.piErrors ?? 0)}, {s.fm.level.toFixed(1)} dBf
+            {s.fm.antennas > 1 ? `, ${t('fm_antenna')} ${s.fm.antenna + 1}` : ''},{' '}
             {s.phase.name === 'probing' ? (
               // reading the PI of every station of the band scan, one by one
               t('link_probing')
-                .replace('{pi}', s.targets.map((x) => x.pi).join(', ') || '—')
+                .replace('{pi}', s.targets.map((x) => x.pi).join(', ') || '')
                 .replace('{f}', s.phase.khz ? mhz(s.phase.khz) : '…')
                 .replace('{n}', String(s.phase.left ?? 0))
             ) : (
@@ -164,7 +164,7 @@ export default function LinkingView() {
         </div>
         <div className="link-card">
           <div className="k">{t('link_output')}</div>
-          <div className="v">{l?.source ? l.source.toUpperCase() : '—'} {l && !l.aligned ? `(${t('link_not_aligned')})` : l ? `(${t('link_aligned')})` : ''}</div>
+          <div className="v">{l?.source ? l.source.toUpperCase() : ''} {l && !l.aligned ? `(${t('link_not_aligned')})` : l ? `(${t('link_aligned')})` : ''}</div>
           <div className="fade">
             <span>DAB</span>
             <div className="fm-bar">
@@ -176,7 +176,7 @@ export default function LinkingView() {
       </div>
       {l && (
         <div className="link-stats">
-          <div><span>{t('link_delay')}</span><b>{l?.fmAheadMs != null ? `${l.fmAheadMs.toFixed(0)} ms` : m ? `${m.delayMs.toFixed(0)} ms` : '—'}</b></div>
+          <div><span>{t('link_delay')}</span><b>{l?.fmAheadMs != null ? `${l.fmAheadMs.toFixed(0)} ms` : m ? `${m.delayMs.toFixed(0)} ms` : ''}</b></div>
           <div><span>{t('link_fm_buffer')}</span><b>{l.fmDelayMs.toFixed(0)} ms</b></div>
           <div><span>{t('link_dab_buffer')}</span><b>{l.dabBufferMs.toFixed(0)} ms</b></div>
           <div title={t('link_gain_hint')}>
@@ -196,7 +196,7 @@ export default function LinkingView() {
         <div className="hint">{t('link_targets')}</div>
         <div className="fm-chips">
           {s.targets.map((x) => (
-            <span key={x.pi} className="badge">PI {x.pi} · {x.source}</span>
+            <span key={x.pi} className="badge">PI {x.pi}, {x.source}</span>
           ))}
         </div>
         <div className="hint">{t('link_candidates')}</div>
@@ -245,7 +245,7 @@ export default function LinkingView() {
       {m && (
         <div className="fm-panel">
           <div className="hint">
-            {t('link_correlation')} · {t('link_confidence')} {m.confidence.toFixed(1)} · r = {m.correlation.toFixed(2)}
+            {t('link_correlation')}, {t('link_confidence')} {m.confidence.toFixed(1)}, r = {m.correlation.toFixed(2)}
             {m.correlationHigh !== undefined && ` (${t('link_band_high')} ${m.correlationHigh.toFixed(2)}, ${t('link_band_low')} ${(m.correlationLow ?? 0).toFixed(2)}, L−P ${(m.correlationSide ?? 0).toFixed(2)})`} {m.accepted ? '✓' : '✗'}
           </div>
           <Plot data={m.overview} />

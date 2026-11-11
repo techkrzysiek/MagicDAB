@@ -84,22 +84,23 @@ export function DesktopClose() {
             <X />
           </button>
         </div>
-        <p className="hint">{t('close_text')}</p>
-        <label className="check">
-          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /> {t('close_remember')}
-        </label>
+        {/* (each choice says what goes on and what ends: hidden, the program
+            kept running and a second one started beside it could not get the tuner) */}
+        <div className="close-options">
+          {(['quit', 'hide', 'server'] as const).map((a) => (
+            <button key={a} type="button" className={'close-opt' + (a === 'quit' ? ' primary' : '')} autoFocus={a === 'quit'} onClick={() => choose(a)}>
+              <b>{t(`close_${a}`)}</b>
+              <span>{t(`close_${a}_hint`)}</span>
+            </button>
+          ))}
+        </div>
         <div className="close-actions">
+          <label className="check">
+            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /> {t('close_remember')}
+          </label>
+          <span style={{ flex: 1 }} />
           <button type="button" className="btn" onClick={() => choose('cancel')}>
             {t('cancel')}
-          </button>
-          <button type="button" className="btn" onClick={() => choose('quit')}>
-            {t('close_quit')}
-          </button>
-          <button type="button" className="btn" onClick={() => choose('server')} title={t('close_server_hint')}>
-            {t('close_server')}
-          </button>
-          <button type="button" className="btn primary" autoFocus onClick={() => choose('hide')}>
-            {t('close_hide')}
           </button>
         </div>
       </div>

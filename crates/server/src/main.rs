@@ -15,6 +15,7 @@ mod dxrec;
 mod dynlabels;
 mod etiinput;
 mod figcache;
+mod firewall;
 mod fmradio;
 mod gainseek;
 mod gallery;
@@ -32,6 +33,7 @@ mod rawrec;
 mod servermap;
 mod servicelist;
 mod sichanges;
+mod speaker;
 mod spi;
 mod sysstats;
 mod tunnel;
@@ -61,7 +63,7 @@ struct AppState {
 }
 
 fn listen_port_of(listen: &str) -> u16 {
-    listen.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(8080)
+    listen.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(config::DEFAULT_PORT)
 }
 
 #[cfg(all(windows, not(feature = "desktop")))]
@@ -130,7 +132,7 @@ fn user_data_dir() -> Option<PathBuf> {
 
 fn usage() -> ! {
     eprintln!(
-        "MagicDAB {}\n\nusage: magicdab [options]\n\n  --listen ADDR       listen address (default 0.0.0.0:8080)\n  --data-dir DIR      settings, service list, logs (default ./data)\n  --web-root DIR      web UI files (default ./web/dist)\n  --rtlsdr [INDEX]    use RTL-SDR device\n  --rtltcp HOST:PORT  use rtl_tcp server\n  --dtr100            use a DTR-100 / C100 USB DAB dongle (16c0:05dc)\n  --file PATH         play a raw IQ recording (.uff/.raw)\n  --channel CH        stay on one channel (default for rtl_tcp: 5A, recordings: their own)\n  --service SID       stay on one station (hex SId), e.g. for its stream at /stream/SID\n  --no-browser        do not open the web interface on start (Windows)\n  --hidden            start in the tray (Windows application)\n  --verbose           debug logging",
+        "MagicDAB {}\n\nusage: magicdab [options]\n\n  --listen ADDR       listen address (default 0.0.0.0:3222; 8080 for an installation from before 0.3.23)\n  --data-dir DIR      settings, service list, logs (default ./data)\n  --web-root DIR      web UI files (default ./web/dist)\n  --rtlsdr [INDEX]    use RTL-SDR device\n  --rtltcp HOST:PORT  use rtl_tcp server\n  --dtr100            use a DTR-100 / C100 USB DAB dongle (16c0:05dc)\n  --hackrf [SERIAL]   use a HackRF One (receive only, amplifier off)\n  --lna N --vga N     its gains after --hackrf: LNA 0-40 (steps of 8, default 16), VGA 0-62 (steps of 2, default 30)\n  --file PATH         play a raw IQ recording (.uff/.raw)\n  --channel CH        stay on one channel (default for rtl_tcp: 5A, recordings: their own)\n  --service SID       stay on one station (hex SId), e.g. for its stream at /stream/SID\n  --no-browser        do not open the web interface on start (Windows)\n  --hidden            start in the tray (Windows application)\n  --verbose           debug logging",
         radio::VERSION
     );
     std::process::exit(1)
@@ -138,7 +140,8 @@ fn usage() -> ! {
 
 #[tokio::main]
 async fn main() {
-    let mut listen = "0.0.0.0:8080".to_string();
+    // (without --listen or MAGICDAB_LISTEN: config::default_port, once the data folder is known)
+    let mut listen: Option<String> = None;
     // Windows and the packages (the interface inside): next to the program,
     // whatever folder it was started from (Explorer, Finder, a shortcut)
     let base = if cfg!(windows) || cfg!(feature = "embed-web") {
@@ -165,7 +168,7 @@ async fn main() {
         let next = |i: usize| args.get(i + 1).cloned().unwrap_or_else(|| usage());
         match args[i].as_str() {
             "--listen" => {
-                listen = next(i);
+                listen = Some(next(i));
                 i += 1;
             }
             "--data-dir" => {
@@ -199,6 +202,28 @@ async fn main() {
                 i += 1;
             }
             "--dtr100" => device = Some(magicdab_sdr::DeviceConfig::Dtr100),
+            "--hackrf" => {
+                // (a serial number after it, unless the next is an option)
+                let serial = args.get(i + 1).filter(|s| !s.starts_with("--")).cloned();
+                if serial.is_some() {
+                    i += 1;
+                }
+                device = Some(magicdab_sdr::DeviceConfig::HackRf { serial: serial.unwrap_or_default(), lna: 16, vga: 30 });
+            }
+            "--lna" | "--vga" => {
+                let v: u32 = next(i).parse().unwrap_or_else(|_| usage());
+                match device.as_mut() {
+                    Some(magicdab_sdr::DeviceConfig::HackRf { lna, vga, .. }) => {
+                        if args[i] == "--lna" {
+                            *lna = v
+                        } else {
+                            *vga = v
+                        }
+                    }
+                    _ => usage(),
+                }
+                i += 1;
+            }
             "--file" => {
                 device = Some(magicdab_sdr::DeviceConfig::RawFile { path: next(i), looping: true });
                 i += 1;
@@ -215,7 +240,7 @@ async fn main() {
         i += 1;
     }
     if let Ok(v) = std::env::var("MAGICDAB_LISTEN") {
-        listen = v;
+        listen = Some(v);
     }
     if let Ok(v) = std::env::var("MAGICDAB_DATA_DIR") {
         data_dir = PathBuf::from(v);
@@ -268,6 +293,18 @@ async fn main() {
             update::restart();
         }
     }));
+    let listen_given = listen.is_some();
+    let listen = listen.unwrap_or_else(|| format!("0.0.0.0:{}", config::default_port(&data_dir)));
+    // the Windows application started again from another folder (another
+    // data folder, another port): the running one shows its window instead
+    // of a second one that would not get the tuner
+    #[cfg(all(windows, feature = "desktop"))]
+    if !listen_given && !data_given && std::env::var_os("MAGICDAB_RESTARTED").is_none() && show_other() {
+        log::info!("MagicDAB is running already (another folder): its window is shown");
+        logbuf::flush();
+        std::process::exit(0);
+    }
+    let _ = listen_given;
     let _ = std::fs::create_dir_all(&data_dir);
     log::info!("MagicDAB {} starting, data dir {}, web root {}", radio::VERSION, data_dir.display(), web_root.display());
     access::start(&data_dir);
@@ -316,8 +353,14 @@ async fn main() {
     let radio =
         radio::Radio::new(hub.clone(), data_dir.clone(), device, fixed_channel, listen_port, public.clone(), streams.clone(), service_lock);
     let port = listener.local_addr().map_or(listen_port, |a| a.port());
-    // a second start finds this one with the token in the data folder
+    // a second start finds this one with the token in the data folder, and
+    // (Windows application) from any folder in the user's (show_other)
     let _ = std::fs::write(desktop::instance_file(&data_dir), desktop::token());
+    #[cfg(all(windows, feature = "desktop"))]
+    if let Some(f) = running_file() {
+        let _ = std::fs::create_dir_all(f.parent().unwrap_or(&data_dir));
+        let _ = std::fs::write(f, serde_json::json!({"port": port, "token": desktop::token()}).to_string());
+    }
     #[cfg(all(windows, feature = "desktop"))]
     {
         let _ = browser;
@@ -335,6 +378,8 @@ async fn main() {
         }
     }
     let (radio_tx, radio_thread) = radio::spawn(radio);
+    // (Windows: whether other devices may reach the program, for Settings)
+    std::thread::spawn(firewall::check);
 
     let state = AppState {
         hub: hub.clone(),
@@ -475,6 +520,31 @@ async fn desktop_show_handler(headers: axum::http::HeaderMap) -> axum::http::Sta
     #[cfg(all(windows, feature = "desktop"))]
     desktop::show();
     axum::http::StatusCode::OK
+}
+
+/// Windows application: where the running MagicDAB leaves its port and
+/// token, whatever folder it was started from.
+#[cfg(all(windows, feature = "desktop"))]
+fn running_file() -> Option<PathBuf> {
+    user_data_dir().map(|d| d.join("running.json"))
+}
+
+/// Ask a MagicDAB started from another folder to show its window.
+#[cfg(all(windows, feature = "desktop"))]
+fn show_other() -> bool {
+    let Some(v) =
+        running_file().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+    else {
+        return false;
+    };
+    let (Some(port), Some(token)) = (v["port"].as_u64(), v["token"].as_str()) else { return false };
+    ureq::get(&format!("http://127.0.0.1:{port}/desktop/show"))
+        .header("x-magicdab-instance", token)
+        .config()
+        .timeout_global(Some(std::time::Duration::from_secs(3)))
+        .build()
+        .call()
+        .is_ok()
 }
 
 /// Ask a running MagicDAB (same data folder) to show its window.
@@ -744,7 +814,7 @@ async fn stream_handler(
         .header(CONTENT_TYPE, "audio/ogg")
         .header(CACHE_CONTROL, "no-cache, no-store")
         .header("icy-name", value(&sub.name))
-        .header("icy-description", value(&format!("{} · {} · MagicDAB", sub.name, sub.channel)))
+        .header("icy-description", value(&format!("{}, {}, MagicDAB", sub.name, sub.channel)))
         .header("icy-br", sub.bitrate.to_string())
         .header("icy-pub", "0")
         .header("access-control-allow-origin", "*");
@@ -901,6 +971,15 @@ async fn chat_handler(
         .on_upgrade(move |socket| chat::handle(socket, state.chat, state.hub, ip, token, state.public))
 }
 
+/// A Host header naming this computer (localhost, 127.0.0.1, [::1], with a port).
+fn loopback_host(host: &str) -> bool {
+    let name = match host.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => host.split(':').next().unwrap_or(""),
+    };
+    name.eq_ignore_ascii_case("localhost") || name.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
 async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
@@ -911,10 +990,14 @@ async fn ws_handler(
     let ip = client_ip(&headers, addr);
     let host = get("x-forwarded-host").or_else(|| get("host")).unwrap_or_default();
     let local = host.split(':').next().map(|h| h == "localhost" || h.parse::<std::net::IpAddr>().is_ok()).unwrap_or(true);
+    // on this computer: a loopback connection that no proxy or tunnel forwarded
+    let forwarded = ["x-forwarded-for", "x-real-ip", "forwarded", "x-forwarded-host"].iter().any(|k| headers.contains_key(*k));
+    let same_computer = addr.ip().to_canonical().is_loopback() && !forwarded && loopback_host(&host);
     let meta = hub::ClientMeta {
         ip,
         agent: ws::short_agent(&get("user-agent").unwrap_or_default()),
         via: if local { String::new() } else { host },
+        local: same_computer,
     };
     // listeners send small messages (the transmitter list comes in parts)
     ws.max_message_size(1 << 20).max_frame_size(1 << 20).on_upgrade(move |socket| ws::handle(socket, state.hub, state.radio, meta))

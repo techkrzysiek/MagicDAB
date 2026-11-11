@@ -18,7 +18,7 @@ function useFormat() {
     const b = bytesPerSecond * 8
     return b >= 1e6 ? `${num(b / 1e6)} Mbit/s` : `${num(b / 1e3, 0)} kbit/s`
   }
-  const pct = (v: number | null | undefined) => (v == null ? '–' : `${num(v)}%`)
+  const pct = (v: number | null | undefined) => (v == null ? '' : `${num(v)}%`)
   return { num, bytes, rate, pct }
 }
 
@@ -160,16 +160,16 @@ function Overview() {
         />
         <Tile
           label={t('stats_ram')}
-          value={s.system.ramTotal ? (s.system.ramUsed != null ? `${f.bytes(s.system.ramUsed)} / ${f.bytes(s.system.ramTotal)}` : f.bytes(s.system.ramTotal)) : '–'}
+          value={s.system.ramTotal ? (s.system.ramUsed != null ? `${f.bytes(s.system.ramUsed)} / ${f.bytes(s.system.ramTotal)}` : f.bytes(s.system.ramTotal)) : ''}
           meter={ram}
-          sub={t('stats_ram_magicdab').replace('{v}', s.process.ram != null ? f.bytes(s.process.ram) : '–')}
+          sub={t('stats_ram_magicdab').replace('{v}', s.process.ram != null ? f.bytes(s.process.ram) : '')}
         />
       </div>
       <p className="stats-machine hint">
         {t('stats_uptime_line').replace('{a}', since(s.uptime, t))}
-        {s.system.uptime != null && ` · ${t('stats_uptime_pc').replace('{a}', since(s.system.uptime, t))}`}
+        {s.system.uptime != null && `, ${t('stats_uptime_pc').replace('{a}', since(s.system.uptime, t))}`}
         <br />
-        {s.machine.cpuModel || t('stats_cpu')} · {t('stats_cores_n').replace('{n}', String(s.machine.cores))} · {s.machine.os}
+        {s.machine.cpuModel || t('stats_cpu')}, {t('stats_cores_n').replace('{n}', String(s.machine.cores))}, {s.machine.os}
       </p>
       <Chart title={t('stats_chart_cpu')} points={history.map((p: StatsPoint) => [p[0], p[1]])} max={100} format={(v) => `${f.num(v, 0)}%`} />
       <Chart title={t('stats_chart_net')} points={history.map((p: StatsPoint) => [p[0], p[3]])} format={(v) => f.rate(v)} />
@@ -211,7 +211,7 @@ function Receiver({ r }: { r: StatsReceiver }) {
     <div className="stats-rx">
       <div className="stats-rx-head">
         <b>
-          {t(r.slot === 0 ? 'stats_main_rx' : 'stats_side_rx')} · {r.channel || '–'}
+          {t(r.slot === 0 ? 'stats_main_rx' : 'stats_side_rx')}, {r.channel || ''}
         </b>
         <span className="hint">{t('stats_input_' + r.input)}</span>
         <span className="stats-rx-cpu">{f.pct(r.cpu)}</span>
@@ -227,9 +227,9 @@ function Receiver({ r }: { r: StatsReceiver }) {
               row(
                 <>
                   {s.label}
-                  {s.listeners > 0 && <span className="hint"> · {t('stats_n_listen').replace('{n}', String(s.listeners))}</span>}
+                  {s.listeners > 0 && <span className="hint">, {t('stats_n_listen').replace('{n}', String(s.listeners))}</span>}
                   <div className="hint">
-                    {t('stats_station_channel')} {f.pct(s.channel)} · {t('stats_station_audio')} {f.pct(s.audio)} · Opus {f.pct(s.opus)}
+                    {t('stats_station_channel')} {f.pct(s.channel)}, {t('stats_station_audio')} {f.pct(s.audio)}, Opus {f.pct(s.opus)}
                   </div>
                 </>,
                 s.channel + s.audio + s.opus,
@@ -308,7 +308,7 @@ function Advanced() {
         <table className="table stats-table">
           <tbody>
             {kv(t('stats_os'), s.machine.os)}
-            {kv(t('stats_cpu'), s.machine.cpuModel || '–')}
+            {kv(t('stats_cpu'), s.machine.cpuModel || '')}
             {kv(t('stats_cores'), String(s.machine.cores))}
             {kv(t('stats_threads_n'), String(s.process.threads))}
             {kv(t('stats_uptime'), since(s.uptime, t))}

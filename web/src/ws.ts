@@ -4,6 +4,7 @@ import type { LogoVariant, Stats, StatsPoint } from './types'
 import { desktopToken } from './desktop'
 import { restartChat } from './chat'
 import { player } from './audio/player'
+import { audioCodec, onSpeaker, speakerSettings } from './audio/speaker'
 import { recordEncoded, recordingActive } from './audio/recorder'
 
 let socket: WebSocket | null = null
@@ -56,7 +57,25 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') checkUiVersion()
 })
 
+/**
+ * A page out of sight (screen off, app in the background, another tab) draws
+ * nothing: the frequent measurements are taken in only now and then (the
+ * phone's battery), the sound and the station's texts as they come.
+ */
+const HIDDEN_EVERY_MS = 5000
+const hiddenSeen = new Map<string, number>()
+function skipWhileHidden(m: any): boolean {
+  if (!document.hidden) return false
+  if (m.type !== 'signal' && m.type !== 'stats' && m.type !== 'tiiPairs' && m.type !== 'serverStats') return false
+  const key = m.type === 'stats' ? `stats ${m.sid}` : m.type
+  const now = Date.now()
+  if (now - (hiddenSeen.get(key) ?? 0) < HIDDEN_EVERY_MS) return true
+  hiddenSeen.set(key, now)
+  return false
+}
+
 function handleText(m: any) {
+  if (skipWhileHidden(m)) return
   const st = useStore.getState()
   switch (m.type) {
     case 'hello':
@@ -77,6 +96,9 @@ function handleText(m: any) {
       })
       break
     }
+    case 'speaker':
+      onSpeaker(m)
+      break
     case 'stillHere':
       st.set({ stillHere: m.ask === false ? null : { seconds: Number(m.seconds) || 60, at: Date.now() } })
       break
@@ -449,7 +471,10 @@ export function connect() {
     const own = s.state?.slot && !s.admin ? s.state.channel : null
     if (s.selected) send({ type: 'select', sid: s.selected.sid, scids: s.selected.scids, auto: true, ...(own ? { channel: own, rejoin: true } : {}) })
     else if (own) send({ type: 'tune', channel: own, rejoin: true, auto: true })
-    if (s.audioEnabled) send({ type: 'audio', enabled: true, codec: s.codec, auto: true })
+    if (s.audioEnabled) {
+      if (audioCodec() === 'native') send(speakerSettings())
+      send({ type: 'audio', enabled: true, codec: audioCodec(), auto: true })
+    }
     // the server keeps the recording flag per connection
     if (recordingActive()?.format === 'aac') send({ type: 'record', enabled: true, auto: true })
     resubscribe()
@@ -572,7 +597,11 @@ setInterval(() => {
 }, 15000)
 
 // current subscriptions derived from the visible view
-let subs = { spectrum: false, tiiPairs: false, log: false, linking: false, serverStats: false }
+// (the program's sound output: its buffer and loudness while the page is seen)
+let subs = { spectrum: false, tiiPairs: false, log: false, linking: false, serverStats: false, speaker: !document.hidden }
+document.addEventListener('visibilitychange', () => {
+  if (subs.speaker === document.hidden) setSubscriptions({ speaker: !document.hidden })
+})
 export function setSubscriptions(p: Partial<typeof subs>) {
   subs = { ...subs, ...p }
   resubscribe()

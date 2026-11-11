@@ -1,3 +1,4 @@
+import { ChannelRow } from './ServiceView'
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
@@ -125,8 +126,8 @@ function EnsembleHead({ ens }: { ens: Ensemble }) {
         {ens.alarm && <span>{t('ens_alarm')}</span>}
       </div>
       <div className="metrics">
-        <Metric label={t('snr')} value={synced ? `${signal!.snr.toFixed(1)} dB` : '–'} tone={synced ? snrTone(signal!.snr) : undefined} />
-        <Metric label={t('freq_offset')} value={synced ? `${signal!.freqOffset.toFixed(1)} Hz` : '–'} />
+        <Metric label={t('snr')} value={synced ? `${signal!.snr.toFixed(1)} dB` : ''} tone={synced ? snrTone(signal!.snr) : undefined} />
+        <Metric label={t('freq_offset')} value={synced ? `${signal!.freqOffset.toFixed(1)} Hz` : ''} />
         {signal?.gain !== null && signal?.gain !== undefined && <Metric label={t('agc_gain')} value={`${signal.gain.toFixed(1)} dB`} />}
         {signal?.rfLevel !== null && signal?.rfLevel !== undefined && <Metric label={t('rf_level')} value={`${signal.rfLevel.toFixed(1)} dBm`} />}
         <Metric label={t('fib_error_rate')} value={(signal?.fibErrorRate ?? 0).toExponential(1)} />
@@ -163,7 +164,7 @@ function NowCard({ svc }: { svc?: Service }) {
         <div>
           <b>{svc.label}</b>
           <div className="hint" title={fmt?.sampleRate ? audioCoding(fmt) : undefined}>
-            {svc.codec ?? t('data')}{fmt?.sampleRate ? ` · ${fmt.sampleRate / 1000} kHz` : ''} · {total} kbps · {svc.protection ?? ''}
+            {svc.codec ?? t('data')}{fmt?.sampleRate ? `, ${fmt.sampleRate / 1000} kHz` : ''}, {total} kbps, {svc.protection ?? ''}
           </div>
         </div>
       </div>
@@ -189,7 +190,7 @@ function NowCard({ svc }: { svc?: Service }) {
       <div className="metrics">
         <Metric label={t('rs_ber')} value={rates.rsBer.toExponential(1)} />
         <Metric label={t('rs_uncorrectable')} value={st?.rsUncorrectable ?? 0} tone={st?.rsUncorrectable ? 'var(--sig-low)' : undefined} />
-        <Metric label={t('ens_audio_errors')} value={`${st?.auErrors ?? 0} · ${rates.auErrRate.toExponential(1)}`} tone={st?.auErrors ? 'var(--sig-low)' : undefined} />
+        <Metric label={t('ens_audio_errors')} value={`${st?.auErrors ?? 0}, ${rates.auErrRate.toExponential(1)}`} tone={st?.auErrors ? 'var(--sig-low)' : undefined} />
       </div>
     </div>
   )
@@ -203,7 +204,7 @@ function CuMap({ ens, sel, color, onPick }: { ens: Ensemble; sel: number | null;
       <div className="cu-head">
         <span className="card-title">{t('ens_capacity')}</span>
         <span className="hint">
-          {t('ens_used')} <b>{ens.usedCu} CU</b> ({share(ens.usedCu)}) · {t('audio')} {ens.audioCu} · {t('data')} {ens.dataCu} · {t('ens_free')} {ens.freeCu}
+          {t('ens_used')} <b>{ens.usedCu} CU</b> ({share(ens.usedCu)}), {t('audio')} {ens.audioCu}, {t('data')} {ens.dataCu}, {t('ens_free')} {ens.freeCu}
         </span>
       </div>
       <div className="cu-track">
@@ -212,7 +213,7 @@ function CuMap({ ens, sel, color, onPick }: { ens: Ensemble; sel: number | null;
             key={x.id}
             className={'cu-seg' + (x.audio ? '' : ' data') + (x.id === sel ? ' sel' : '')}
             style={{ left: `${(x.start / CUS) * 100}%`, width: `${(x.size / CUS) * 100}%`, background: color(x.id) }}
-            title={`${t('subchannel')} ${x.id}: ${x.services.join(', ')} · CU ${x.start}–${x.start + x.size - 1} · ${x.bitrate} kbps · ${x.protection}`}
+            title={`${t('subchannel')} ${x.id}: ${x.services.join(', ')}, CU ${x.start}-${x.start + x.size - 1}, ${x.bitrate} kbps, ${x.protection}`}
             onClick={() => onPick(x.id)}
           >
             <span>{x.services.join(', ')}</span>
@@ -259,21 +260,21 @@ function ServiceDetails({ s, ens, sub }: { s: Service; ens: Ensemble; sub: (id: 
             <b>{c.tmid === 0 ? t('audio') : t('data')}</b>
             <span className="hint">
               {' '}
-              {c.primary ? t('ens_primary') : t('ens_secondary')} · SCIdS {c.scids ?? '?'}
-              {c.label && c.label !== s.label ? ` · ${c.label}` : ''}
+              {c.primary ? t('ens_primary') : t('ens_secondary')}, SCIdS {c.scids ?? '?'}
+              {c.label && c.label !== s.label ? `, ${c.label}` : ''}
             </span>
             <div className="mono">
               {c.tmid === 0 ? `ASCTy 0x${hex(c.ctype, 2)}` : c.type}
-              {c.packetAddress !== null ? ` · packet ${c.packetAddress}` : ''}
-              {sc ? ` · ${t('subchannel')} ${sc.id}: CU ${sc.start}–${sc.start + sc.size - 1}, ${sc.protection}${sc.codeRate ? ` ${sc.codeRate}` : ''}, ${sc.bitrate} kbps` : ''}
-              {c.language ? ` · ${c.language}` : ''}
+              {c.packetAddress !== null ? `, packet ${c.packetAddress}` : ''}
+              {sc ? `, ${t('subchannel')} ${sc.id}: CU ${sc.start}-${sc.start + sc.size - 1}, ${sc.protection}${sc.codeRate ? ` ${sc.codeRate}` : ''}, ${sc.bitrate} kbps` : ''}
+              {c.language ? `, ${c.language}` : ''}
             </div>
             {c.userApps.map((u, j) => (
               <div key={j} className="mono">
                 <span className="app-badge">{appName(u.name)}</span> UAType 0x{hex(u.type, 3)}
-                {u.xpadAppType !== null ? ` · X-PAD ${u.xpadAppType}` : ''}
-                {u.dscty !== null ? ` · DSCTy 0x${hex(u.dscty, 2)}` : ''}
-                {u.data ? ` · ${u.data}` : ''}
+                {u.xpadAppType !== null ? `, X-PAD ${u.xpadAppType}` : ''}
+                {u.dscty !== null ? `, DSCTy 0x${hex(u.dscty, 2)}` : ''}
+                {u.data ? `, ${u.data}` : ''}
               </div>
             ))}
           </div>
@@ -282,7 +283,7 @@ function ServiceDetails({ s, ens, sub }: { s: Service; ens: Ensemble; sub: (id: 
       {s.linking.links.length > 0 && (
         <div className="comp">
           <b>{t('service_linking')}</b>
-          <div>{s.linking.links.map((l) => `${l.kind} ${l.id}${l.label ? ` (${l.label})` : ''} ${l.hard ? 'hard' : 'soft'}${l.active ? '' : ' inactive'} LSN ${l.lsn}`).join(' · ')}</div>
+          <div>{s.linking.links.map((l) => `${l.kind} ${l.id}${l.label ? ` (${l.label})` : ''} ${l.hard ? 'hard' : 'soft'}${l.active ? '' : ' inactive'} LSN ${l.lsn}`).join(', ')}</div>
         </div>
       )}
       {s.linking.frequencies.length > 0 && (
@@ -291,7 +292,7 @@ function ServiceDetails({ s, ens, sub }: { s: Service; ens: Ensemble; sub: (id: 
           <div>
             {s.linking.frequencies
               .map((f) => `${f.kind} ${f.ref}: ${f.frequencies.map((x) => (f.kind === 'FM' ? fmMhz(x.khz) : f.kind === 'DAB' ? `${x.channel ?? ''} ${mhz(x.khz)}` : `${x.khz} kHz`)).join(', ')}`)
-              .join(' · ')}
+              .join(', ')}
           </div>
         </div>
       )}
@@ -362,14 +363,14 @@ function ServiceTable({ ens, playing, sel, color, onPick }: { ens: Ensemble; pla
                           {sc.id}
                         </>
                       ) : (
-                        '–'
+                        ''
                       )}
                     </td>
-                    <td className="mono">{sc ? `${sc.start}–${sc.start + sc.size - 1}` : '–'}</td>
-                    <td className="num">{s.bitrate ?? sc?.bitrate ?? '–'}</td>
-                    <td>{sc?.protection ?? s.protection ?? '–'}</td>
+                    <td className="mono">{sc ? `${sc.start}-${sc.start + sc.size - 1}` : ''}</td>
+                    <td className="num">{s.bitrate ?? sc?.bitrate ?? ''}</td>
+                    <td>{sc?.protection ?? s.protection ?? ''}</td>
                     <td>{s.isAudio ? (s.codec ?? t('audio')) : t('data')}</td>
-                    <td>{s.ptyName ?? '–'}</td>
+                    <td>{s.ptyName ?? ''}</td>
                     <td>
                       {apps.map((a) => (
                         <span key={a} className="app-badge">
@@ -417,8 +418,8 @@ function NetworkInfo({ ens }: { ens: Ensemble }) {
               </b>
               {f.label ? ` ${f.label}` : ''}:{' '}
               {f.frequencies.map((x) => (f.rm <= 1 ? `${x.channel ?? ''} ${mhz(x.khz)}` : f.rm >= 8 && f.rm <= 9 ? `${fmMhz(x.khz)} MHz` : `${x.khz} kHz`)).join(', ')}
-              {f.continuity ? ` · ${t('ens_continuous')}` : ''}
-              {f.regionId ? ` · region ${f.regionId}` : ''} {cached(f.cached)}
+              {f.continuity ? `, ${t('ens_continuous')}` : ''}
+              {f.regionId ? `, region ${f.regionId}` : ''} {cached(f.cached)}
             </div>
           ))}
         </div>
@@ -432,7 +433,7 @@ function NetworkInfo({ ens }: { ens: Ensemble }) {
               {l.active ? '' : ' inactive'}
               {l.international ? ' international' : ''}
               {l.oe ? ' OE' : ''}
-              {l.keySid ? ` · ${l.keyLabel ?? l.keySid}` : ''}: {l.ids.map((x) => `${x.kind} ${x.ecc ? x.ecc + '/' : ''}${x.id}`).join(', ')} {cached(l.cached)}
+              {l.keySid ? `, ${l.keyLabel ?? l.keySid}` : ''}: {l.ids.map((x) => `${x.kind} ${x.ecc ? x.ecc + '/' : ''}${x.id}`).join(', ')} {cached(l.cached)}
             </div>
           ))}
         </div>
@@ -453,8 +454,8 @@ function NetworkInfo({ ens }: { ens: Ensemble }) {
           <div className="card-title">{t('announcements')}</div>
           {ann.map((a, i) => (
             <div key={i} className="net-row">
-              <b>{a.types.join(', ')}</b> · {t('subchannel')} {a.subch} · cluster {a.cluster}
-              {a.newFlag ? ` · ${t('ens_new')}` : ''}
+              <b>{a.types.join(', ')}</b>, {t('subchannel')} {a.subch}, cluster {a.cluster}
+              {a.newFlag ? `, ${t('ens_new')}` : ''}
             </div>
           ))}
         </div>
@@ -488,6 +489,8 @@ export default function InfoView() {
     <>
       <ViewHeader />
       <div className="view-body">
+        {/* (on a phone the channel is chosen here: the list beside the station is not there) */}
+        <ChannelRow className="chan-row-phone" />
         {ens.valid ? (
           <>
             <div className="ens-top">

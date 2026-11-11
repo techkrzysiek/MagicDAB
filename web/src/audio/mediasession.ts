@@ -123,20 +123,32 @@ function updateMetadata() {
   }
   const svc = findService(s.ensemble, s.selected?.sid)
   if (!svc) return
-  const dls = s.services[svc.sid]?.dls?.text ?? s.dlsAll[svc.sid] ?? ''
+  const data = s.services[svc.sid]
+  // what plays: artist and title of DL Plus when the station tags them, else the DLS
+  const tag = (type: number) => data?.dls?.tags.find((t) => t.contentType === type)?.text.trim()
+  const [itemTitle, itemArtist] = [tag(1), tag(4)]
+  const dls = itemTitle && itemArtist ? `${itemArtist} - ${itemTitle}` : (data?.dls?.text ?? s.dlsAll[svc.sid] ?? '')
+  // the picture (the lock screen's background): the station's slide as it is
+  // now (often the cover of what plays), else its largest logo
+  const slide = [data?.slide, s.useRadioDns ? data?.visSlide : undefined].find((x) => x && /^image\/(jpeg|png)$/.test(x.mime))
   const all = s.logos[svc.sid.toString(16).toUpperCase()]
-  const variants = s.useRadioDns ? all : all?.filter((v) => v.source !== 'RadioDNS')
-  const logo = pickLogo(variants, 160)
+  const variants = (s.useRadioDns ? all : all?.filter((v) => v.source !== 'RadioDNS'))?.filter((v) => v.mime !== 'image/svg+xml')
+  const logo = pickLogo(variants, 300)
   const url = logo ? s.logoUrls[logo.id] : undefined
   if (logo && !url) requestLogo(logo.id)
-  const key = [svc.sid, svc.label, dls, s.ensemble.label, url].join('|')
+  const artwork: MediaImage | undefined = slide
+    ? { src: slide.url, type: slide.mime }
+    : url && logo
+      ? { src: url, sizes: `${logo.width}x${logo.height}`, type: logo.mime }
+      : undefined
+  const key = [svc.sid, svc.label, dls, s.ensemble.label, artwork?.src].join('|')
   if (key === lastKey) return
   lastKey = key
   show({
     title: svc.long || svc.label,
     artist: dls,
-    album: `${s.ensemble.label ?? ''} · ${s.ensemble.channel ?? ''}`,
-    artwork: url && logo ? { src: url, sizes: `${logo.width}x${logo.height}`, type: logo.mime } : undefined,
+    album: `${s.ensemble.label ?? ''}, ${s.ensemble.channel ?? ''}`,
+    artwork,
   })
 }
 
@@ -176,7 +188,8 @@ export function initMediaSession(actions: { play: () => void; stop: () => void; 
       s.ensemble !== prev.ensemble ||
       s.fm !== prev.fm
     ) {
-      if (s.audioEnabled) updateMetadata()
+      // (the app's lock screen shows the station before it plays too)
+      if (s.audioEnabled || androidApp) updateMetadata()
     }
   })
 }

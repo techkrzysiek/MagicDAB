@@ -75,9 +75,9 @@ export default function SlidesView() {
             </button>
             {urls[open.id] && <img src={urls[open.id]} alt={open.contentName} />}
             <div className="gallery-caption">
-              {open.categoryTitle && <b>{open.categoryTitle.trim()} · </b>}
+              {open.categoryTitle && <b>{open.categoryTitle.trim()}, </b>}
               <span>{open.contentName}</span>
-              <span className="hint"> · {new Date(open.received * 1000).toLocaleString()}</span>
+              <span className="hint">, {new Date(open.received * 1000).toLocaleString()}</span>
               {safeUrl(open.clickThroughUrl) && (
                 <a href={safeUrl(open.clickThroughUrl)} target="_blank" rel="noreferrer" className="gallery-link">
                   <ExternalLink size={14} /> {t('slides_open')}

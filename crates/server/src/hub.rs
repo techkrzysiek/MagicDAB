@@ -24,6 +24,8 @@ pub enum Out {
 pub enum Codec {
     Opus,
     Pcm,
+    /// Played by the program itself (speaker.rs): nothing is sent.
+    Native,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -35,6 +37,8 @@ pub struct Subscriptions {
     pub linking: bool,
     /// Statistics of the server (admins).
     pub stats: bool,
+    /// The buffer and loudness of the program's own sound output.
+    pub speaker: bool,
 }
 
 pub struct Client {
@@ -47,6 +51,9 @@ pub struct Client {
     pub subs: Subscriptions,
     /// Real client address (forwarded headers behind tunnels / proxies).
     pub ip: String,
+    /// On this computer (loopback, not through a proxy): may use the
+    /// program's own sound output.
+    pub local: bool,
     /// Short browser / OS description.
     pub agent: String,
     pub connected: Instant,
@@ -114,6 +121,7 @@ pub struct ClientMeta {
     pub ip: String,
     pub agent: String,
     pub via: String,
+    pub local: bool,
 }
 
 impl Hub {
@@ -138,6 +146,7 @@ impl Hub {
                 codec: Codec::Opus,
                 subs: Subscriptions::default(),
                 ip: meta.ip.clone(),
+                local: meta.local,
                 agent: meta.agent.clone(),
                 connected: Instant::now(),
                 dropped: 0,
@@ -263,11 +272,24 @@ impl Hub {
                     match c.codec {
                         Codec::Opus => e.0 = true,
                         Codec::Pcm => e.1 = true,
+                        Codec::Native => {}
                     }
                 }
             }
         }
         map.into_iter().map(|(k, (o, p))| (k, o, p)).collect()
+    }
+
+    /// What the program's own sound output plays (slot, service): the station
+    /// of the newest client on this computer that asked for it.
+    pub fn speaker_service(&self) -> Option<(u32, ServiceKey)> {
+        let clients = self.clients.lock();
+        let c = clients.values().filter(|c| c.audio && c.codec == Codec::Native && c.local && !c.gated).max_by_key(|c| c.id)?;
+        Some((c.slot, c.service?))
+    }
+
+    pub fn is_local(&self, id: u64) -> bool {
+        self.clients.lock().get(&id).is_some_and(|c| c.local)
     }
 
     /// The token belongs to a client logged in as admin (chat).

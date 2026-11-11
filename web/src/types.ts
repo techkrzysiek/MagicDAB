@@ -7,6 +7,8 @@ export interface ChannelInfo {
 
 export interface Hello {
   description?: string
+  /** the program can play the sound itself (a page on its computer: speaker.rs) */
+  speaker?: boolean
   /** the chat of the listeners is on (/chat) */
   chat?: boolean
   version: string
@@ -100,6 +102,8 @@ export interface RadioState {
   channel: string | null
   frequency: number
   device: DeviceStatus
+  /** why the tuner does not work (radio/outgoing.rs device_problem), null when it does */
+  deviceProblem?: 'access' | 'busy' | 'missing' | 'driver' | 'unzip' | 'library' | 'other' | null
   deviceConfig: any
   gain: any
   scan: ScanState | null

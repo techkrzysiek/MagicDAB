@@ -114,7 +114,7 @@ export default function DxRecordings() {
         <span style={{ flex: 1 }} />
         {active ? (
           <button className="btn rec on" onClick={() => send({ type: 'dxrec', action: 'stopRecording' })} title={t('stop_record')}>
-            ● {active.channel} {active.label} · {formatDuration(active.seconds)} / {formatDuration(active.limit)} · {mb(active.bytes)} MB
+            ● {active.channel} {active.label}, {formatDuration(active.seconds)} / {formatDuration(active.limit)}, {mb(active.bytes)} MB
           </button>
         ) : (
           <button className="btn" disabled={!ensemble.valid} onClick={() => send({ type: 'dxrec', action: 'record' })}>
@@ -156,9 +156,9 @@ export default function DxRecordings() {
                     <b>{r.label}</b> <span className="hint">{r.ecc && r.eid ? `${r.ecc}${r.eid}` : ''}</span>
                     <div className="hint">
                       {reason(r.reason)}
-                      {r.tii.length ? ` · TII ${r.tii.join(', ')}` : ''}
-                      {r.side ? ` · ${t('dxrec_side')}` : ''}
-                      {ended(r.ended) ? ` · ${ended(r.ended)}` : ''}
+                      {r.tii.length ? `, TII ${r.tii.join(', ')}` : ''}
+                      {r.side ? `, ${t('dxrec_side')}` : ''}
+                      {ended(r.ended) ? `, ${ended(r.ended)}` : ''}
                     </div>
                   </td>
                   <td style={{ whiteSpace: 'normal' }}>
@@ -173,7 +173,7 @@ export default function DxRecordings() {
                             <button
                               key={s.sid}
                               className={'chip chip-btn' + (on ? ' hard' : '')}
-                              title={`${s.sid} · ${s.codec} ${s.bitrate} kbps`}
+                              title={`${s.sid}, ${s.codec} ${s.bitrate} kbps`}
                               onClick={() => play(r, sid)}
                             >
                               {s.label || s.sid}

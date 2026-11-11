@@ -4,6 +4,20 @@ use super::*;
 
 impl Radio {
     pub(super) fn apply_settings(&mut self, client: u64, s: &Value) {
+        // the Android app has none of these (Settings::phone_only)
+        let phone;
+        let s = if cfg!(target_os = "android") {
+            let mut v = s.clone();
+            if let Some(o) = v.as_object_mut() {
+                for k in ["tunnel", "serverMap", "chatEnabled", "channelMaps", "listenerMultiplex", "fm", "linking", "updateAuto"] {
+                    o.remove(k);
+                }
+            }
+            phone = v;
+            &phone
+        } else {
+            s
+        };
         let mut device_changed = false;
         if let Some(v) = s.get("stationName").and_then(|v| v.as_str()) {
             self.settings.station_name = v.to_string();
@@ -252,6 +266,8 @@ impl Radio {
         if let Some(v) = s.get("serverMap") {
             crate::servermap::apply(&mut self.settings.server_map, v);
         }
+        // (the Android app: another input than its stick stays out)
+        self.settings.phone_only(cfg!(target_os = "android"));
         // (also after a new location, tunnel or name)
         self.server_map.configure(crate::servermap::Target::from_settings(&self.settings), s.get("serverMap").is_some());
         self.store.save(&self.settings);

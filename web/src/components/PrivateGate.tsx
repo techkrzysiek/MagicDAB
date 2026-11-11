@@ -92,7 +92,7 @@ export function PrivateGate() {
           MagicDAB {version}
           {sourceUrl && (
             <>
-              {' · '}
+              {', '}
               <a href={sourceUrl} target="_blank" rel="noreferrer">
                 {t('source_code')}
               </a>

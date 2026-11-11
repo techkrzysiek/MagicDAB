@@ -106,7 +106,7 @@ export default function DxScanner() {
           {running && (
             <span>
               {t('cycle')} {running.cycle}
-              {running.cycles ? `/${running.cycles}` : ''} · {scan?.channel} ({(scan?.index ?? 0) + 1}/{scan?.total})
+              {running.cycles ? `/${running.cycles}` : ''}, {scan?.channel} ({(scan?.index ?? 0) + 1}/{scan?.total})
             </span>
           )}
         </div>

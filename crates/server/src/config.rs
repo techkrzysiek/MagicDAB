@@ -172,6 +172,9 @@ pub struct Settings {
     pub update_auto: bool,
     /// Open the web interface in the browser when the program starts (Windows).
     pub open_browser: bool,
+    /// The port this installation listens on without --listen (default_port);
+    /// 0 until the first start sets it.
+    pub listen_port: u16,
     /// Keep search engines out: noindex/nofollow, robots.txt, crawlers refused.
     pub no_index: bool,
     /// Chat of the listeners (/chat, compatible with FM-DX-Webserver).
@@ -280,11 +283,16 @@ pub struct FmConfig {
     pub antennas: u8,
     /// Last antenna.
     pub antenna: u8,
+    /// Set since the tuner is off by default (0.3.23): an older settings file
+    /// without it gets the tuner turned off once (Store::load).
+    #[serde(default)]
+    pub off_by_default: bool,
 }
 
 impl Default for FmConfig {
     fn default() -> Self {
-        FmConfig { enabled: true, port: String::new(), audio: String::new(), khz: 0, antennas: 1, antenna: 0 }
+        // (off until the admin turns it on: it would look for the tuner on every serial port)
+        FmConfig { enabled: false, port: String::new(), audio: String::new(), khz: 0, antennas: 1, antenna: 0, off_by_default: true }
     }
 }
 
@@ -347,6 +355,7 @@ impl Default for Settings {
             update_url: String::new(),
             update_auto: false,
             open_browser: true,
+            listen_port: 0,
             no_index: false,
             chat_enabled: true,
             source_url: String::new(),
@@ -371,14 +380,36 @@ impl Settings {
     /// multiplex decoded) cost battery, the chat has no one to talk to (both
     /// can be switched on in the settings), there is no FM tuner.
     fn android(s: Settings) -> Settings {
-        Settings {
-            idle_scan: IdleScan { enabled: false, ..s.idle_scan },
-            background_pad: false,
-            chat_enabled: false,
-            fm: FmConfig { enabled: false, ..s.fm },
-            linking: LinkingConfig { enabled: false, ..s.linking },
-            ..s
+        let mut s = Settings { idle_scan: IdleScan { enabled: false, ..s.idle_scan }, background_pad: false, ..s };
+        s.phone_only(true);
+        s
+    }
+
+    /// The Android app (`phone`): a receiver of its own for the one person
+    /// holding the phone, with the RTL-SDR stick on its USB and the interface
+    /// only on the phone itself. Nothing is made public (no tunnel, no listing
+    /// on the map of servers, no chat), there is no other input (no rtl_tcp,
+    /// ETI/EDI streams or FM tuner) and no first-run wizard. Applied to the
+    /// settings as loaded and to every change of them; true when it changed
+    /// something.
+    pub fn phone_only(&mut self, phone: bool) -> bool {
+        if !phone {
+            return false;
         }
+        let before = serde_json::to_value(&*self).ok();
+        if !matches!(self.device, DeviceConfig::RtlSdr { .. }) {
+            self.device = DeviceConfig::RtlSdr { index: 0, ppm: 0, bias_tee: false };
+        }
+        self.tunnel.enabled = false;
+        self.server_map.enabled = false;
+        self.chat_enabled = false;
+        self.channel_maps.clear();
+        self.listener_multiplex = false;
+        self.fm.enabled = false;
+        self.linking.enabled = false;
+        self.update_auto = false;
+        self.setup_pending = false;
+        serde_json::to_value(&*self).ok() != before
     }
 }
 
@@ -420,6 +451,27 @@ pub fn verify_password(hash: &str, password: &str) -> bool {
     }
 }
 
+/// The port of a new installation: 3222, DAB+ on a phone's keys (D 3, A 2,
+/// B 2, plus a 2); 8080 is FM-DX-Webserver's, often on the same computer.
+pub const DEFAULT_PORT: u16 = 3222;
+/// The port of the installations from before 0.3.23 (their address stays in
+/// bookmarks and port forwards).
+pub const OLD_DEFAULT_PORT: u16 = 8080;
+
+/// The port to listen on without --listen: the one the installation uses
+/// (settings), 8080 for one from before 0.3.23, DEFAULT_PORT for a new one.
+pub fn default_port(dir: &Path) -> u16 {
+    match std::fs::read_to_string(dir.join("settings.json")) {
+        Ok(s) => serde_json::from_str::<serde_json::Value>(&s)
+            .ok()
+            .and_then(|v| v["listenPort"].as_u64())
+            .and_then(|p| u16::try_from(p).ok())
+            .filter(|p| *p > 0)
+            .unwrap_or(OLD_DEFAULT_PORT),
+        Err(_) => DEFAULT_PORT,
+    }
+}
+
 pub struct Store {
     path: PathBuf,
 }
@@ -431,7 +483,7 @@ impl Store {
 
     pub fn load(&self) -> Settings {
         match std::fs::read_to_string(&self.path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
+            Ok(s) => serde_json::from_str(&s).map(Self::fm_off_once).unwrap_or_else(|e| {
                 // (kept aside: the next save would overwrite the passwords and
                 // the tunnel token in it)
                 let aside = self.path.with_extension(format!("json.invalid-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
@@ -443,6 +495,19 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings { setup_pending: true, ..Settings::default() },
             Err(_) => Settings::default(),
         }
+    }
+
+    /// The FM tuner is off by default since 0.3.23, also where an older version
+    /// left it on: once, the admin turns it on again in Settings > FM.
+    fn fm_off_once(mut s: Settings) -> Settings {
+        if !s.fm.off_by_default {
+            if s.fm.enabled {
+                log::info!("FM tuner: off by default from this version on (Settings > FM and linking turns it on)");
+            }
+            s.fm.enabled = false;
+            s.fm.off_by_default = true;
+        }
+        s
     }
 
     pub fn save(&self, s: &Settings) {
@@ -469,6 +534,56 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_phone_has_its_stick_and_nothing_public() {
+        let mut s = Settings {
+            device: DeviceConfig::RtlTcp { host: "127.0.0.1".into(), port: 1234 },
+            chat_enabled: true,
+            setup_pending: true,
+            ..Settings::default()
+        };
+        s.tunnel.enabled = true;
+        s.server_map.enabled = true;
+        assert!(!s.clone().phone_only(false));
+        assert!(s.phone_only(true));
+        assert!(matches!(s.device, DeviceConfig::RtlSdr { .. }));
+        assert!(!s.tunnel.enabled && !s.server_map.enabled && !s.chat_enabled && !s.setup_pending);
+        // (once is enough)
+        assert!(!s.phone_only(true));
+    }
+
+    #[test]
+    fn a_new_installation_gets_the_new_port_an_old_one_keeps_8080() {
+        let dir = std::env::temp_dir().join(format!("magicdab-port-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(default_port(&dir), DEFAULT_PORT);
+        std::fs::write(dir.join("settings.json"), r#"{"stationName": "x"}"#).unwrap();
+        assert_eq!(default_port(&dir), OLD_DEFAULT_PORT);
+        std::fs::write(dir.join("settings.json"), r#"{"listenPort": 9123}"#).unwrap();
+        assert_eq!(default_port(&dir), 9123);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_fm_tuner_goes_off_once_after_the_update() {
+        let dir = std::env::temp_dir().join(format!("magicdab-fm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(&dir);
+        // a file of an older version: the tuner on, no mark
+        std::fs::write(dir.join("settings.json"), r#"{"fm": {"enabled": true, "port": "COM5", "khz": 98100}}"#).unwrap();
+        let s = store.load();
+        assert!(!s.fm.enabled && s.fm.off_by_default);
+        assert_eq!((s.fm.port.as_str(), s.fm.khz), ("COM5", 98100));
+        // turned on again by the admin: it stays on
+        let mut s = s;
+        s.fm.enabled = true;
+        store.save(&s);
+        assert!(store.load().fm.enabled);
+        // a new installation: off
+        assert!(!Settings::default().fm.enabled);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn background_addresses() {

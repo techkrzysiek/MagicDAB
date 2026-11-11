@@ -388,7 +388,7 @@ mod os {
         if module == 0 {
             return None;
         }
-        let f = unsafe { GetProcAddress(module, b"GetThreadDescription\0".as_ptr()) };
+        let f = unsafe { GetProcAddress(module, c"GetThreadDescription".as_ptr().cast()) };
         (!f.is_null()).then(|| unsafe { std::mem::transmute::<*const core::ffi::c_void, GetThreadDescription>(f) })
     }
 

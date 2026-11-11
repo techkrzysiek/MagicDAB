@@ -151,7 +151,7 @@ impl Radio {
                     // (from half a second on, which a listener's buffer may not
                     // bridge, when someone listens: the dropouts the browsers
                     // report are then the server's, not the network's)
-                    let heard = self.wants.get(&key).is_some_and(|w| w.0 || w.1);
+                    let heard = self.wants.get(&key).is_some_and(|w| w.0 || w.1) || self.speaker_on == Some((0, key));
                     if gap > Duration::from_millis(if heard { 500 } else { 1500 }) && gap < Duration::from_secs(600) {
                         log::info!(
                             "audio of {} interrupted for {:.1} s ({})",
@@ -167,9 +167,13 @@ impl Radio {
                         let out = l.push_dab(&pcm, now);
                         if !out.is_empty() {
                             self.audio.push(&self.hub, key, &out, o, p);
+                            self.speaker_feed(0, key, &out);
                         }
                     }
-                    None => self.audio.push(&self.hub, key, &pcm, o, p),
+                    None => {
+                        self.audio.push(&self.hub, key, &pcm, o, p);
+                        self.speaker_feed(0, key, &pcm);
+                    }
                 }
             }
             RxEvent::AudioFormat { key, format, bitrate } => {

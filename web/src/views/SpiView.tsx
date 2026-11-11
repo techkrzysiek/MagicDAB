@@ -111,14 +111,14 @@ function Bearers({ els }: { els: Element[] }) {
           <div key={b.id} className="spi-bearer">
             <span className="link-kind">DAB</span>
             <span className="spi-b-main">
-              EId {b.eid!.toString(16).toUpperCase().padStart(4, '0')} · SId {b.sid} · {b.cc}
-              {b.scids !== '0' ? ` · SCIdS ${b.scids}` : ''}
+              EId {b.eid!.toString(16).toUpperCase().padStart(4, '0')}, SId {b.sid}, {b.cc}
+              {b.scids !== '0' ? `, SCIdS ${b.scids}` : ''}
               {muxes.map((m) => (
                 <span key={m} className="mux-chip">
                   {m}
                 </span>
               ))}
-              <span className="hint">{[b.cost && `cost ${b.cost}`, b.mime].filter(Boolean).join(' · ')}</span>
+              <span className="hint">{[b.cost && `cost ${b.cost}`, b.mime].filter(Boolean).join(', ')}</span>
             </span>
           </div>
         )
@@ -128,7 +128,7 @@ function Bearers({ els }: { els: Element[] }) {
           <span className="link-kind">FM</span>
           <span className="spi-b-main">
             <span>
-              PI {pi} · {g.khz.size} {t('spi_freqs')}
+              PI {pi}, {g.khz.size} {t('spi_freqs')}
             </span>
             <span className="hint">{costs(g.cost)}</span>
             <span className="spi-freqs">
@@ -155,7 +155,7 @@ function Bearers({ els }: { els: Element[] }) {
               <span title={b.id}>{shortUrl(b.id)}</span>
             )}
             <span className="hint">
-              {[b.bitrate && `${b.bitrate} kbps`, b.mime, b.cost && `cost ${b.cost}`, b.offset && `+${b.offset} ms`].filter(Boolean).join(' · ')}
+              {[b.bitrate && `${b.bitrate} kbps`, b.mime, b.cost && `cost ${b.cost}`, b.offset && `+${b.offset} ms`].filter(Boolean).join(', ')}
             </span>
           </span>
         </div>
@@ -222,7 +222,7 @@ function MediaItem({ m, onOpen }: { m: Element; onOpen: (p: Picture) => void }) 
   const src = useMediaSrc(url)
   const size = w && h ? `${w}×${h}` : m.getAttribute('type') ?? ''
   return (
-    <button className="spi-logo" title={src ? url : `${url} – ${t('not_cached')}`} onClick={() => src && onOpen({ src, url, size, mime })} disabled={!src}>
+    <button className="spi-logo" title={src ? url : `${url}: ${t('not_cached')}`} onClick={() => src && onOpen({ src, url, size, mime })} disabled={!src}>
       {src ? <img src={src} alt="" loading="lazy" /> : <ImageIcon size={18} />}
       <span className="hint">
         {size} {mime.replace('image/', '')}
@@ -295,7 +295,7 @@ function Extras({ el }: { el: Element }) {
       })}
       {rdns && (
         <div className="spi-row hint">
-          RadioDNS: {rdns.getAttribute('fqdn')} · {rdns.getAttribute('serviceIdentifier')}
+          RadioDNS: {rdns.getAttribute('fqdn')}, {rdns.getAttribute('serviceIdentifier')}
         </div>
       )}
     </>
@@ -422,7 +422,7 @@ function DocDetail({ doc, onBack }: { doc: SpiDoc; onBack: () => void }) {
         <div className="spi-title">
           <b>{doc.kind === 'epg' ? t('spi_pi') : doc.kind === 'serviceInformation' ? t('spi_si') : doc.kind}</b>
           <span className="hint">
-            {doc.source} · {doc.scope} · {fmtSize(doc.size)} · {whenShort(doc.received)}
+            {doc.source}, {doc.scope}, {fmtSize(doc.size)}, {whenShort(doc.received)}
           </span>
           <span className="hint spi-url">{doc.url}</span>
         </div>
@@ -473,7 +473,7 @@ function SpiHealth({ issues }: { issues: SpiIssue[] }) {
     <div className="spi-health">
       <div className="spi-group">
         {t('spih_title')}
-        {!issues.length && <span className="spi-health-ok"> · {t('spih_ok')}</span>}
+        {!issues.length && <span className="spi-health-ok">, {t('spih_ok')}</span>}
       </div>
       {issues.map((i, n) => (
         <div key={n} className={'spi-issue l' + i.level} title={i.level === 2 ? t('spih_level2') : undefined}>
@@ -545,8 +545,8 @@ export default function SpiView() {
                     <b>{p.label || p.sid}</b>
                     <span className="hint">
                       {p.objects
-                        ? `${p.objectsDone}/${p.objects} · ${fmtSize(p.bytesDone)} / ${fmtSize(p.bytes)}`
-                        : `${p.objectsDone} ${t('spi_objects')} · ${fmtSize(p.bytesDone)}`}
+                        ? `${p.objectsDone}/${p.objects}, ${fmtSize(p.bytesDone)} / ${fmtSize(p.bytes)}`
+                        : `${p.objectsDone} ${t('spi_objects')}, ${fmtSize(p.bytesDone)}`}
                     </span>
                   </div>
                   <div className="progress">
@@ -572,7 +572,7 @@ export default function SpiView() {
                   <span className="spi-item-txt">
                     <span className="spi-item-name">{d.scope}</span>
                     <span className="hint">
-                      {d.items} {d.kind === 'epg' ? t('spi_programmes') : t('services').toLowerCase()} · {fmtSize(d.size)} · {whenShort(d.received)}
+                      {d.items} {d.kind === 'epg' ? t('spi_programmes') : t('services').toLowerCase()}, {fmtSize(d.size)}, {whenShort(d.received)}
                     </span>
                   </span>
                   {d.source === 'SPI' ? <Radio size={15} className="hint" /> : null}

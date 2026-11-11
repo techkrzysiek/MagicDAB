@@ -2,6 +2,7 @@ import { useStore, save, sessionSet, fixedChannelOf } from './store'
 import { dropSlide, send } from './ws'
 import { player } from './audio/player'
 import { initMediaSession, mediaStart, mediaStop } from './audio/mediasession'
+import { nativeAudio, speakerSettings } from './audio/speaker'
 
 /** Counts starts and stops: a stop while a start is still loading wins. */
 let audioRequest = 0
@@ -12,6 +13,13 @@ export async function startAudio() {
   const request = ++audioRequest
   // the media element must start within the user gesture (iOS)
   mediaStart()
+  if (nativeAudio()) {
+    // the program plays it: nothing to decode or play here
+    s.set({ audioEnabled: true, speakerError: null })
+    send(speakerSettings())
+    send({ type: 'audio', enabled: true, codec: 'native' })
+    return
+  }
   try {
     await player.start()
   } catch (e) {
@@ -48,10 +56,19 @@ export function stepService(dir: 1 | -1) {
   selectService(next.sid, 0)
 }
 
-initMediaSession({ play: () => startAudio(), stop: () => stopAudio(), step: stepService })
+initMediaSession({ play: () => play(), stop: () => stopAudio(), step: stepService })
 
 export function toggleAudio() {
   if (useStore.getState().audioEnabled) stopAudio()
+  else play()
+}
+
+/** Play; with nothing chosen yet (a new installation after its first scan)
+ *  the first station of the multiplex received. */
+export function play() {
+  const s = useStore.getState()
+  const first = (s.ensemble.services ?? []).find((x) => x.isAudio)
+  if (!s.selected && s.ensemble.valid && first) selectService(first.sid, 0)
   else startAudio()
 }
 
@@ -145,7 +162,30 @@ export function stepChannel(dir: 1 | -1) {
 export function setVolume(v: number) {
   useStore.getState().set({ volume: v, muted: false })
   save('volume', v)
+  applyVolume()
+}
+
+function applyVolume() {
   player.applyVolume()
+  if (nativeAudio() && useStore.getState().audioEnabled) send(speakerSettings())
+}
+
+/** The buffer chosen (seconds). */
+export function setBuffer(v: number) {
+  save('buffer', v)
+  player.setTarget(v)
+  if (nativeAudio() && useStore.getState().audioEnabled) send(speakerSettings())
+}
+
+/** The program plays the sound, or the page does (Settings). */
+export function setNativeAudio(on: boolean) {
+  const s = useStore.getState()
+  const playing = s.audioEnabled
+  if (playing) stopAudio()
+  s.set({ nativeAudio: on })
+  save('nativeAudio', on)
+  // (a click: the page may start its sound)
+  if (playing) void startAudio()
 }
 
 /** Louder or quieter by `delta` (keyboard); unmutes like the slider. */
@@ -157,14 +197,14 @@ export function stepVolume(delta: number) {
 export function toggleMute() {
   const s = useStore.getState()
   s.set({ muted: !s.muted })
-  player.applyVolume()
+  applyVolume()
 }
 
 export function setCodec(codec: 'opus' | 'pcm') {
   const s = useStore.getState()
   s.set({ codec })
   save('codec', codec)
-  if (s.audioEnabled) send({ type: 'audio', enabled: true, codec })
+  if (s.audioEnabled && !nativeAudio()) send({ type: 'audio', enabled: true, codec })
 }
 
 export function login(password: string) {

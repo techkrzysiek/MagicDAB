@@ -50,6 +50,7 @@ mod scan;
 mod settings;
 mod slides;
 mod slots;
+mod speaker;
 mod stats;
 mod streams;
 
@@ -92,6 +93,11 @@ pub enum Command {
     UpdateInstalled(Result<(), String>),
     /// Audio of the FM tuner (48 kHz interleaved stereo).
     FmAudio(Vec<f32>),
+    /// The Windows firewall exception asked for by a client (firewall.rs).
+    Firewall {
+        client: u64,
+        result: Result<(), String>,
+    },
     Shutdown,
 }
 
@@ -369,6 +375,12 @@ pub struct Radio {
     streams_wanted: HashSet<u32>,
     stream_encoders: HashMap<ServiceKey, (magicdab_codecs::opus::OpusEncoder, Vec<f32>)>,
     streams_policy_at: Instant,
+    /// The program's own sound output (speaker.rs, made when first asked
+    /// for), what it plays (slot, service) and when its state went last to
+    /// the clients that show it.
+    speaker: Option<crate::speaker::Speaker>,
+    speaker_on: Option<(u32, ServiceKey)>,
+    speaker_reported: Instant,
     /// Per streamed station: when its audio came last, and up to when the
     /// silence standing for it was sent (radio/streams.rs).
     stream_audio_at: HashMap<u32, Instant>,
@@ -427,6 +439,13 @@ impl Radio {
             if !pw.is_empty() {
                 settings.admin_password_hash = Some(config::hash_password(&pw));
             }
+        }
+        if settings.phone_only(cfg!(target_os = "android")) {
+            log::info!("settings of the Android app: the stick on USB, nothing public");
+        }
+        // (the port of this installation from now on, also without --listen: config::default_port)
+        if settings.listen_port == 0 {
+            settings.listen_port = listen_port;
         }
         if settings.admin_password_hash.is_none() {
             let pw: String = (0..10).map(|_| (b'a' + rand::random::<u8>() % 26) as char).collect();
@@ -561,6 +580,9 @@ impl Radio {
             streams_wanted: HashSet::new(),
             stream_encoders: HashMap::new(),
             streams_policy_at: Instant::now(),
+            speaker: None,
+            speaker_on: None,
+            speaker_reported: Instant::now(),
             stream_audio_at: HashMap::new(),
             stream_silence_to: HashMap::new(),
             stream_silence: None,
@@ -731,6 +753,19 @@ impl Radio {
                 }
                 self.broadcast_update();
             }
+            Command::Firewall { client, result } => {
+                let message = match &result {
+                    Ok(()) => "firewall_allowed",
+                    Err(e) if e == "refused" => "firewall_refused",
+                    Err(e) => {
+                        log::warn!("Windows firewall: {e}");
+                        "firewall_failed"
+                    }
+                };
+                self.notice(client, if result.is_ok() { "info" } else { "warning" }, message);
+                let m = text(&self.settings_json());
+                self.hub.broadcast(m, |c| c.admin);
+            }
             Command::UpdateInstalled(r) => match r {
                 Ok(()) => {
                     log::info!("restarting after the update");
@@ -775,11 +810,13 @@ impl Radio {
             Command::FmAudio(pcm) => {
                 let (o, p) = self.wants.get(&FM_KEY).copied().unwrap_or((false, false));
                 self.audio.push(&self.hub, FM_KEY, &pcm, o, p);
+                self.speaker_feed(0, FM_KEY, &pcm);
                 if let (Some(l), Some(key)) = (self.linker.as_mut(), self.follower.service()) {
                     let out = l.push_fm(&pcm, Instant::now());
                     if !out.is_empty() {
                         let (o, p) = self.wants.get(&key).copied().unwrap_or((false, false));
                         self.audio.push(&self.hub, key, &out, o, p);
+                        self.speaker_feed(0, key, &out);
                     }
                 }
             }
@@ -1082,6 +1119,7 @@ impl Radio {
 
     fn tick(&mut self) {
         self.check_overload();
+        self.speaker_tick();
         self.streams_tick();
         if self.scan.is_some() {
             self.scan_step();
@@ -1293,8 +1331,10 @@ impl Radio {
             }
         }
         // a device that could not be started (not plugged in, no driver yet, server down);
-        // a local rtl_tcp refuses at once until its driver is up: tried more often
-        let retry = Duration::from_secs(if self.settings.device.local_rtltcp() { 2 } else { 10 });
+        // a local rtl_tcp refuses at once until its driver is up, and on a phone the
+        // stick comes once its user allows it: tried more often
+        let quick = self.settings.device.local_rtltcp() || cfg!(target_os = "android");
+        let retry = Duration::from_secs(if quick { 2 } else { 10 });
         if !self.device_running
             && self.device_error.is_some()
             && self.eti_input.is_none()

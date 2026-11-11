@@ -4,9 +4,9 @@ import { useStore, save, isLocal } from '../store'
 import type { ServerMapStatus } from '../store'
 import { useT } from '../i18n'
 import { ViewHeader } from '../components/common'
-import { importTxDb, login, logout, saveSettings, setCodec } from '../actions'
+import { importTxDb, login, logout, saveSettings, setBuffer as applyBuffer, setCodec, setNativeAudio } from '../actions'
 import { send } from '../ws'
-import { player, defaultBuffer } from '../audio/player'
+import { defaultBuffer } from '../audio/player'
 import { Card, Choice, Row, SaveBar, Toggle, fieldOk, rule, useDraft, useField } from '../components/SettingsKit'
 import { LocationMap, parseLocation } from '../components/SetupWizard'
 import AccessSettings from './AccessSettings'
@@ -18,6 +18,8 @@ type Tab = 'general' | 'station' | 'receiver' | 'fm' | 'tii' | 'internet' | 'acc
 
 /** Tabs of the server settings (admins), in this order. */
 const SERVER_TABS: Tab[] = ['station', 'receiver', 'fm', 'tii', 'internet', 'access', 'tunnel']
+/** Not in the Android app: its server is for the phone only (Settings::phone_only). */
+const PUBLIC_TABS: Tab[] = ['access', 'tunnel', 'fm']
 
 /** Where each field of the draft is (a mark on the tab with changes). */
 const TAB_OF: Record<string, Tab> = {
@@ -61,6 +63,9 @@ function General() {
   const lang = useStore((s) => s.lang)
   const theme = useStore((s) => s.theme)
   const codec = useStore((s) => s.codec)
+  const canNative = useStore((s) => !!s.hello?.speaker)
+  const native = useStore((s) => s.nativeAudio)
+  const speakerError = useStore((s) => s.speakerError)
   const set = useStore((s) => s.set)
   const admin = useStore((s) => s.admin)
   const hasBackground = useStore((s) => !!s.hello?.backgroundImage)
@@ -75,7 +80,7 @@ function General() {
   })
   return (
     <>
-      <p className="set-intro hint">{t('set_local_note')}</p>
+      {!androidApp && <p className="set-intro hint">{t('set_local_note')}</p>}
       <Card title={t('set_card_ui')}>
         <Row label={t('language')}>
           <Choice
@@ -115,14 +120,22 @@ function General() {
             />
           </Row>
         )}
-        <Row label={t('kb_title')} hint={t('kb_hint_settings')}>
-          <button className="btn" onClick={() => set({ shortcutsOpen: true })}>
-            {t('kb_show')}
-          </button>
-        </Row>
+        {!androidApp && (
+          <Row label={t('kb_title')} hint={t('kb_hint_settings')}>
+            <button className="btn" onClick={() => set({ shortcutsOpen: true })}>
+              {t('kb_show')}
+            </button>
+          </Row>
+        )}
       </Card>
       <Card title={t('set_card_audio')}>
-        {isLocal() && (
+        {canNative && (
+          <Row label={t('audio_native')} hint={speakerError ? `${t('audio_native_error')}: ${speakerError}` : t('audio_native_hint')}>
+            <Toggle checked={native} onChange={setNativeAudio} />
+          </Row>
+        )}
+        {/* (the app plays PCM from its own server) */}
+        {isLocal() && !androidApp && !(canNative && native) && (
           <Row label={t('audio_codec')}>
             <select value={codec} onChange={(e) => setCodec(e.target.value as 'opus' | 'pcm')}>
               <option value="opus">{t('codec_opus')}</option>
@@ -141,8 +154,7 @@ function General() {
               onChange={(e) => {
                 const v = parseFloat(e.target.value)
                 setBuffer(v)
-                save('buffer', v)
-                player.setTarget(v)
+                applyBuffer(v)
               }}
             />
             <span className="set-value">{buffer.toFixed(2)} s</span>
@@ -226,6 +238,8 @@ function Station() {
   const t = useT()
   const s = useStore((st) => st.settings?.settings)
   const windows = useStore((st) => st.update?.platform === 'windows-x64')
+  // (null: not Windows, or not checked yet)
+  const firewall = useStore((st) => st.settings?.firewall as boolean | null | undefined)
   const [name, setName] = useField('stationName', s?.stationName ?? '')
   const [desc, setDesc] = useField('description', s?.description ?? '')
   const [loc, setLoc] = useField('location', locText(s?.location))
@@ -241,9 +255,11 @@ function Station() {
         <Row label={t('station_name')} hint={t('set_station_name_hint')}>
           <input type="text" className={fieldOk('stationName', name) ? '' : 'invalid'} value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
         </Row>
-        <Row label={t('server_description')} hint={t('server_description_help')} wide>
-          <textarea rows={4} value={desc} onChange={(e) => setDesc(e.target.value)} />
-        </Row>
+        {!androidApp && (
+          <Row label={t('server_description')} hint={t('server_description_help')} wide>
+            <textarea rows={4} value={desc} onChange={(e) => setDesc(e.target.value)} />
+          </Row>
+        )}
         <Row label={t('rx_location')} hint={t('set_location_hint')}>
           <div className="set-inline">
             <input type="text" className={fieldOk('location', loc) ? '' : 'invalid'} value={loc} placeholder="52.2297, 21.0122" onChange={(e) => setLoc(e.target.value)} />
@@ -265,7 +281,8 @@ function Station() {
           </div>
         </Row>
       </Card>
-      <ServerMap />
+      {!androidApp && <ServerMap />}
+      {!androidApp && (
       <Card title={t('set_card_setup')}>
         <Row label={t('setup_title')} hint={t('setup_open_help')}>
           <button className="btn" onClick={() => useStore.getState().set({ setupOpen: true })}>
@@ -280,7 +297,19 @@ function Station() {
             <Toggle checked={!openBrowser} onChange={(v) => setOpenBrowser(!v)} />
           </Row>
         )}
+        {firewall != null && (
+          <Row label={t('firewall')} hint={firewall ? t('firewall_ok') : t('firewall_hint')}>
+            {firewall ? (
+              <span className="set-value">{t('firewall_on')}</span>
+            ) : (
+              <button className="btn" onClick={() => send({ type: 'firewall' })}>
+                {t('firewall_allow')}
+              </button>
+            )}
+          </Row>
+        )}
       </Card>
+      )}
     </>
   )
 }
@@ -434,6 +463,8 @@ function Receiver() {
   if (lockSvc && !stations.some((x) => x.sid === lockSvc)) stations.push({ sid: lockSvc, label: lockSvc })
   return (
     <>
+      {/* (a server's operator keeps it on a channel for the listeners; a phone has one listener) */}
+      {!androidApp && (
       <Card title={t('set_card_lock')} note={t('set_lock_note')}>
         <Row label={t('set_lock_channel')}>
           <select value={lockCh ?? ''} onChange={(e) => setLockCh(e.target.value || null)}>
@@ -456,7 +487,9 @@ function Receiver() {
           </select>
         </Row>
       </Card>
+      )}
       <Card title={t('set_card_input')}>
+        {!androidApp && (
         <Row label={t('device')}>
           <select
             value={dev.type}
@@ -467,21 +500,24 @@ function Receiver() {
               else if (type === 'rtlSdr') setDev({ type, index: 0, ppm: 0, bias_tee: false })
               else if (type === 'rtlTcp') setDev({ type, host: '127.0.0.1', port: 1234 })
               else if (type === 'rawFile') setDev({ type, path: '', looping: true })
+              else if (type === 'hackrf') setDev({ type, serial: '', lna: 16, vga: 30 })
               else setDev({ type })
             }}
           >
             <option value="rtlSdr">RTL-SDR</option>
             <option value="rtlTcp">rtl_tcp</option>
             <option value="dtr100">DTR-100 (USB DAB)</option>
+            <option value="hackrf">HackRF One</option>
             <option value="rawFile">{t('set_raw_file')}</option>
             <option value="none">{t('no_tuner')}</option>
           </select>
         </Row>
+        )}
         {dev.type === 'rtlSdr' && (
           <>
             <Row label={t('rtl_index')}>
               <select value={dev.index ?? 0} onChange={(e) => setDev({ ...dev, index: parseInt(e.target.value) })}>
-                {(devices.length ? devices : ['0: –']).map((x, i) => (
+                {(devices.length ? devices : ['0']).map((x, i) => (
                   <option key={i} value={i}>
                     {x}
                   </option>
@@ -494,6 +530,32 @@ function Receiver() {
           </>
         )}
         {dev.type === 'dtr100' && <div className="hint">{t('set_dtr100_hint')}</div>}
+        {dev.type === 'hackrf' && (
+          <>
+            <Row label={t('set_hackrf_serial')} hint={t('set_hackrf_serial_hint')}>
+              <input type="text" value={dev.serial ?? ''} onChange={(e) => setDev({ ...dev, serial: e.target.value.trim() })} />
+            </Row>
+            <Row label="LNA" hint={t('set_hackrf_hint')}>
+              <div className="set-inline">
+                <select value={dev.lna ?? 16} onChange={(e) => setDev({ ...dev, lna: parseInt(e.target.value) })}>
+                  {[0, 8, 16, 24, 32, 40].map((g) => (
+                    <option key={g} value={g}>
+                      {g} dB
+                    </option>
+                  ))}
+                </select>
+                VGA
+                <select value={dev.vga ?? 30} onChange={(e) => setDev({ ...dev, vga: parseInt(e.target.value) })}>
+                  {Array.from({ length: 32 }, (_, i) => i * 2).map((g) => (
+                    <option key={g} value={g}>
+                      {g} dB
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </Row>
+          </>
+        )}
         {dev.type === 'rtlTcp' && (
           <Row label={t('host_port')} hint={t('set_rtltcp_hint')}>
             <div className="set-inline">
@@ -516,12 +578,12 @@ function Receiver() {
           <Row label={t('set_device_state')}>
             <div className="set-status">
               <span className={d.error ? 'bad' : ''}>
-                {d.name || '–'}
-                {d.error ? ` – ${d.error}` : ''}
+                {d.name || ''}
+                {d.error ? `: ${d.error}` : ''}
               </span>
               {d.kind === 'rtltcp' && (
                 <span className="hint">
-                  {t('stream_rate')}: {d.streamRate ? `${d.streamRate.toFixed(0)} kS/s` : '–'} · {t('stream_stalls')}: {d.stalls ?? 0}
+                  {t('stream_rate')}: {d.streamRate ? `${d.streamRate.toFixed(0)} kS/s` : ''}, {t('stream_stalls')}: {d.stalls ?? 0}
                   {d.lastStallMs ? ` (${t('last')}: ${(d.lastStallMs / 1000).toFixed(1)} s)` : ''}
                 </span>
               )}
@@ -533,7 +595,7 @@ function Receiver() {
         </Row>
       </Card>
       <Gain />
-      <ChannelMaps />
+      {!androidApp && <ChannelMaps />}
       <Card title={t('set_card_scan')}>
         <Row label={t('idle_scan')} hint={t('set_idle_hint')}>
           <Toggle checked={!!idle.enabled} onChange={(v) => setIdle({ ...idle, enabled: v })} />
@@ -568,6 +630,7 @@ function Receiver() {
           </select>
         </Row>
       </Card>
+      {!androidApp && (
       <Card title={t('set_card_streams')}>
         <Row label={t('streams_on')} hint={t('set_streams_hint').replace('{url}', `${location.origin}${location.pathname.replace(/[^/]*$/, '')}stream/<SId>`)}>
           <Toggle checked={!!streams.enabled} onChange={(v) => setStreams({ ...streams, enabled: v })} />
@@ -585,6 +648,7 @@ function Receiver() {
           </select>
         </Row>
       </Card>
+      )}
     </>
   )
 }
@@ -836,6 +900,7 @@ function Internet() {
           <Toggle checked={vis && internet} disabled={!internet} onChange={setVis} />
         </Row>
       </Card>
+      {!androidApp && (
       <Card title={t('set_card_notify')}>
         <Row
           label={t('discord_webhook')}
@@ -862,6 +927,8 @@ function Internet() {
           </div>
         </Row>
       </Card>
+      )}
+      {!androidApp && (
       <Card title={t('set_card_listeners')}>
         <Row label={t('set_chat_enabled')}>
           <Toggle checked={chat} onChange={setChat} />
@@ -870,6 +937,7 @@ function Internet() {
           <Toggle checked={noIndex} onChange={setNoIndex} />
         </Row>
       </Card>
+      )}
       {/* (the Android app is updated as an app) */}
       {!androidApp && <Updates />}
     </>
@@ -901,7 +969,7 @@ function Updates() {
             <Toggle checked={auto} onChange={setAuto} />
           </Row>
           <Row
-            label={u.busy ? t('upd_busy') : u.available ? t('upd_available').replace('{v}', u.available.version) : u.url && !u.error ? t('upd_latest') : '–'}
+            label={u.busy ? t('upd_busy') : u.available ? t('upd_available').replace('{v}', u.available.version) : u.url && !u.error ? t('upd_latest') : ''}
             hint={
               u.error ? (
                 <span className="bad">{u.error}</span>
@@ -948,7 +1016,7 @@ function Tunnel() {
           <div className="set-status">
             <span className={'tunnel-state ' + state}>
               {t('tunnel_state_' + state)}
-              {status?.message ? ` – ${status.message}` : ''}
+              {status?.message ? `: ${status.message}` : ''}
             </span>
             {url && !changed && (
               <a href={url} target="_blank" rel="noreferrer">
@@ -998,7 +1066,10 @@ export default function SettingsView() {
   // (no FM tuner in the Android app)
   const fmAvailable = useStore((s) => s.settings?.fmAvailable !== false)
   // (the server's tabs, TII among them, only for the logged in admin)
-  const tabs: Tab[] = admin ? ['general', ...SERVER_TABS.filter((x) => x !== 'fm' || fmAvailable)] : ['general']
+  // (the Android app: the stick of the phone, nothing made public)
+  const tabs: Tab[] = admin
+    ? ['general', ...SERVER_TABS.filter((x) => (x !== 'fm' || fmAvailable) && !(androidApp && PUBLIC_TABS.includes(x)))]
+    : ['general']
   // (logged out: back to what is left)
   const current = tabs.includes(tab) ? tab : 'general'
   // (another tab starts at its top; on a phone the row of tabs shows the chosen one)
@@ -1011,7 +1082,8 @@ export default function SettingsView() {
     const el = n?.querySelector<HTMLElement>('.settings-nav-item.active')
     if (n && el && n.scrollWidth > n.clientWidth) n.scrollLeft = el.offsetLeft - (n.clientWidth - el.offsetWidth) / 2
   }, [current])
-  const label = (x: Tab) => t(x === 'station' ? 'set_tab_station' : x === 'fm' ? 'set_tab_fm' : x === 'internet' ? 'set_tab_internet' : x)
+  const label = (x: Tab) =>
+    t(x === 'station' ? (androidApp ? 'set_tab_station_app' : 'set_tab_station') : x === 'fm' ? 'set_tab_fm' : x === 'internet' ? 'set_tab_internet' : x)
   const item = (x: Tab) => (
     <button key={x} role="tab" aria-selected={current === x} className={'settings-nav-item' + (current === x ? ' active' : '')} onClick={() => setTab(x)}>
       {label(x)}
@@ -1027,7 +1099,7 @@ export default function SettingsView() {
           {item('general')}
           {admin && <div className="settings-nav-group">{t('set_group_server')}</div>}
           {tabs.filter((x) => x !== 'general').map(item)}
-          {admin && (
+          {admin && !androidApp && (
             <button className="settings-nav-item logout" onClick={logout}>
               {t('logout')}
             </button>

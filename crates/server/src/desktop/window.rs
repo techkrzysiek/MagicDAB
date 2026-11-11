@@ -215,13 +215,13 @@ enum Close {
 /// The question about closing when the page cannot ask it.
 fn ask_native(hwnd: isize) -> Close {
     let text = tr(
-        "Schować MagicDAB do zasobnika?\n\nTak – schowaj okno, odbiornik działa dalej (słuchacze w sieci, ikona przy zegarze)\nNie – zamknij program",
-        "Hide MagicDAB in the tray?\n\nYes – hide the window, the receiver keeps running (listeners in the network, icon next to the clock)\nNo – quit the program",
+        "Zakończyć MagicDAB?\n\nTak: MagicDAB się wyłącza (dźwięk i słuchacze w sieci też)\nNie: okno znika, MagicDAB działa dalej (ikona przy zegarze)",
+        "Quit MagicDAB?\n\nYes: MagicDAB ends (the sound and the listeners in the network too)\nNo: the window goes, MagicDAB runs on (icon next to the clock)",
     );
     let (t, c) = (wide(text), wide("MagicDAB"));
     match unsafe { MessageBoxW(hwnd, t.as_ptr(), c.as_ptr(), MB_YESNOCANCEL | MB_ICONQUESTION) } {
-        IDYES => Close::Hide,
-        IDNO => Close::Quit,
+        IDYES => Close::Quit,
+        IDNO => Close::Hide,
         _ => Close::Cancel,
     }
 }
