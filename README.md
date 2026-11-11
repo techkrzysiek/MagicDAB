@@ -58,23 +58,80 @@ listeners in the browser, each on the station of their choice.
 - Port: 3222, DAB+ on a phone's keys (8080 is often FM-DX-Webserver's on
   the same computer); an installation from before 0.3.23 keeps 8080,
   `--listen` sets another one.
-- Docker: `docker compose up -d` (see `docker-compose.yml`), web interface on
-  port 3222 of the host (8080 inside the container); the admin password is
-  logged at the first start. The image is `ghcr.io/techkrzysiek/magicdab`;
-  Watchtower in the same file installs each new release at night.
-- Windows: `build/windows.sh` builds `dist/windows/MagicDAB-<version>-windows-x64.zip`
-  (see `build/windows/README.txt`).
-- Linux (x64, arm64): `build/linux.sh` builds `dist/linux/MagicDAB-<version>-linux-<arch>.zip`
-  for the architecture of the build host: one program with the interface
-  inside and the RTL-SDR library next to it (see `build/linux/README.txt`).
-- Android: `build/android.sh` builds the APK in Docker (see
-  `docs/android.md`). The app opens the RTL-SDR stick on USB OTG itself (no
-  driver app) and plays in the background with the screen off; its receiver
-  is for the phone only: no tunnel, no server map, no chat.
-- macOS (untested): `build/macos.sh` on a Mac builds one program for Apple
-  silicon and Intel (see `build/macos/README.txt`).
-- From source: `cargo build --release -p magicdab` (needs libfaad, libopus,
-  librtlsdr) and `npm ci && npm run build` in `web/`.
+- Docker: see [Docker on Linux](#docker-on-linux) below. The image is
+  `ghcr.io/techkrzysiek/magicdab` (x64 and arm64), the server alone.
+- Windows: download `MagicDAB-<version>-windows-x64.zip` from
+  [the latest release](https://github.com/techkrzysiek/MagicDAB/releases/latest),
+  unpack the whole zip and start `magicdab.exe`. The RTL-SDR stick needs the
+  WinUSB driver once: Zadig is in the zip (see `README.txt` there).
+- Linux (x64, arm64): download `MagicDAB-<version>-linux-x64.zip` or
+  `MagicDAB-<version>-linux-arm64.zip` from
+  [the latest release](https://github.com/techkrzysiek/MagicDAB/releases/latest),
+  unpack it and start `./magicdab`: one program with the interface inside
+  and the RTL-SDR library next to it (`README.txt` there: udev rules, a
+  systemd service). It needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+,
+  Raspberry Pi OS bookworm+); on older systems use Docker.
+- Android: download `MagicDAB-<version>-android.apk` from
+  [the latest release](https://github.com/techkrzysiek/MagicDAB/releases/latest)
+  and install it on the phone. The app opens the RTL-SDR stick on USB OTG
+  itself (no driver app) and plays in the background with the screen off;
+  its receiver is for the phone only: no tunnel, no server map, no chat
+  (see `docs/android.md`).
+- macOS (untested): download `MagicDAB-<version>-macos.zip` from
+  [the latest release](https://github.com/techkrzysiek/MagicDAB/releases/latest),
+  one program for Apple silicon and Intel. It is not signed by Apple:
+  `README.txt` in the zip says how to open it the first time.
+- From source: for working on MagicDAB itself. To just run a receiver, take
+  a package or the Docker image: they bring the right libraries, know their
+  version and update themselves. A build of your own uses whatever libraries
+  the system has (with an old librtlsdr an RTL-SDR Blog V4 receives
+  nothing), calls itself 0.3.0 and gets no updates. If you know you want it:
+  `cargo build --release -p magicdab` (needs libfaad, libopus, librtlsdr
+  2.0.1 or newer) and `npm ci && npm run build` in `web/`. The packages
+  are built by `build/windows.sh`, `build/linux.sh`, `build/macos.sh` and
+  `build/android.sh`.
+
+### Docker on Linux
+
+For a receiver on a server, a NAS or a Raspberry Pi with a 64-bit system
+(`uname -m` says `x86_64` or `aarch64`; 32-bit ARM has no image). The image
+brings its own RTL-SDR library, which knows the RTL-SDR Blog V4; a MagicDAB
+built by hand against an old system library (Debian 11 and 12, Raspberry Pi
+OS bookworm: librtlsdr 0.6.0) sees a V4 but receives nothing.
+
+1. Docker, when the computer does not have it yet (`docker --version`):
+
+   ```sh
+   curl -fsSL https://get.docker.com | sudo sh
+   sudo systemctl enable --now docker.socket docker.service
+   ```
+
+2. MagicDAB, with the stick plugged in:
+
+   ```sh
+   sudo mkdir -p /opt/magicdab && cd /opt/magicdab
+   sudo curl -fsSLO https://raw.githubusercontent.com/techkrzysiek/MagicDAB/main/docker-compose.yml
+   sudo docker compose up -d
+   sudo docker logs magicdab 2>&1 | grep -i 'admin password'
+   ```
+
+3. The web interface is on port 3222 of the computer
+   (`http://<its address>:3222`). Log in with the password from step 2 and
+   change it in Settings.
+
+- Settings, recordings and the tunnel are kept in `/opt/magicdab/data`.
+  Moving from another installation: stop it, copy its `data` folder there,
+  then start the container; the admin password and the tunnel address stay.
+- Updates: Watchtower from the same file installs each new release at 4:30
+  at night (a short break for the listeners). By hand:
+  `sudo docker compose pull && sudo docker compose up -d`.
+- The log: `sudo docker logs -f magicdab`. When the stick opens, the
+  RTL-SDR library names it (for a V4: `RTL-SDR Blog V4 Detected`).
+- The stick busy or not opening: the kernel's DVB-T driver holds it. Block
+  it and plug the stick in again:
+  `echo 'blacklist dvb_usb_rtl28xxu' | sudo tee /etc/modprobe.d/rtl-sdr.conf && sudo rmmod dvb_usb_rtl28xxu`.
+- An FM-DX-Tuner for DAB/FM service following, another port, a remote
+  rtl_tcp instead of a stick: the comments in `docker-compose.yml`.
 
 ## Releases
 
@@ -82,9 +139,9 @@ The Release workflow (each push to main that changes the program, a pushed
 `v*` tag, or the Actions tab) builds the packages for Windows, Linux (x64,
 and arm64 in a public repository) and macOS and the Docker image
 (`ghcr.io/techkrzysiek/magicdab`, the server alone, x64 and arm64) and
-publishes them with the release notes; a `v*` tag also builds the Android
-APK (`.github/workflows/android.yml`, signed when the repository has the
-signing secrets) and adds it to the release. Installed copies find new versions in
+publishes them with the release notes; then it starts the Android build
+(`.github/workflows/android.yml`), which adds the APK to the release when
+the repository has the signing secrets. Installed copies find new versions in
 the update manifest of the latest release and install them from Settings >
 Internet > Updates. The manifest is signed (`latest.json.sig`, Ed25519, with
 the key in the `UPDATE_SIGNING_KEY` secret): a copy installs a package only

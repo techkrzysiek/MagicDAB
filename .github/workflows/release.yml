@@ -20,6 +20,8 @@ on:
 permissions:
   contents: write
   packages: write
+  # (starting android.yml for the release)
+  actions: write
 
 # (one release at a time, in the order of the pushes)
 concurrency:
@@ -188,6 +190,16 @@ jobs:
         run: |
           gh release create "v$VERSION" --target "$GITHUB_SHA" --title "MagicDAB $VERSION" --notes-file dist/notes.md \
             dist/MagicDAB-$VERSION-*.zip dist/latest.json dist/latest.json.sig
+      # the Android APK joins the release (android.yml): the tag made above with
+      # the workflow's token starts no workflow by itself, a dispatch does (a
+      # pushed tag started android.yml already)
+      - name: Android app
+        if: github.ref_type != 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: gh workflow run android.yml --ref "v$VERSION"
 
   # the image for x64 and arm64 (Raspberry Pi), each built on its own runner,
   # then one tag for both

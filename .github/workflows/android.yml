@@ -2,8 +2,9 @@
 # and the APKs, kept as an artifact of the run; for tags the signed APK also
 # goes on the release page.
 #
-# Run it from the Actions tab (version 0.3.<number of commits>-dev) or push a tag
-# like v0.3.30 (release.yml makes the release of the tag, the APK joins it).
+# Each release starts it for its tag (release.yml), and the APK joins the
+# release; also from the Actions tab (version 0.3.<number of commits>-dev, or the
+# version of a tag chosen there) or by a pushed tag like v0.3.30.
 # A signed release APK needs the secrets ANDROID_KEYSTORE (the keystore in
 # base64), ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD;
 # without them the release APK is unsigned and the debug APK is the one to
