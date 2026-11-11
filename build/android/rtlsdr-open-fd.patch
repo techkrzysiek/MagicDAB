@@ -1,0 +1,75 @@
+diff -ru a/include/rtl-sdr.h b/include/rtl-sdr.h
+--- rtl-sdr/include/rtl-sdr.h	2026-11-11 02:35:15.738391125 +0100
++++ rtl-sdr/include/rtl-sdr.h	2026-11-11 02:35:15.746391280 +0100
+@@ -62,6 +62,14 @@
+ 
+ RTLSDR_API int rtlsdr_open(rtlsdr_dev_t **dev, uint32_t index);
+ 
++/*!
++ * Open a device the system opened for the program (Android: UsbManager).
++ *
++ * \param fd file descriptor of the USB device
++ * \return 0 on success
++ */
++RTLSDR_API int rtlsdr_open_fd(rtlsdr_dev_t **dev, int fd);
++
+ RTLSDR_API int rtlsdr_close(rtlsdr_dev_t *dev);
+ 
+ /* configuration functions */
+diff -ru a/src/librtlsdr.c b/src/librtlsdr.c
+--- rtl-sdr/src/librtlsdr.c	2026-11-11 02:35:15.738391125 +0100
++++ rtl-sdr/src/librtlsdr.c	2026-11-11 02:35:15.746391280 +0100
+@@ -1442,6 +1442,20 @@
+ }
+ 
+ 
++/* Android: a device the app opened (UsbManager), by its file descriptor */
++static intptr_t open_sys_dev = -1;
++
++int rtlsdr_open(rtlsdr_dev_t **out_dev, uint32_t index);
++
++int rtlsdr_open_fd(rtlsdr_dev_t **out_dev, int fd)
++{
++	int r;
++	open_sys_dev = fd;
++	r = rtlsdr_open(out_dev, 0);
++	open_sys_dev = -1;
++	return r;
++}
++
+ int rtlsdr_open(rtlsdr_dev_t **out_dev, uint32_t index)
+ {
+ 	int r;
+@@ -1461,6 +1475,8 @@
+ 	memset(dev, 0, sizeof(rtlsdr_dev_t));
+ 	memcpy(dev->fir, fir_default, sizeof(fir_default));
+ 
++	if (open_sys_dev >= 0)
++		libusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
+ 	r = libusb_init(&dev->ctx);
+ 	if(r < 0){
+ 		free(dev);
+@@ -1469,6 +1485,15 @@
+ 
+ 	dev->dev_lost = 1;
+ 
++	if (open_sys_dev >= 0) {
++		r = libusb_wrap_sys_device(dev->ctx, open_sys_dev, &dev->devh);
++		if (r < 0) {
++			fprintf(stderr, "usb_wrap_sys_device error %d\n", r);
++			goto err;
++		}
++		goto opened;
++	}
++
+ 	cnt = libusb_get_device_list(dev->ctx, &list);
+ 
+ 	for (i = 0; i < cnt; i++) {
+@@ -1503,6 +1528,7 @@
+ 
+ 	libusb_free_device_list(list, 1);
+ 
++opened:
+ 	if (libusb_kernel_driver_active(dev->devh, 0) == 1) {
+ 		dev->driver_active = 1;
+ 

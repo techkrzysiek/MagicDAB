@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="starting">Uruchamianie odbiornika…</string>
+    <string name="server_problem">Odbiornik się nie uruchamia (%1$s).\n\n%2$s</string>
+    <string name="server_ended">zakończył się z kodem %d</string>
+    <string name="running">Odbiornik działa</string>
+    <string name="play">Graj</string>
+    <string name="stop">Zatrzymaj</string>
+    <string name="quit">Zamknij</string>
+    <string name="channel_playback">Odtwarzanie</string>
+    <string name="plug_stick">Podłącz odbiornik RTL-SDR (USB OTG)</string>
+    <string name="usb_waiting">czekam na zgodę na użycie odbiornika</string>
+    <string name="usb_denied">brak zgody na użycie odbiornika: podłącz go jeszcze raz albo otwórz ponownie MagicDAB</string>
+    <string name="usb_cannot_open">nie da się otworzyć odbiornika (używa go inna aplikacja?)</string>
+    <string name="saved">Zapisano: %s</string>
+    <string name="save_failed">Nie udało się zapisać %s</string>
+    <string name="no_app">Żadna aplikacja nie otwiera tego odnośnika</string>
+</resources>

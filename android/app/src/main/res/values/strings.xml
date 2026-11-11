@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">MagicDAB</string>
+    <string name="starting">Starting the receiver…</string>
+    <string name="server_problem">The receiver does not start (%1$s).\n\n%2$s</string>
+    <string name="server_ended">ended with code %d</string>
+    <string name="running">The receiver is running</string>
+    <string name="play">Play</string>
+    <string name="stop">Stop</string>
+    <string name="quit">Quit</string>
+    <string name="channel_playback">Playback</string>
+    <string name="plug_stick">Plug in the RTL-SDR stick (USB OTG)</string>
+    <string name="usb_waiting">waiting for the permission to use the stick</string>
+    <string name="usb_denied">no permission to use the stick: plug it in again, or open MagicDAB again</string>
+    <string name="usb_cannot_open">the stick cannot be opened (used by another app?)</string>
+    <string name="saved">Saved: %s</string>
+    <string name="save_failed">Could not save %s</string>
+    <string name="no_app">No app opens this link</string>
+</resources>

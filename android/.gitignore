@@ -1,0 +1,8 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.kotlin/
+# the server, built by build/android/build.sh
+app/src/main/jniLibs/

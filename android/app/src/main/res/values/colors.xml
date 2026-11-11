@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- the interface's dark background and accent (web/src/styles.css) -->
+    <color name="background">#FF15161D</color>
+    <color name="accent">#FFA68BFF</color>
+</resources>

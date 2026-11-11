@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The MagicDAB icon (web/public/favicon.svg, 64 x 64): the hat and its star,
+     in the 66 dp safe zone of an adaptive icon. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="1.03125"
+        android:scaleY="1.03125"
+        android:translateX="21"
+        android:translateY="21">
+        <path
+            android:fillAlpha="0.22"
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M14,47L18,27H46L50,47Z" />
+        <path
+            android:pathData="M9,47H14L18,27H46L50,47H55"
+            android:strokeWidth="4.5"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:fillColor="#FFFFD54F"
+            android:pathData="M47,6Q47,15 56,15Q47,15 47,24Q47,15 38,15Q47,15 47,6Z" />
+    </group>
+</vector>

@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- While the receiver starts (MainActivity's cover): the icon's tile, its hat
+     drawn in, the star coming out and twinkling until the page is there. The
+     tile is the one of the system's start screen (splash_logo), so the
+     animation goes on from it. Runs on the render thread. -->
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt">
+    <aapt:attr name="android:drawable">
+        <vector
+            android:width="96dp"
+            android:height="96dp"
+            android:viewportWidth="64"
+            android:viewportHeight="64">
+            <path android:pathData="M14,0H50A14,14 0,0 1,64 14V50A14,14 0,0 1,50 64H14A14,14 0,0 1,0 50V14A14,14 0,0 1,14 0Z">
+                <aapt:attr name="android:fillColor">
+                    <gradient
+                        android:type="linear"
+                        android:startX="0"
+                        android:startY="0"
+                        android:endX="64"
+                        android:endY="64"
+                        android:startColor="#FF7C4DFF"
+                        android:endColor="#FF5B2FC4" />
+                </aapt:attr>
+            </path>
+            <path
+                android:name="hatFill"
+                android:fillAlpha="0"
+                android:fillColor="#FFFFFFFF"
+                android:pathData="M14,47L18,27H46L50,47Z" />
+            <path
+                android:name="hat"
+                android:pathData="M9,47H14L18,27H46L50,47H55"
+                android:strokeWidth="4.5"
+                android:strokeColor="#FFFFFFFF"
+                android:strokeLineCap="round"
+                android:strokeLineJoin="round"
+                android:trimPathEnd="0" />
+            <group
+                android:name="star"
+                android:pivotX="47"
+                android:pivotY="15"
+                android:scaleX="0"
+                android:scaleY="0">
+                <group
+                    android:name="twinkle"
+                    android:pivotX="47"
+                    android:pivotY="15">
+                    <path
+                        android:fillColor="#FFFFD54F"
+                        android:pathData="M47,6Q47,15 56,15Q47,15 47,24Q47,15 38,15Q47,15 47,6Z" />
+                </group>
+            </group>
+        </vector>
+    </aapt:attr>
+
+    <!-- the hat drawn from the left end of its brim to the right one -->
+    <target android:name="hat">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:duration="650"
+                android:interpolator="@android:interpolator/fast_out_slow_in"
+                android:propertyName="trimPathEnd"
+                android:startOffset="100"
+                android:valueFrom="0"
+                android:valueTo="1"
+                android:valueType="floatType" />
+        </aapt:attr>
+    </target>
+    <target android:name="hatFill">
+        <aapt:attr name="android:animation">
+            <objectAnimator
+                android:duration="300"
+                android:propertyName="fillAlpha"
+                android:startOffset="600"
+                android:valueFrom="0"
+                android:valueTo="0.22"
+                android:valueType="floatType" />
+        </aapt:attr>
+    </target>
+    <!-- the star comes out of the hat -->
+    <target android:name="star">
+        <aapt:attr name="android:animation">
+            <set>
+                <objectAnimator
+                    android:duration="420"
+                    android:interpolator="@android:interpolator/overshoot"
+                    android:propertyName="scaleX"
+                    android:startOffset="700"
+                    android:valueFrom="0"
+                    android:valueTo="1"
+                    android:valueType="floatType" />
+                <objectAnimator
+                    android:duration="420"
+                    android:interpolator="@android:interpolator/overshoot"
+                    android:propertyName="scaleY"
+                    android:startOffset="700"
+                    android:valueFrom="0"
+                    android:valueTo="1"
+                    android:valueType="floatType" />
+            </set>
+        </aapt:attr>
+    </target>
+    <!-- and twinkles: a quarter turn and a breath, over and over -->
+    <target android:name="twinkle">
+        <aapt:attr name="android:animation">
+            <set>
+                <objectAnimator
+                    android:duration="1600"
+                    android:interpolator="@android:interpolator/accelerate_decelerate"
+                    android:propertyName="rotation"
+                    android:repeatCount="-1"
+                    android:startOffset="1150"
+                    android:valueFrom="0"
+                    android:valueTo="90"
+                    android:valueType="floatType" />
+                <objectAnimator
+                    android:duration="800"
+                    android:interpolator="@android:interpolator/accelerate_decelerate"
+                    android:propertyName="scaleX"
+                    android:repeatCount="-1"
+                    android:repeatMode="reverse"
+                    android:startOffset="1150"
+                    android:valueFrom="1"
+                    android:valueTo="0.7"
+                    android:valueType="floatType" />
+                <objectAnimator
+                    android:duration="800"
+                    android:interpolator="@android:interpolator/accelerate_decelerate"
+                    android:propertyName="scaleY"
+                    android:repeatCount="-1"
+                    android:repeatMode="reverse"
+                    android:startOffset="1150"
+                    android:valueFrom="1"
+                    android:valueTo="0.7"
+                    android:valueType="floatType" />
+            </set>
+        </aapt:attr>
+    </target>
+</animated-vector>

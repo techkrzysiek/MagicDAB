@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The system's start screen (Android 12+): the icon's tile alone, 96 dp in
+     the middle of the 288 dp icon area; loading_logo goes on from it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="288dp"
+    android:height="288dp"
+    android:viewportWidth="288"
+    android:viewportHeight="288">
+    <group
+        android:scaleX="1.5"
+        android:scaleY="1.5"
+        android:translateX="96"
+        android:translateY="96">
+        <path android:pathData="M14,0H50A14,14 0,0 1,64 14V50A14,14 0,0 1,50 64H14A14,14 0,0 1,0 50V14A14,14 0,0 1,14 0Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="0"
+                    android:startY="0"
+                    android:endX="64"
+                    android:endY="64"
+                    android:startColor="#FF7C4DFF"
+                    android:endColor="#FF5B2FC4" />
+            </aapt:attr>
+        </path>
+    </group>
+</vector>
