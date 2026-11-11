@@ -99,6 +99,9 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
   const allowed = useChannelAllowed()
   // mapped channels a listener plays on a receiver of its own (the lock is for the main one)
   const ownMuxes = useStore((s) => (s.hello?.listenerMultiplex && !s.admin ? s.state?.mappedChannels ?? EMPTY : EMPTY))
+  // multiplexes not from the air: ETI/EDI streams and recordings mapped to channels
+  const mappedChannels = useStore((s) => s.state?.mappedChannels ?? EMPTY)
+  const recordedChannels = useStore((s) => s.state?.recordedChannels ?? EMPTY)
   // on its own multiplex: where the main receiver is (phones have no channel row)
   const own = useStore((s) => (s.state?.slot ? s.state : null))
   // the desktop side panel sits next to the list of the current multiplex
@@ -352,6 +355,9 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
                   {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                   <span className="mux-chip current-able">{e.channel}</span>
                   <span className="st-mux-name">{e.label}</span>
+                  {mappedChannels.includes(e.channel) && (
+                    <span className="badge mux-src">{recordedChannels.includes(e.channel) ? t('mux_src_recording') : 'ETI/EDI'}</span>
+                  )}
                   {fresh && e.snr > 0 && (
                     <span className="mux-signal">
                       <SignalBars level={snrLevel(e.snr)} synced /> {e.snr.toFixed(1)} dB

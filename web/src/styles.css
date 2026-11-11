@@ -3371,6 +3371,13 @@ table.table {
   color: var(--accent);
 }
 
+.st-mux .badge.mux-src {
+  flex: none;
+  padding: 1px 7px;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+}
+
 .st-mux-name {
   flex: 1;
   min-width: 0;

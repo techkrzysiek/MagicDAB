@@ -116,6 +116,8 @@ export interface RadioState {
   input?: 'rf' | 'eti'
   etiConnected?: boolean | null
   mappedChannels?: string[]
+  /** of those, the ones playing a recording (the rest: ETI/EDI streams) */
+  recordedChannels?: string[]
   noTuner?: boolean
   /** The computer cannot keep up with the receiver: % of the input lost, the receiver's CPU (% of a processor). */
   overload?: { lost: number; cpu?: number | null } | null
