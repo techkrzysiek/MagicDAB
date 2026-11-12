@@ -345,6 +345,7 @@ function ServicePanel({ svc }: { svc?: Service }) {
       ))}
     </div>
   )
+  const ptyShown = !!(svc.ptyName && svc.pty)
   return (
     <div className="service-panel">
       <div className="sp-head">
@@ -355,8 +356,13 @@ function ServicePanel({ svc }: { svc?: Service }) {
       </div>
       <div className="pty-line">
         <Flag code={svc.country} />
-        {svc.ptyName && svc.pty ? <span>{svc.ptyName}</span> : null}
-        {svc.language && <span className="hint">{svc.pty ? ', ' : ''}{svc.language}</span>}
+        {/* (one item: the flex gap would stand before the comma) */}
+        {(ptyShown || svc.language) && (
+          <span>
+            {ptyShown ? svc.ptyName : null}
+            {svc.language && <span className="hint">{ptyShown ? ', ' : ''}{svc.language}</span>}
+          </span>
+        )}
         {svc.cachedFields?.some((f) => f === 'pty' || f === 'language') && <CacheTag time={cacheTime} />}
       </div>
       <div className="badges">
