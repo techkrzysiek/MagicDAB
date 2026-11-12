@@ -1,7 +1,8 @@
 // The page in the Android app: what the app's
 // native side needs from it besides the media controls (audio/mediasession.ts).
 import { useStore } from './store'
-import { androidApp, toHost } from './desktop'
+import { androidApp, closePrefs, toHost } from './desktop'
+import { APP_CLOSE_EVENT } from './components/AppClose'
 
 export function initAndroid() {
   if (!androidApp) return
@@ -46,7 +47,8 @@ export function initAndroid() {
     useStore.getState().set({ apk: (e as CustomEvent).detail })
   })
   // the back button first closes what is open on the page (dialogs, menus,
-  // the chat): true when it did
+  // the chat), then asks: in the background or quit (AppClose; or what was
+  // remembered there): true when the page took it
   ;(window as unknown as { magicdabBack?: () => boolean }).magicdabBack = () => {
     const dialogs = document.querySelectorAll<HTMLElement>('.modal-back')
     if (dialogs.length) {
@@ -57,6 +59,9 @@ export function initAndroid() {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
       return true
     }
-    return false
+    const a = closePrefs.action
+    if (a === 'hide' || a === 'quit') toHost({ type: 'close', action: a })
+    else window.dispatchEvent(new Event(APP_CLOSE_EVENT))
+    return true
   }
 }

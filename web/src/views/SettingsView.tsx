@@ -172,8 +172,33 @@ function General() {
         </Row>
       </Card>
       {desktop && <DesktopPrefs />}
+      {androidApp && <AppPrefs />}
       {!admin && <AdminLogin />}
     </>
+  )
+}
+
+/** The Android app: what the back button does when nothing is open on the page (AppClose). */
+function AppPrefs() {
+  const t = useT()
+  const [action, setAction] = useState(() => (closePrefs.action === 'server' ? 'ask' : closePrefs.action))
+  return (
+    <Card title={t('set_card_android')}>
+      <Row label={t('app_back_action')}>
+        <select
+          value={action}
+          onChange={(e) => {
+            const v = e.target.value as 'ask' | 'hide' | 'quit'
+            closePrefs.action = v
+            setAction(v)
+          }}
+        >
+          <option value="ask">{t('close_ask')}</option>
+          <option value="hide">{t('app_close_hide')}</option>
+          <option value="quit">{t('app_close_quit')}</option>
+        </select>
+      </Row>
+    </Card>
   )
 }
 

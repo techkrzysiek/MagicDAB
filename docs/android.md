@@ -98,8 +98,12 @@ used on phones, the desktop one on tablets in landscape.
   a call). In the app the page asks for PCM (`codec` default): next to the
   server it spares the phone encoding and decoding Opus.
 - **Back** closes the page's dialogs, menus and the chat first
-  (`window.magicdabBack`, `web/src/android.ts`), then moves the app to the
-  background - it keeps playing.
+  (`window.magicdabBack`, `web/src/android.ts`), then asks: in the background
+  (it keeps playing) or quit (`web/src/components/AppClose.tsx`, `close` to the
+  app). "Remember for the back button" keeps the answer; Settings > General >
+  The app changes it. More > Quit MagicDAB always asks.
+- **Quit** (that question, or the notification's Quit) ends the receiver, the
+  sound, the notification and the app.
 - **Files** the page saves (CSV exports, recordings) come through the bridge in
   parts into `Downloads/MagicDAB` (a WebView saves no downloads).
 - **Links** to other addresses open in the browser; `<input type="file">` (the

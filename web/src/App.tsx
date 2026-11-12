@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Headphones, Layers, CalendarClock, GalleryVerticalEnd, MapPinned, ScanSearch, AudioWaveform, SlidersHorizontal,
   Ellipsis, Volume2, VolumeX, ScrollText, Info as InfoIcon, LogIn, LogOut, Play, Square, Users, Radio, FileCode2, X, RadioReceiver, Link2,
-  MessagesSquare, LockKeyhole, Activity, Keyboard, Gauge, History,
+  MessagesSquare, LockKeyhole, Activity, Keyboard, Gauge, History, Power,
 } from 'lucide-react'
 import { useStore, type View } from './store'
 import { androidApp, desktop, desktopToken, installApk } from './desktop'
@@ -23,6 +23,7 @@ import { LogoDialog } from './components/logo'
 import { LoginDialog } from './components/LoginDialog'
 import { RecordingLink } from './components/RecordingLink'
 import { ApkProgress, useApkBusy } from './components/ApkProgress'
+import { AppClose, APP_CLOSE_EVENT } from './components/AppClose'
 import { PlaybackBar } from './components/PlaybackBar'
 import GuideView from './views/GuideView'
 import SlidesView from './views/SlidesView'
@@ -205,7 +206,17 @@ function NavRail() {
               <LockKeyhole /> {t('tune_title')}
             </button>
           )}
-          {androidApp ? null : admin ? (
+          {/* (the app: no login, but a way out besides the notification: the question of the back button) */}
+          {androidApp ? (
+            <button
+              onClick={() => {
+                setMenu(false)
+                window.dispatchEvent(new Event(APP_CLOSE_EVENT))
+              }}
+            >
+              <Power /> {t('quit_app')}
+            </button>
+          ) : admin ? (
             <button onClick={() => { logout(); setMenu(false) }}>
               <LogOut /> {t('logout')}
             </button>
@@ -644,6 +655,7 @@ export default function App() {
       <LogoDialog />
       {chatOpen && <ChatPopup />}
       <DesktopClose />
+      <AppClose />
       <LoginDialog />
       <RecordingLink />
       <TuneDialog />

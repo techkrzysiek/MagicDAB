@@ -336,6 +336,12 @@ class MainActivity : Activity() {
                 m.optString("album"),
                 m.optString("art").ifEmpty { null },
             )
+            // the back button's question (web/src/components/AppClose.tsx): in the background, or
+            // the receiver, the playing and the app end (as the notification's Quit)
+            "close" -> when (m.optString("action")) {
+                "hide" -> moveTaskToBack(true)
+                "quit" -> RadioService.instance?.quit() ?: finishAndRemoveTask()
+            }
             // a new version of the app (the server checked the signed manifest): Updater
             "installApk" -> Updater.install(this, m.optString("url"), m.optString("sha256"), m.optString("version"))
         }
