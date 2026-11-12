@@ -18,9 +18,10 @@
 # manifest points next to itself) and NOTES (shown with the update).
 set -e
 cd "$(dirname "$0")/.."
-# (the next release: the last v0.3.* tag plus one)
-last_tag=$(git describe --tags --abbrev=0 --match 'v0.3.*' 2>/dev/null || echo v0.3.0)
-VERSION="${VERSION:-0.3.$((${last_tag##*.} + 1))}"
+# (the next release: the highest v0.3.* tag plus one; git describe takes
+# either of two tags on one commit, an older one too)
+last=$(git tag --list 'v0.3.*' | sed -n 's/^v0\.3\.\([0-9][0-9]*\)$/\1/p' | sort -n | tail -n 1)
+VERSION="${VERSION:-0.3.$((${last:-0} + 1))}"
 # e.g. https://github.com/OWNER/REPO/releases/latest/download/latest.json
 UPDATE_URL="${UPDATE_URL-}"
 SOURCE_URL="${SOURCE_URL-}"

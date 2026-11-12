@@ -9,9 +9,10 @@
 # build/windows.sh: VERSION, UPDATE_URL, SOURCE_URL, PACKAGE_URL.
 set -e
 cd "$(dirname "$0")/.."
-# (the next release: the last v0.3.* tag plus one)
-last_tag=$(git describe --tags --abbrev=0 --match 'v0.3.*' 2>/dev/null || echo v0.3.0)
-VERSION="${VERSION:-0.3.$((${last_tag##*.} + 1))}"
+# (the next release: the highest v0.3.* tag plus one; git describe takes
+# either of two tags on one commit, an older one too)
+last=$(git tag --list 'v0.3.*' | sed -n 's/^v0\.3\.\([0-9][0-9]*\)$/\1/p' | sort -n | tail -n 1)
+VERSION="${VERSION:-0.3.$((${last:-0} + 1))}"
 OUT=dist/macos
 DEPS="$PWD/target/macos-deps"
 OPUS_VERSION=1.5.2

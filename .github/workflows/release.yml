@@ -44,7 +44,9 @@ jobs:
       - name: Version and notes
         id: v
         run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else last=$(git describe --tags --abbrev=0 --match 'v0.3.*' 2>/dev/null || echo v0.3.0); v="0.3.$((${last##*.} + 1))"; fi
+          # (the highest v0.3.* tag plus one: git describe took v0.3.27 of the two tags
+          # on one commit, v0.3.27 and v0.3.28, and the release v0.3.28 existed already)
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else last=$(git tag --list 'v0.3.*' | sed -n 's/^v0\.3\.\([0-9][0-9]*\)$/\1/p' | sort -n | tail -n 1); v="0.3.$((${last:-0} + 1))"; fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           # what changed since the previous release
           prev=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)
