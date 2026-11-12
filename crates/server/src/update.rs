@@ -273,8 +273,8 @@ fn with_suffix(path: &std::path::Path, suffix: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Ask for the new version to be started once this one has shut down
-/// (tuners closed, settings saved).
+/// Ask for the new version to be started; it waits until this one has shut
+/// down (tuners closed, settings saved).
 pub fn request_restart() {
     RESTART_PENDING.store(true, Ordering::SeqCst);
     RESTART.notify_one();
@@ -288,8 +288,49 @@ pub fn restart_pending() -> bool {
     RESTART_PENDING.load(Ordering::SeqCst)
 }
 
-/// Start the (new) program with the same arguments and end this one; under a
-/// supervisor only end it (not 0: Restart=on-failure starts it again too).
+/// The new program, started before this one shuts down: a crash or a hang
+/// while it closes (a stick's driver) must not leave the server down. It
+/// waits for this one to end first (`wait_for_predecessor`).
+static SUCCESSOR: AtomicBool = AtomicBool::new(false);
+/// How long a new program waits for the one before it to end.
+const PREDECESSOR_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Start the (new) program with the same arguments, unless a supervisor
+/// starts it (container, Android app, systemd service); true when it runs.
+pub fn start_successor() -> bool {
+    if supervised() {
+        return false;
+    }
+    if SUCCESSOR.swap(true, Ordering::SeqCst) {
+        return true;
+    }
+    let Ok(exe) = std::env::current_exe() else { return false };
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(args).env("MAGICDAB_RESTARTED", "1").env("MAGICDAB_PREDECESSOR", std::process::id().to_string());
+    // the window stays in the tray if it was there
+    #[cfg(all(windows, feature = "desktop"))]
+    if crate::desktop::hidden() {
+        cmd.env("MAGICDAB_HIDDEN", "1");
+    } else {
+        // (inherited from a start in the tray before)
+        cmd.env_remove("MAGICDAB_HIDDEN");
+    }
+    match cmd.spawn() {
+        Ok(_) => {
+            log::info!("the new program is started: it waits for this one to end");
+            true
+        }
+        Err(e) => {
+            log::error!("restart failed: {e}");
+            SUCCESSOR.store(false, Ordering::SeqCst);
+            false
+        }
+    }
+}
+
+/// End this program, the new one started (if not yet); under a supervisor
+/// only end it (not 0: Restart=on-failure starts it again too).
 pub fn restart() -> ! {
     // (its frpc first: the new one would find the tunnel's name taken)
     crate::tunnel::kill_frpc();
@@ -297,24 +338,139 @@ pub fn restart() -> ! {
         crate::logbuf::flush();
         std::process::exit(75);
     }
-    if let Ok(exe) = std::env::current_exe() {
-        let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-        let mut cmd = std::process::Command::new(exe);
-        cmd.args(args).env("MAGICDAB_RESTARTED", "1");
-        // the window stays in the tray if it was there
-        #[cfg(all(windows, feature = "desktop"))]
-        if crate::desktop::hidden() {
-            cmd.env("MAGICDAB_HIDDEN", "1");
-        } else {
-            // (inherited from a start in the tray before)
-            cmd.env_remove("MAGICDAB_HIDDEN");
-        }
-        if let Err(e) = cmd.spawn() {
-            log::error!("restart failed: {e}");
-        }
-    }
+    start_successor();
     crate::logbuf::flush();
     std::process::exit(0)
+}
+
+/// Started by `start_successor`: wait until the program before has ended (it
+/// closes the stick and saves its files meanwhile); one still there after
+/// `PREDECESSOR_WAIT` (a hang) is ended. Before anything in the data folder
+/// is read.
+pub fn wait_for_predecessor() {
+    let Some(pid) = std::env::var("MAGICDAB_PREDECESSOR").ok().and_then(|v| v.parse::<u32>().ok()) else { return };
+    // (not for a restart of this one)
+    std::env::remove_var("MAGICDAB_PREDECESSOR");
+    let started = std::time::Instant::now();
+    match predecessor::wait(pid, PREDECESSOR_WAIT) {
+        predecessor::Outcome::Gone => {}
+        predecessor::Outcome::Ended => log::info!("the program before ended after {:.1} s", started.elapsed().as_secs_f32()),
+        predecessor::Outcome::Killed => {
+            log::warn!("the program before was still running after {} s: ended", PREDECESSOR_WAIT.as_secs())
+        }
+        predecessor::Outcome::Running => {
+            log::warn!("the program before is still running after {} s: starting anyway", PREDECESSOR_WAIT.as_secs())
+        }
+    }
+}
+
+mod predecessor {
+    use std::time::Duration;
+
+    pub enum Outcome {
+        /// not there when we looked
+        Gone,
+        /// ended while we waited
+        Ended,
+        /// ended by us after the wait
+        Killed,
+        /// still there (not ours, or it could not be ended)
+        Running,
+    }
+
+    /// A process of this program: the same folder, a name starting with
+    /// "magicdab" (after an update the old file is `magicdab.exe.old`). A pid
+    /// used again by another program is never ended.
+    #[allow(dead_code)]
+    fn ours(image: &std::path::Path) -> bool {
+        let Ok(me) = std::env::current_exe() else { return false };
+        let name = |p: &std::path::Path| p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+        image.parent().map(|d| d.to_string_lossy().to_lowercase()) == me.parent().map(|d| d.to_string_lossy().to_lowercase())
+            && name(image).starts_with("magicdab")
+    }
+
+    #[cfg(windows)]
+    pub fn wait(pid: u32, limit: Duration) -> Outcome {
+        type Handle = isize;
+        const SYNCHRONIZE: u32 = 0x0010_0000;
+        const PROCESS_TERMINATE: u32 = 0x0001;
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        const WAIT_OBJECT_0: u32 = 0;
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn OpenProcess(access: u32, inherit: i32, pid: u32) -> Handle;
+            fn WaitForSingleObject(handle: Handle, ms: u32) -> u32;
+            fn TerminateProcess(process: Handle, code: u32) -> i32;
+            fn QueryFullProcessImageNameW(process: Handle, flags: u32, name: *mut u16, len: *mut u32) -> i32;
+            fn CloseHandle(handle: Handle) -> i32;
+        }
+        unsafe {
+            let h = OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h == 0 {
+                return Outcome::Gone;
+            }
+            let mut buf = [0u16; 1024];
+            let mut len = buf.len() as u32;
+            let image = (QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut len) != 0)
+                .then(|| std::path::PathBuf::from(String::from_utf16_lossy(&buf[..len as usize])));
+            if !image.as_deref().is_some_and(ours) {
+                CloseHandle(h);
+                return Outcome::Gone;
+            }
+            let r = if WaitForSingleObject(h, limit.as_millis() as u32) == WAIT_OBJECT_0 {
+                Outcome::Ended
+            } else if TerminateProcess(h, 1) != 0 && WaitForSingleObject(h, 5000) == WAIT_OBJECT_0 {
+                Outcome::Killed
+            } else {
+                Outcome::Running
+            };
+            CloseHandle(h);
+            r
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn wait(pid: u32, limit: Duration) -> Outcome {
+        let alive = || unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
+        // (Linux: a pid used again by another program is left alone; elsewhere
+        // it is only waited for)
+        #[cfg(target_os = "linux")]
+        let ours_now = || {
+            std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|p| {
+                // (a replaced file shows as "… (deleted)")
+                let p = std::path::PathBuf::from(p.to_string_lossy().trim_end_matches(" (deleted)").to_string());
+                ours(&p)
+            })
+        };
+        #[cfg(not(target_os = "linux"))]
+        let ours_now = || false;
+        if !alive() {
+            return Outcome::Gone;
+        }
+        let start = std::time::Instant::now();
+        while start.elapsed() < limit {
+            if !alive() {
+                return Outcome::Ended;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if !ours_now() {
+            return Outcome::Running;
+        }
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        for _ in 0..50 {
+            if !alive() {
+                return Outcome::Killed;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        Outcome::Running
+    }
+
+    #[cfg(not(any(windows, unix)))]
+    pub fn wait(_pid: u32, _limit: Duration) -> Outcome {
+        Outcome::Gone
+    }
 }
 
 /// Remove the files replaced by the last update.

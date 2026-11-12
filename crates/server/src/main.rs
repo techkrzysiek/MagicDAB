@@ -272,6 +272,9 @@ async fn main() {
         logbuf::to_file(data_dir.join("magicdab.log"));
     }
     logbuf::init(level);
+    // after an update or a restart: the program before ends first (it closes
+    // the stick, saves its files); nothing in the data folder is read before
+    update::wait_for_predecessor();
     // panics go to the log (Log view); one of the radio or the receiver thread
     // restarts the program - a stopped receiver is worse than a short break
     let default_hook = std::panic::take_hook();
@@ -439,6 +442,11 @@ async fn main() {
         _ = terminate() => {}
         _ = update::restart_requested() => {}
         _ = desktop_quit() => {}
+    }
+    // the new version first: it waits for this one, and a crash or a hang
+    // while the stick is closed (its driver) cannot leave the server down
+    if update::restart_pending() {
+        update::start_successor();
     }
     log::info!("shutting down");
     let _ = radio_tx.send(radio::Command::Shutdown);
