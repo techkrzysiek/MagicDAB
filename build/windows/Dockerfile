@@ -13,7 +13,7 @@ RUN npm run build && find dist -name '*.map' -delete
 
 # ---- MinGW toolchain, codecs, RTL-SDR library ----
 FROM rust:1-slim-trixie AS toolchain
-RUN apt-get update && apt-get install -y --no-install-recommends mingw-w64 cmake make curl ca-certificates bzip2 unzip \
+RUN apt-get update && apt-get install -y --no-install-recommends mingw-w64 cmake make curl ca-certificates bzip2 unzip patch \
     && rm -rf /var/lib/apt/lists/*
 RUN rustup target add x86_64-pc-windows-gnu
 
@@ -41,11 +41,15 @@ RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/libusb/libusb/rel
     && cd /tmp/libusb-${LIBUSB_VERSION} \
     && ./configure -q --host=x86_64-w64-mingw32 --prefix=/opt/win --disable-shared --enable-static \
     && make -s -j"$(nproc)" >/dev/null 2>&1 && make -s install >/dev/null
+# (build/rtlsdr-async-cancel.patch: no crash in libusb when the stick is closed)
+COPY build/rtlsdr-async-cancel.patch build/windows/rtlsdr.rc.in /tmp/
 RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/osmocom/rtl-sdr/archive/refs/tags/v${RTLSDR_VERSION}.tar.gz | tar xz -C /tmp \
-    && r=/tmp/rtl-sdr-${RTLSDR_VERSION} && mkdir -p /opt/rtlsdr \
+    && r=/tmp/rtl-sdr-${RTLSDR_VERSION} && patch -p1 -d $r < /tmp/rtlsdr-async-cancel.patch && mkdir -p /opt/rtlsdr \
+    && sed -e "s/@COMMAS@/$(echo ${RTLSDR_VERSION} | tr . ,)/" -e "s/@VERSION@/${RTLSDR_VERSION}/g" -e "s/@LIBUSB@/${LIBUSB_VERSION}/" \
+       /tmp/rtlsdr.rc.in > /tmp/rtlsdr.rc && x86_64-w64-mingw32-windres /tmp/rtlsdr.rc -O coff -o /tmp/rtlsdr-res.o \
     && x86_64-w64-mingw32-gcc -shared -O2 -s -Drtlsdr_EXPORTS -I$r/include -I/opt/win/include/libusb-1.0 \
        $r/src/librtlsdr.c $r/src/tuner_e4k.c $r/src/tuner_fc0012.c $r/src/tuner_fc0013.c $r/src/tuner_fc2580.c $r/src/tuner_r82xx.c \
-       /opt/win/lib/libusb-1.0.a -static-libgcc -Wl,--exclude-libs,ALL -o /opt/rtlsdr/rtlsdr.dll \
+       /tmp/rtlsdr-res.o /opt/win/lib/libusb-1.0.a -static-libgcc -Wl,--exclude-libs,ALL -o /opt/rtlsdr/rtlsdr.dll \
     && x86_64-w64-mingw32-gcc -O2 -s -I$r/include -I$r/src $r/src/rtl_test.c $r/src/convenience/convenience.c $r/src/getopt/getopt.c \
        /opt/rtlsdr/rtlsdr.dll -static -o /opt/rtlsdr/rtl_test.exe \
     && ! x86_64-w64-mingw32-objdump -p /opt/rtlsdr/rtlsdr.dll | grep "DLL Name" | grep -viE "kernel32|msvcrt"

@@ -61,7 +61,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/magicdab-codecs
-          key: android-codecs-${{ hashFiles('build/android/build.sh', 'build/android/rtlsdr-open-fd.patch') }}
+          key: android-codecs-${{ hashFiles('build/android/build.sh', 'build/android/rtlsdr-open-fd.patch', 'build/rtlsdr-async-cancel.patch') }}
       - name: Signing key
         if: env.SIGNED == 'true'
         env:

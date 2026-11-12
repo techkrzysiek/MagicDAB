@@ -17,7 +17,7 @@ RUN npm run build && find dist -name '*.map' -delete
 # ---- toolchain, codecs, RTL-SDR library ----
 FROM ubuntu:22.04 AS toolchain
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake curl ca-certificates pkg-config \
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake curl ca-certificates pkg-config patch \
        libusb-1.0-0-dev \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL --retry 5 --retry-all-errors https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
@@ -36,7 +36,10 @@ RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/knik0/faad2/archi
 # RTL-SDR library 2.x (the RTL-SDR Blog V4 needs it; distributions often have
 # 0.6); it lets go of the DVB-T kernel driver by itself
 ARG RTLSDR_VERSION=2.0.3
+# (build/rtlsdr-async-cancel.patch: no use of freed transfers when the stick is closed)
+COPY build/rtlsdr-async-cancel.patch /tmp/
 RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/osmocom/rtl-sdr/archive/refs/tags/v${RTLSDR_VERSION}.tar.gz | tar xz -C /tmp \
+    && patch -p1 -d /tmp/rtl-sdr-${RTLSDR_VERSION} < /tmp/rtlsdr-async-cancel.patch \
     && cmake -S /tmp/rtl-sdr-${RTLSDR_VERSION} -B /tmp/rtlsdr -DCMAKE_BUILD_TYPE=Release -DDETACH_KERNEL_DRIVER=ON \
        -DINSTALL_UDEV_RULES=OFF -DCMAKE_INSTALL_PREFIX=/opt/rtlsdr \
     && cmake --build /tmp/rtlsdr -j"$(nproc)" && cmake --install /tmp/rtlsdr

@@ -32,6 +32,13 @@ fetch "https://github.com/xiph/opus/releases/download/v$OPUS_VERSION/opus-$OPUS_
 fetch "https://github.com/knik0/faad2/archive/refs/tags/$FAAD_VERSION.tar.gz" "faad2-$FAAD_VERSION"
 fetch "https://github.com/libusb/libusb/releases/download/v$LIBUSB_VERSION/libusb-$LIBUSB_VERSION.tar.bz2" "libusb-$LIBUSB_VERSION"
 fetch "https://github.com/osmocom/rtl-sdr/archive/refs/tags/v$RTLSDR_VERSION.tar.gz" "rtl-sdr-$RTLSDR_VERSION"
+# no use of freed transfers when the stick is closed (patched once; a library
+# built before it is built again)
+if [ ! -f "$DEPS/src/rtl-sdr-$RTLSDR_VERSION/.async-cancel" ]; then
+    patch -p1 -d "$DEPS/src/rtl-sdr-$RTLSDR_VERSION" < build/rtlsdr-async-cancel.patch
+    touch "$DEPS/src/rtl-sdr-$RTLSDR_VERSION/.async-cancel"
+    rm -f "$DEPS"/*/lib/librtlsdr.0.dylib
+fi
 
 # every architecture on its own (the codecs choose their SIMD code per
 # architecture), joined with lipo at the end

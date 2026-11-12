@@ -1,0 +1,25 @@
+// VERSIONINFO of rtlsdr.dll (build/windows/Dockerfile fills in the versions):
+// Explorer's details and the event log show it instead of 0.0.0.0.
+1 VERSIONINFO
+FILEVERSION @COMMAS@,0
+PRODUCTVERSION @COMMAS@,0
+FILEOS 0x40004
+FILETYPE 0x2
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "FileDescription", "librtlsdr @VERSION@ (osmocom rtl-sdr) with libusb @LIBUSB@, MagicDAB build"
+            VALUE "FileVersion", "@VERSION@+magicdab"
+            VALUE "LegalCopyright", "GPL-2.0-or-later (rtl-sdr), LGPL-2.1-or-later (libusb)"
+            VALUE "OriginalFilename", "rtlsdr.dll"
+            VALUE "ProductName", "rtl-sdr"
+            VALUE "ProductVersion", "@VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

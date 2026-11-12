@@ -114,7 +114,8 @@ codecs() {
 rtlsdr() {
     local abi=$1 src="$DEPS/src" cc=$2
     local usb="$DEPS/$abi-libusb$LIBUSB_VERSION"
-    RTLSDR_SO="$DEPS/$abi-rtlsdr$RTLSDR_VERSION/librtlsdr.so"
+    # ("-p2": built with both patches)
+    RTLSDR_SO="$DEPS/$abi-rtlsdr$RTLSDR_VERSION-p2/librtlsdr.so"
     if [ -f "$RTLSDR_SO" ]; then
         return
     fi
@@ -123,6 +124,11 @@ rtlsdr() {
     if [ ! -d "$src/rtl-sdr-$RTLSDR_VERSION" ]; then
         curl -fsSL "https://github.com/osmocom/rtl-sdr/archive/refs/tags/v$RTLSDR_VERSION.tar.gz" | tar xz -C "$src"
         patch -p1 -d "$src/rtl-sdr-$RTLSDR_VERSION" < build/android/rtlsdr-open-fd.patch
+    fi
+    # (sources kept from a build before it: patched once)
+    if [ ! -f "$src/rtl-sdr-$RTLSDR_VERSION/.async-cancel" ]; then
+        patch -p1 -d "$src/rtl-sdr-$RTLSDR_VERSION" < build/rtlsdr-async-cancel.patch
+        touch "$src/rtl-sdr-$RTLSDR_VERSION/.async-cancel"
     fi
     if [ ! -f "$usb/lib/libusb-1.0.a" ]; then
         # (out of the source tree: a copy has new times and make would run autotools)
