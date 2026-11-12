@@ -41,6 +41,10 @@ export function initAndroid() {
       toHost({ type: 'device', kind: d.kind, connected: d.connected })
     }
   })
+  // how far an update of the app is (Updater.kt): the banner and Settings show it
+  window.addEventListener('magicdab-apk', (e) => {
+    useStore.getState().set({ apk: (e as CustomEvent).detail })
+  })
   // the back button first closes what is open on the page (dialogs, menus,
   // the chat): true when it did
   ;(window as unknown as { magicdabBack?: () => boolean }).magicdabBack = () => {

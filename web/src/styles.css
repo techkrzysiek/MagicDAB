@@ -4072,6 +4072,28 @@ table.table {
   color: var(--text);
 }
 
+/* the download of an update of the Android app (ApkProgress) */
+.apk-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px 12px;
+  min-width: 0;
+}
+
+.set-row .apk-progress {
+  justify-content: flex-start;
+  font-weight: normal;
+}
+
+.apk-progress .progress {
+  flex: 1 1 140px;
+  min-width: 140px;
+  height: 6px;
+  border-radius: 3px;
+}
+
 .maps {
   display: flex;
   flex-direction: column;

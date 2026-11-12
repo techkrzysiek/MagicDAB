@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { androidApp, closePrefs, desktop, desktopServerMode, installApk, toHost } from '../desktop'
+import { ApkProgress, useApkBusy } from '../components/ApkProgress'
 import { useStore, save, isLocal } from '../store'
 import type { ServerMapStatus } from '../store'
 import { useT } from '../i18n'
@@ -949,6 +950,8 @@ function Updates() {
   const u = useStore((st) => st.update)
   const [url, setUrl, urlChanged] = useField('updateUrl', u?.customUrl ?? '')
   const [auto, setAuto] = useField('updateAuto', u?.auto ?? false)
+  const apkBusy = useApkBusy()
+  const apk = useStore((st) => st.apk)
   if (!u) return null
   return (
     <Card title={t('upd_title')}>
@@ -963,7 +966,7 @@ function Updates() {
         <>
           {/* (the app: the manifest of its build, and Android asks before each install) */}
           {androidApp ? (
-            <p className="set-intro hint">{t('upd_android')}</p>
+            <Row label={<span className="hint">{t('upd_android')}</span>} />
           ) : (
             <>
               <Row label={t('upd_url')} hint={u.defaultUrl ? t('set_upd_default').replace('{u}', u.defaultUrl) : undefined}>
@@ -989,12 +992,13 @@ function Updates() {
                 {t('upd_check')}
               </button>
               {u.available && (
-                <button className="btn primary" disabled={u.busy} onClick={() => installApk(u.available!) || send({ type: 'updateInstall' })}>
+                <button className="btn primary" disabled={u.busy || apkBusy} onClick={() => installApk(u.available!) || send({ type: 'updateInstall' })}>
                   {t('upd_install')}
                 </button>
               )}
             </div>
           </Row>
+          {androidApp && apk && apk.state !== 'idle' && <Row label={<ApkProgress />} wide />}
         </>
       )}
     </Card>

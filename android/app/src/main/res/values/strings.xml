@@ -17,7 +17,9 @@
     <string name="save_failed">Could not save %s</string>
     <string name="no_app">No app opens this link</string>
     <string name="channel_updates">Updates</string>
-    <string name="update_downloading">Downloading MagicDAB %s…</string>
+    <string name="update_downloading">Downloading MagicDAB %s</string>
+    <string name="update_progress">%1$s of %2$s MB, %3$s</string>
+    <string name="channel_update_progress">Update downloads</string>
     <string name="update_bad_sum">the download is damaged (sha256)</string>
     <string name="update_failed">Update failed: %s</string>
     <string name="update_ready">MagicDAB %s is ready to install</string>

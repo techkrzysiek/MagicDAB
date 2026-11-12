@@ -11,8 +11,10 @@ import android.content.pm.PackageInstaller
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
+import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -27,13 +29,16 @@ import kotlin.concurrent.thread
  * checked against the sha256 and given to Android's installer for this package
  * only: Android takes only an APK of MagicDAB signed with the key of the installed
  * one, and asks the user. The update ends the app (the server, the playing): a
- * notification afterwards opens it again ([UpdateDone]).
+ * notification afterwards opens it again ([UpdateDone]). How far it is goes to
+ * the page (the update banner and Settings: [progress]) and to a notification.
  */
 object Updater {
     private const val MAX_BYTES = 100L shl 20
     private const val CHANNEL = "updates"
+    private const val CHANNEL_PROGRESS = "update_progress"
     private const val NOTIFY_CONFIRM = 2
     private const val NOTIFY_DONE = 3
+    private const val NOTIFY_PROGRESS = 4
 
     private val main = Handler(Looper.getMainLooper())
 
@@ -43,11 +48,12 @@ object Updater {
     fun install(context: Context, url: String, sha256: String, version: String) {
         if (busy || !url.startsWith("https://") || !Regex("[0-9a-fA-F]{64}").matches(sha256)) return
         busy = true
-        toast(context, context.getString(R.string.update_downloading, version))
+        progress(context, "downloading", version)
         thread(name = "magicdab-update") {
             val apk = File(context.cacheDir, "update.apk")
             try {
-                download(url, apk)
+                download(context, url, apk, version)
+                progress(context, "checking", version)
                 if (!sha256Of(apk).equals(sha256, ignoreCase = true)) throw IOException(context.getString(R.string.update_bad_sum))
                 val installer = context.packageManager.packageInstaller
                 val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
@@ -66,9 +72,13 @@ object Updater {
                     val sender = PendingIntent.getBroadcast(context, id, Intent(context, UpdateReceiver::class.java).putExtra("version", version), flags).intentSender
                     s.commit(sender)
                 }
+                // (now Android's question: UpdateReceiver)
+                progress(context, "installing", version)
             } catch (e: Exception) {
                 Log.w(MagicDab.TAG, "update: $e")
-                toast(context, context.getString(R.string.update_failed, e.message ?: e.toString()))
+                val why = e.message ?: e.toString()
+                progress(context, "failed", version, error = why)
+                toast(context, context.getString(R.string.update_failed, why))
             } finally {
                 apk.delete()
                 busy = false
@@ -76,30 +86,88 @@ object Updater {
         }
     }
 
-    private fun download(url: String, to: File) {
+    private fun download(context: Context, url: String, to: File, version: String) {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = 15_000
         c.readTimeout = 60_000
         try {
             if (c.responseCode != 200) throw IOException("HTTP ${c.responseCode}")
-            if (c.contentLengthLong > MAX_BYTES) throw IOException("${c.contentLengthLong} bytes")
-            var total = 0L
+            val size = c.contentLengthLong
+            if (size > MAX_BYTES) throw IOException("$size bytes")
+            var done = 0L
+            // speed: bytes per second, smoothed over the reports (every 300 ms)
+            var speed = 0.0
+            var lastAt = SystemClock.elapsedRealtime()
+            var lastDone = 0L
             c.inputStream.use { input ->
                 to.outputStream().use { out ->
                     val buf = ByteArray(1 shl 16)
                     while (true) {
                         val n = input.read(buf)
                         if (n < 0) break
-                        total += n
-                        if (total > MAX_BYTES) throw IOException("over ${MAX_BYTES shr 20} MB")
+                        done += n
+                        if (done > MAX_BYTES) throw IOException("over ${MAX_BYTES shr 20} MB")
                         out.write(buf, 0, n)
+                        val now = SystemClock.elapsedRealtime()
+                        if (now - lastAt >= 300) {
+                            val rate = (done - lastDone) * 1000.0 / (now - lastAt)
+                            speed = if (speed == 0.0) rate else speed * 0.6 + rate * 0.4
+                            lastAt = now
+                            lastDone = done
+                            progress(context, "downloading", version, done, size, speed.toLong())
+                        }
                     }
                 }
             }
+            progress(context, "downloading", version, done, if (size > 0) size else done, speed.toLong())
         } finally {
             c.disconnect()
         }
     }
+
+    /**
+     * How far the update is, for the page (web/src/android.ts: the event
+     * magicdab-apk) and the progress notification: downloading (bytes done, of
+     * total, per second), checking, installing (Android asks), failed, idle.
+     */
+    fun progress(context: Context, state: String, version: String, done: Long = 0, total: Long = -1, speed: Long = 0, error: String? = null) {
+        val json = JSONObject()
+            .put("state", state)
+            .put("version", version)
+            .put("done", done)
+            .put("total", total)
+            .put("speed", speed)
+            .put("error", error ?: JSONObject.NULL)
+            .toString()
+        MagicDab.page?.get()?.let { a -> a.runOnUiThread { a.apkProgress(json) } }
+        val nm = context.getSystemService(NotificationManager::class.java)
+        if (state != "downloading" && state != "checking") {
+            nm.cancel(NOTIFY_PROGRESS)
+            return
+        }
+        nm.createNotificationChannel(NotificationChannel(CHANNEL_PROGRESS, context.getString(R.string.channel_update_progress), NotificationManager.IMPORTANCE_LOW))
+        val b = Notification.Builder(context, CHANNEL_PROGRESS)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle(context.getString(R.string.update_downloading, version))
+            .setOnlyAlertOnce(true)
+            .setOngoing(true)
+        if (state == "checking" || total <= 0) {
+            b.setProgress(0, 0, true)
+        } else {
+            b.setProgress(1000, (done * 1000 / total).toInt(), false)
+            b.setContentText(context.getString(R.string.update_progress, mb(done), mb(total), rate(speed)))
+        }
+        try {
+            nm.notify(NOTIFY_PROGRESS, b.build())
+        } catch (e: SecurityException) {
+            // (no permission to notify: the page shows it)
+        }
+    }
+
+    private fun mb(bytes: Long) = String.format("%.1f", bytes / 1048576.0)
+
+    private fun rate(bytesPerSecond: Long) =
+        if (bytesPerSecond >= 1048576) String.format("%.1f MB/s", bytesPerSecond / 1048576.0) else "${bytesPerSecond / 1024} kB/s"
 
     private fun sha256Of(file: File): String {
         val md = MessageDigest.getInstance("SHA-256")
@@ -166,6 +234,7 @@ class UpdateReceiver : BroadcastReceiver() {
                     }
                     ) ?: return
                 confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                Updater.progress(context, "installing", version)
                 if (MagicDab.visible) {
                     try {
                         context.startActivity(confirm)
@@ -182,7 +251,10 @@ class UpdateReceiver : BroadcastReceiver() {
                 val msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "?"
                 Log.w(MagicDab.TAG, "update: $msg")
                 // (STATUS_FAILURE_ABORTED: the user said no)
-                if (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, 0) != PackageInstaller.STATUS_FAILURE_ABORTED) {
+                if (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, 0) == PackageInstaller.STATUS_FAILURE_ABORTED) {
+                    Updater.progress(context, "idle", version)
+                } else {
+                    Updater.progress(context, "failed", version, error = msg)
                     Updater.toast(context, context.getString(R.string.update_failed, msg))
                 }
             }

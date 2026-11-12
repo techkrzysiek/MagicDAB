@@ -1,3 +1,4 @@
+import type { ApkProgressState } from './components/ApkProgress'
 import { useCallback } from 'react'
 import { create } from 'zustand'
 import type {
@@ -184,6 +185,8 @@ export interface Store {
   /** DAB/FM linking of the main service */
   linkInfo: LinkInfo | null
   /** updates of the program (admins) */
+  /** an update of the Android app in progress (Updater.kt, android.ts) */
+  apk: ApkProgressState | null
   update: {
     current: string
     platform: string | null
@@ -311,6 +314,7 @@ export const useStore = create<Store>((set, get) => ({
   fmScan: [],
   linking: null,
   linkInfo: null,
+  apk: null,
   update: null,
   snrHistory: [],
   notices: [],

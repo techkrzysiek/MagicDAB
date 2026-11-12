@@ -309,6 +309,11 @@ class MainActivity : Activity() {
         web?.evaluateJavascript("window.dispatchEvent(new CustomEvent('magicdab-media', {detail: '$action'}))", null)
     }
 
+    /** How far an update of the app is (Updater.progress, web/src/android.ts). */
+    fun apkProgress(json: String) {
+        web?.evaluateJavascript("window.dispatchEvent(new CustomEvent('magicdab-apk', {detail: $json}))", null)
+    }
+
     /** From the page (web/src/android.ts, web/src/audio/mediasession.ts). */
     fun onPageMessage(json: String) {
         val m = try {

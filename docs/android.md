@@ -254,6 +254,9 @@ of a tag build); test builds check nothing.
   Android installs only an APK of MagicDAB signed with the key of the installed
   app (the release keystore) and asks the user every time; the first time
   it also asks to allow MagicDAB to install apps (`REQUEST_INSTALL_PACKAGES`).
+- The download shows how far it is, with its speed, in the banner, in
+  Settings and in a quiet notification ("Update downloads"); then "Checking
+  the download…", "Android asks…", or why it failed (with the button again).
 - Android's question opens at once when the app is on screen; when it is not
   (an activity may not start from the background), a notification "ready to
   install" opens it.

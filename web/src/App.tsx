@@ -22,6 +22,7 @@ import StatsView from './views/StatsView'
 import { LogoDialog } from './components/logo'
 import { LoginDialog } from './components/LoginDialog'
 import { RecordingLink } from './components/RecordingLink'
+import { ApkProgress, useApkBusy } from './components/ApkProgress'
 import { PlaybackBar } from './components/PlaybackBar'
 import GuideView from './views/GuideView'
 import SlidesView from './views/SlidesView'
@@ -505,6 +506,9 @@ function UpdateBanner() {
   const t = useT()
   const admin = useStore((s) => s.admin)
   const u = useStore((s) => s.update)
+  const apk = useStore((s) => s.apk)
+  // (the Android app downloading or installing it: how far, instead of the buttons)
+  const apkBusy = useApkBusy()
   const [later, setLater] = useState<string | null>(() => {
     try {
       return sessionStorage.getItem('magicdab-update-later')
@@ -514,9 +518,16 @@ function UpdateBanner() {
   })
   const v = u?.available?.version
   if (!admin || !u || !v || later === v) return null
+  if (apkBusy) {
+    return (
+      <div className="banner update">
+        <ApkProgress />
+      </div>
+    )
+  }
   return (
     <div className="banner update">
-      {u.busy ? t('upd_busy') : t('upd_banner').replace('{v}', v)}{' '}
+      {apk?.state === 'failed' ? <ApkProgress /> : u.busy ? t('upd_busy') : t('upd_banner').replace('{v}', v)}{' '}
       <button className="btn primary" disabled={u.busy} onClick={() => installApk(u.available!) || send({ type: 'updateInstall' })}>
         {t('upd_install')}
       </button>{' '}
