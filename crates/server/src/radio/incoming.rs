@@ -455,7 +455,8 @@ impl Radio {
                     self.notice(client, "warning", "admin_required");
                     return;
                 }
-                if crate::update::in_container() || self.update_busy {
+                // (Android: the page hands the APK to the app, Updater.kt)
+                if crate::update::in_container() || self.update_busy || (kind == "updateInstall" && cfg!(target_os = "android")) {
                     self.hub.send(client, text(&self.update_json()));
                     return;
                 }

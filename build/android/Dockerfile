@@ -46,6 +46,8 @@ ARG VERSION=0.2.0
 ARG VERSION_CODE=1
 # the address of the source code (AGPL section 13)
 ARG SOURCE_URL=
+# the update manifest the app checks (empty: none; a test: a manifest of your own)
+ARG UPDATE_URL=
 ARG ABIS=arm64-v8a
 ARG APK=debug
 # fewer parallel jobs on a busy host (e.g. next to a running receiver)
@@ -53,7 +55,7 @@ ARG JOBS=
 # (the cached ~/.android keeps the debug signing key: a new debug APK installs over the last one)
 RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,target=/src/target \
     --mount=type=cache,target=/root/.gradle --mount=type=cache,target=/root/.android \
-    SKIP_WEB=1 VERSION="$VERSION" VERSION_CODE="$VERSION_CODE" SOURCE_URL="$SOURCE_URL" ABIS="$ABIS" APK="$APK" JOBS="$JOBS" \
+    SKIP_WEB=1 VERSION="$VERSION" VERSION_CODE="$VERSION_CODE" SOURCE_URL="$SOURCE_URL" UPDATE_URL="$UPDATE_URL" ABIS="$ABIS" APK="$APK" JOBS="$JOBS" \
     build/android/build.sh && mkdir -p /out && cp dist/android/*.apk /out/
 
 FROM scratch

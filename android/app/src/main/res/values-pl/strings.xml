@@ -15,4 +15,12 @@
     <string name="saved">Zapisano: %s</string>
     <string name="save_failed">Nie udało się zapisać %s</string>
     <string name="no_app">Żadna aplikacja nie otwiera tego odnośnika</string>
+    <string name="channel_updates">Aktualizacje</string>
+    <string name="update_downloading">Pobieranie MagicDAB %s…</string>
+    <string name="update_bad_sum">pobrany plik jest uszkodzony (sha256)</string>
+    <string name="update_failed">Aktualizacja nie powiodła się: %s</string>
+    <string name="update_ready">MagicDAB %s czeka na instalację</string>
+    <string name="update_tap_install">Dotknij, żeby zainstalować</string>
+    <string name="update_done">MagicDAB zaktualizowany do %s</string>
+    <string name="update_tap_open">Dotknij, żeby otworzyć</string>
 </resources>

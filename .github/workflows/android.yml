@@ -74,6 +74,8 @@ jobs:
           VERSION: ${{ steps.v.outputs.version }}
           VERSION_CODE: ${{ steps.v.outputs.code }}
           SOURCE_URL: https://github.com/${{ github.repository }}
+          # (a release checks the manifest of the latest release; a test build none)
+          UPDATE_URL: ${{ github.ref_type == 'tag' && format('https://github.com/{0}/releases/latest/download/latest.json', github.repository) || '' }}
           # phones (the app's only input is a stick on USB: nothing to try on an emulator)
           ABIS: arm64-v8a
           APK: debug release
@@ -92,6 +94,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.v.outputs.version }}
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
           if [ "$SIGNED" != true ]; then
             echo "::notice::no signing key (secret ANDROID_KEYSTORE): the APK stays an artifact of this run"
@@ -102,4 +105,32 @@ jobs:
             gh release view "v$VERSION" > /dev/null 2>&1 && break
             sleep 30
           done
-          gh release upload "v$VERSION" "dist/android/MagicDAB-$VERSION-android.apk" --clobber
+          apk="dist/android/MagicDAB-$VERSION-android.apk"
+          gh release upload "v$VERSION" "$apk" --clobber
+          # the app finds it in the update manifest (android-arm64, crates/server/src/update.rs):
+          # the release's latest.json with its entry, signed again with the same key
+          test -n "$UPDATE_SIGNING_KEY" || { echo "::warning::no UPDATE_SIGNING_KEY secret: the app is not in the update manifest"; exit 0; }
+          m="$RUNNER_TEMP/manifest"
+          mkdir -p "$m"
+          gh release download "v$VERSION" -p latest.json -D "$m" --clobber
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/$(basename "$apk")" \
+          SHA=$(sha256sum "$apk" | cut -d' ' -f1) python3 - "$m/latest.json" <<'PY'
+          import json, os, sys
+          f = sys.argv[1]
+          manifest = json.load(open(f))
+          assert manifest["version"] == os.environ["VERSION"], manifest["version"]
+          manifest["android-arm64"] = {"url": os.environ["URL"], "sha256": os.environ["SHA"]}
+          json.dump(manifest, open(f, "w"), indent=2)
+          PY
+          (
+            umask 077
+            key=$(mktemp)
+            printf '%s\n' "$UPDATE_SIGNING_KEY" > "$key"
+            openssl pkeyutl -sign -inkey "$key" -rawin -in "$m/latest.json" -out "$m/latest.json.sig"
+            pub=$(openssl pkey -in "$key" -pubout -outform DER | tail -c 32 | od -An -tx1 | tr -d ' \n')
+            rm -f "$key"
+            grep -q "\"$pub\"" crates/server/src/update.rs || { echo "::error::the signing key is not one of SIGNING_KEYS in update.rs"; exit 1; }
+          )
+          test "$(wc -c < "$m/latest.json.sig")" -eq 64
+          # (the signature first, the manifest right after: a check in between fails once and tries again later)
+          gh release upload "v$VERSION" "$m/latest.json.sig" "$m/latest.json" --clobber

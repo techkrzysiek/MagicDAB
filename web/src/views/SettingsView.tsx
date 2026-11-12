@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { androidApp, closePrefs, desktop, desktopServerMode, toHost } from '../desktop'
+import { androidApp, closePrefs, desktop, desktopServerMode, installApk, toHost } from '../desktop'
 import { useStore, save, isLocal } from '../store'
 import type { ServerMapStatus } from '../store'
 import { useT } from '../i18n'
@@ -938,13 +938,12 @@ function Internet() {
         </Row>
       </Card>
       )}
-      {/* (the Android app is updated as an app) */}
-      {!androidApp && <Updates />}
+      <Updates />
     </>
   )
 }
 
-/** Updates of the program (manifest address, check, install). */
+/** Updates of the program (manifest address, check, install; the Android app: check and install, Android asks). */
 function Updates() {
   const t = useT()
   const u = useStore((st) => st.update)
@@ -962,12 +961,19 @@ function Updates() {
         <Row label={t('upd_container')} />
       ) : (
         <>
-          <Row label={t('upd_url')} hint={u.defaultUrl ? t('set_upd_default').replace('{u}', u.defaultUrl) : undefined}>
-            <input type="text" className={fieldOk('updateUrl', url) ? '' : 'invalid'} placeholder={u.defaultUrl || 'https://…/latest.json'} value={url} onChange={(e) => setUrl(e.target.value)} />
-          </Row>
-          <Row label={t('upd_auto')}>
-            <Toggle checked={auto} onChange={setAuto} />
-          </Row>
+          {/* (the app: the manifest of its build, and Android asks before each install) */}
+          {androidApp ? (
+            <p className="set-intro hint">{t('upd_android')}</p>
+          ) : (
+            <>
+              <Row label={t('upd_url')} hint={u.defaultUrl ? t('set_upd_default').replace('{u}', u.defaultUrl) : undefined}>
+                <input type="text" className={fieldOk('updateUrl', url) ? '' : 'invalid'} placeholder={u.defaultUrl || 'https://…/latest.json'} value={url} onChange={(e) => setUrl(e.target.value)} />
+              </Row>
+              <Row label={t('upd_auto')}>
+                <Toggle checked={auto} onChange={setAuto} />
+              </Row>
+            </>
+          )}
           <Row
             label={u.busy ? t('upd_busy') : u.available ? t('upd_available').replace('{v}', u.available.version) : u.url && !u.error ? t('upd_latest') : ''}
             hint={
@@ -983,7 +989,7 @@ function Updates() {
                 {t('upd_check')}
               </button>
               {u.available && (
-                <button className="btn primary" disabled={u.busy} onClick={() => send({ type: 'updateInstall' })}>
+                <button className="btn primary" disabled={u.busy} onClick={() => installApk(u.available!) || send({ type: 'updateInstall' })}>
                   {t('upd_install')}
                 </button>
               )}

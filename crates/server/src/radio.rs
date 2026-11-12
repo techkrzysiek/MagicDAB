@@ -1134,7 +1134,9 @@ impl Radio {
             self.check_update();
         }
         // by itself when no one listens (once per check: not again after an error)
+        // (not on Android: the app installs, and Android asks the user)
         if self.settings.update_auto
+            && !cfg!(target_os = "android")
             && self.update_available.is_some()
             && self.update_error.is_none()
             && !self.update_busy

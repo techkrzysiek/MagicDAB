@@ -34,6 +34,17 @@ export function toHost(msg: Record<string, unknown>) {
   android?.postMessage(json)
 }
 
+/**
+ * The update the server found, installed by the Android app (android/…/Updater.kt:
+ * it downloads the APK, checks its sha256 and Android asks): false elsewhere,
+ * where the server installs it (updateInstall).
+ */
+export function installApk(a: { version: string; url: string; sha256: string }): boolean {
+  if (!android) return false
+  toHost({ type: 'installApk', version: a.version, url: a.url, sha256: a.sha256 })
+  return true
+}
+
 /** The content of a blob as a data: address. */
 export function dataUrl(blob: Blob): Promise<string> {
   return new Promise((ok, fail) => {

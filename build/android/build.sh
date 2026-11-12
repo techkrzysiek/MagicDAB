@@ -12,6 +12,8 @@
 #             else unsigned), "debug release", or empty: only the server
 # VERSION     0.3.<commits>-dev (a release: its version); VERSION_CODE <commits>
 # SOURCE_URL  the address of the source code (About; AGPL section 13)
+# UPDATE_URL  the update manifest the app checks (a release: the release page's
+#             latest.json; empty: no updates)
 # JOBS        parallel jobs (1 next to a running receiver)
 # SKIP_WEB=1  web/dist is built already
 # GRADLE      the Gradle to run (default: android/gradlew if there, else gradle)
@@ -154,7 +156,7 @@ for abi in $ABIS; do
         "CARGO_TARGET_${upper}_LINKER=$cc" \
         "CARGO_TARGET_${upper}_RUSTFLAGS=-C link-arg=-Wl,-z,max-page-size=16384" \
         FAAD_LIB_DIR="$PREFIX/lib" OPUS_LIB_DIR="$PREFIX/lib" \
-        MAGICDAB_VERSION="$VERSION" MAGICDAB_SOURCE_URL="${SOURCE_URL:-}" \
+        MAGICDAB_VERSION="$VERSION" MAGICDAB_SOURCE_URL="${SOURCE_URL:-}" MAGICDAB_UPDATE_URL="${UPDATE_URL:-}" \
         CARGO_PROFILE_RELEASE_STRIP=symbols \
         cargo build -j "$JOBS" --release --target "$target" -p magicdab --features embed-web
     mkdir -p "$JNI/$abi"

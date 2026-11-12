@@ -192,7 +192,7 @@ export interface Store {
     customUrl: string
     defaultUrl: string
     auto: boolean
-    available: { version: string; url: string; notes: string | null } | null
+    available: { version: string; url: string; sha256: string; notes: string | null } | null
     error: string | null
     busy: boolean
   } | null

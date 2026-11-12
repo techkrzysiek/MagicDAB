@@ -5,7 +5,7 @@ import {
   MessagesSquare, LockKeyhole, Activity, Keyboard, Gauge, History,
 } from 'lucide-react'
 import { useStore, type View } from './store'
-import { androidApp, desktop, desktopToken } from './desktop'
+import { androidApp, desktop, desktopToken, installApk } from './desktop'
 import { useT, weekday } from './i18n'
 import { setVolume, toggleMute, toggleAudio, logout, stopScan, tuningLocked } from './actions'
 import { setSubscriptions, send, reconnectAfterKick } from './ws'
@@ -517,7 +517,7 @@ function UpdateBanner() {
   return (
     <div className="banner update">
       {u.busy ? t('upd_busy') : t('upd_banner').replace('{v}', v)}{' '}
-      <button className="btn primary" disabled={u.busy} onClick={() => send({ type: 'updateInstall' })}>
+      <button className="btn primary" disabled={u.busy} onClick={() => installApk(u.available!) || send({ type: 'updateInstall' })}>
         {t('upd_install')}
       </button>{' '}
       <button

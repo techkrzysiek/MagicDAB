@@ -331,6 +331,8 @@ class MainActivity : Activity() {
                 m.optString("album"),
                 m.optString("art").ifEmpty { null },
             )
+            // a new version of the app (the server checked the signed manifest): Updater
+            "installApk" -> Updater.install(this, m.optString("url"), m.optString("sha256"), m.optString("version"))
         }
     }
 

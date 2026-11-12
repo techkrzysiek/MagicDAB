@@ -104,8 +104,8 @@ used on phones, the desktop one on tablets in landscape.
   parts into `Downloads/MagicDAB` (a WebView saves no downloads).
 - **Links** to other addresses open in the browser; `<input type="file">` (the
   transmitter list for TII) opens the system file picker.
-- **Settings** in the app: no FM section (`fmAvailable` from the server), no
-  updates section (the app is updated as an app).
+- **Settings** in the app: no FM section (`fmAvailable` from the server); the
+  updates section has no manifest address and no "by itself" (see "Updates").
 
 ### Playing with the screen off: the foreground service
 
@@ -173,8 +173,9 @@ All `cfg!(target_os = "android")` (Linux and Windows unchanged):
 - the log also goes into `data/magicdab.log`;
 - a panic of the receiver exits with code 70 (the app restarts the server)
   instead of re-executing the program;
-- updates: there is no Android package in the update manifest (`platform()`
-  is none); the app is updated as an APK.
+- updates: the platform is `android-arm64`; the server checks the manifest
+  as everywhere (at each start of the app, then every 12 h) but never
+  installs: the page hands the APK to the app (see "Updates").
 
 ### Battery
 
@@ -235,6 +236,32 @@ receiver's own work remain the bulk.
 - **The "RTL-SDR driver" app** (rtl_tcp_andro) serving the stick as rtl_tcp on
   the phone: the first version did so; one more app to install, 4 MB/s
   through a socket, and no gain table of the actual tuner.
+
+### Updates
+
+The release's APK is in the signed update manifest (`latest.json`, the same
+Ed25519 signature as the other packages) as `android-arm64`: `android.yml`
+adds the entry after it uploads the APK and signs the manifest again
+(`UPDATE_SIGNING_KEY`). Only release builds know the manifest (`UPDATE_URL`
+of a tag build); test builds check nothing.
+
+- The server checks the manifest and its signature (`crates/server/src/update.rs`)
+  and tells the page the new version, its address and sha256: the banner
+  "MagicDAB … is available" and Settings > Internet > Updates.
+- "Update now" sends `installApk` to the app (`Updater.kt`): it downloads the
+  APK (https, at most 100 MB) into its cache, checks the sha256 and hands it
+  to Android's `PackageInstaller` for this package only (`setAppPackageName`).
+  Android installs only an APK of MagicDAB signed with the key of the installed
+  app (the release keystore) and asks the user every time; the first time
+  it also asks to allow MagicDAB to install apps (`REQUEST_INSTALL_PACKAGES`).
+- Android's question opens at once when the app is on screen; when it is not
+  (an activity may not start from the background), a notification "ready to
+  install" opens it.
+- The update ends the app (the server, the playing, the notification). The
+  new version shows "MagicDAB updated to …" (`MY_PACKAGE_REPLACED`, only after
+  an update of its own); a tap opens it.
+- An app of 0.3.26 or older has no updater: that one update is by hand, the
+  new APK over the old app, with the settings kept.
 
 ### Data
 
@@ -303,8 +330,8 @@ the log, `files/allsymbols` demodulates every symbol (comparisons).
 
 ## Next steps
 
-- Signing key and secrets; the APK on the release page; an `android` entry in
-  the update manifest with a "new version" notice in the app.
+- The update from the app on a phone (download, Android's question, the
+  notice afterwards): not tried yet.
 - The server's sound output with a headset unplugged and plugged in again
   (AAudio disconnects the stream: the server opens a new one; not tried).
 - Re-plugging the stick while playing (not tried: the stick was out of reach).

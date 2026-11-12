@@ -14,6 +14,6 @@ VERSION_CODE="${VERSION_CODE:-$(git rev-list --count HEAD)}"
 OUT=dist/android
 # JOBS=1: leave a core to a receiver running on the same host
 docker build -f build/android/Dockerfile --build-arg VERSION="$VERSION" --build-arg VERSION_CODE="$VERSION_CODE" \
-    --build-arg SOURCE_URL="${SOURCE_URL-}" --build-arg ABIS="${ABIS:-arm64-v8a}" --build-arg APK="${APK:-debug}" \
+    --build-arg SOURCE_URL="${SOURCE_URL-}" --build-arg UPDATE_URL="${UPDATE_URL-}" --build-arg ABIS="${ABIS:-arm64-v8a}" --build-arg APK="${APK:-debug}" \
     --build-arg JOBS="${JOBS:-}" -o "$OUT" .
 ls -l "$OUT"

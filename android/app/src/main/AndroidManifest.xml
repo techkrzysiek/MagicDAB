@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- a new version of the app from its release page (Updater: Android asks the user) -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- the RTL-SDR stick on USB OTG, opened by the app (UsbBridge) -->
     <uses-feature android:name="android.hardware.usb.host" android:required="true" />
@@ -41,6 +43,18 @@
                 android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                 android:resource="@xml/rtlsdr_devices" />
         </activity>
+
+        <!-- the installer's answers, and the new version in place (Updater.kt) -->
+        <receiver
+            android:name=".UpdateReceiver"
+            android:exported="false" />
+        <receiver
+            android:name=".UpdateDone"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".RadioService"

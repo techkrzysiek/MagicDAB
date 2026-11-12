@@ -65,5 +65,5 @@ object MagicDab {
         a.runOnUiThread { a.showServer() }
     }
 
-    private fun prefs(context: Context) = context.getSharedPreferences("magicdab", Context.MODE_PRIVATE)
+    fun prefs(context: Context) = context.getSharedPreferences("magicdab", Context.MODE_PRIVATE)
 }

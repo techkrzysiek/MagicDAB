@@ -64,6 +64,9 @@ pub fn platform() -> Option<&'static str> {
         Some("macos-arm64")
     } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
         Some("macos-x64")
+    } else if cfg!(all(target_os = "android", target_arch = "aarch64")) {
+        // (the APK: the app installs it and Android asks, android/…/Updater.kt; never this program)
+        Some("android-arm64")
     } else {
         None
     }
@@ -169,6 +172,9 @@ pub fn check(manifest: &str, current: &str) -> Result<Option<Available>, String>
 
 /// Download, check and put the files of the package in place.
 pub fn install(a: &Available) -> Result<(), String> {
+    if cfg!(target_os = "android") {
+        return Err("the app installs its updates".into());
+    }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().ok_or("no program folder")?.to_path_buf();
     let data = get(&a.url, 300 << 20)?;

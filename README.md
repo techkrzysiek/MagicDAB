@@ -76,7 +76,8 @@ listeners in the browser, each on the station of their choice.
   and install it on the phone. The app opens the RTL-SDR stick on USB OTG
   itself (no driver app) and plays in the background with the screen off;
   its receiver is for the phone only: no tunnel, no server map, no chat
-  (see `docs/android.md`).
+  (see `docs/android.md`). New versions come from the app (Settings >
+  Internet > Updates; Android asks before it installs them).
 - macOS (untested): download `MagicDAB-<version>-macos.zip` from
   [the latest release](https://github.com/techkrzysiek/MagicDAB/releases/latest),
   one program for Apple silicon and Intel. It is not signed by Apple:
@@ -140,8 +141,8 @@ The Release workflow (each push to main that changes the program, a pushed
 and arm64 in a public repository) and macOS and the Docker image
 (`ghcr.io/techkrzysiek/magicdab`, the server alone, x64 and arm64) and
 publishes them with the release notes; then it starts the Android build
-(`.github/workflows/android.yml`), which adds the APK to the release when
-the repository has the signing secrets. Installed copies find new versions in
+(`.github/workflows/android.yml`), which adds the APK to the release and to
+its update manifest when the repository has the signing secrets. Installed copies find new versions in
 the update manifest of the latest release and install them from Settings >
 Internet > Updates. The manifest is signed (`latest.json.sig`, Ed25519, with
 the key in the `UPDATE_SIGNING_KEY` secret): a copy installs a package only
