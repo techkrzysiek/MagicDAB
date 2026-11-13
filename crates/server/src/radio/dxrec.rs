@@ -1,5 +1,6 @@
 //! DX recordings (dxrec.rs) on the radio thread: a multiplex heard on a
-//! channel for the first time (changes.rs: ensembleNew, ensembleId) is
+//! channel for the first time (changes.rs: ensembleNew, ensembleId), and
+//! with its own switch one a scan hears from afar, is
 //! recorded from the main receiver for up to a few minutes, also while
 //! listeners listen, with its TII, spectrum and signal (the spectrum is
 //! computed meanwhile); the background scan stays on it meanwhile (radio.rs:
@@ -23,6 +24,9 @@ const MAX_PLAYBACKS: usize = 4;
 const PLAY_EVERY: Duration = Duration::from_secs(2);
 /// The signal goes into a recording this often.
 const SIGNAL_EVERY: Duration = Duration::from_secs(1);
+/// A multiplex from afar is recorded again from the same transmitter after
+/// this (a scan going round the band in an opening would record it each time).
+const FAR_AGAIN: Duration = Duration::from_secs(24 * 3600);
 
 pub struct State {
     active: Option<Active>,
@@ -70,7 +74,7 @@ impl Radio {
         if !self.settings.dx_record.enabled {
             return None;
         }
-        match self.dxrec_start(reason, None) {
+        match self.dxrec_start(reason, None, None) {
             Ok(()) => self.dxrec_file(&ev.channel),
             Err(e) => {
                 log::info!("no DX recording of {} on {} ({reason}): {e}", ev.ensemble.trim(), ev.channel);
@@ -79,9 +83,54 @@ impl Radio {
         }
     }
 
+    /// From a band or DX scan, done with a channel: its multiplex is recorded
+    /// when it comes from farther than the setting (its nearest transmitter
+    /// heard by TII, `heard`, else its nearest one known), unless it was from
+    /// that transmitter within FAR_AGAIN. True when it started.
+    pub(super) fn dxrec_far(&mut self, heard: &[(u8, u8)]) -> bool {
+        let cfg = &self.settings.dx_record;
+        if !cfg.far || self.dxrec.active.is_some() {
+            return false;
+        }
+        let (Some(loc), Some(eid), Some(channel)) = (self.settings.location.as_ref(), self.ensemble.eid, self.channel.clone()) else {
+            return false;
+        };
+        let Some((km, tx)) = self.txdb.reception_km(eid, self.ensemble.ecc, self.frequency, heard, loc.lat, loc.lon) else {
+            return false;
+        };
+        if km < cfg.far_km as f64 {
+            return false;
+        }
+        let label = self.ensemble.label.as_ref().map(|l| l.text.trim().to_string()).unwrap_or_default();
+        let code = tx.map(|(m, s)| format!("{m}-{s}"));
+        let from = match &code {
+            Some(c) => format!("{km:.0} km, TII {c}"),
+            None => format!("at least {km:.0} km, no TII"),
+        };
+        // (recorded already: from that transmitter, or at all when none was heard)
+        let (since, eid_s) = (now() - FAR_AGAIN.as_secs() as i64, format!("{eid:04X}"));
+        let again = store::metas(&self.dxrec_dir())
+            .iter()
+            .any(|m| m.time >= since && m.channel == channel && m.eid == eid_s && code.as_ref().is_none_or(|c| m.tii.contains(c)));
+        if again {
+            log::debug!("scan: {label} on {channel} ({from}) was recorded within a day");
+            return false;
+        }
+        match self.dxrec_start("far", None, Some(km)) {
+            Ok(()) => {
+                log::info!("scan: {label} on {channel} comes from afar ({from}): recorded");
+                true
+            }
+            Err(e) => {
+                log::info!("no DX recording of {label} on {channel} ({from}): {e}");
+                false
+            }
+        }
+    }
+
     /// Starts recording the multiplex of the main receiver, for `seconds` or
-    /// the length of the settings.
-    pub(super) fn dxrec_start(&mut self, reason: &str, seconds: Option<u32>) -> Result<(), String> {
+    /// the length of the settings; `km`: how far it comes from (far).
+    pub(super) fn dxrec_start(&mut self, reason: &str, seconds: Option<u32>, km: Option<f64>) -> Result<(), String> {
         if self.dxrec.active.is_some() {
             return Err("one is being recorded already".into());
         }
@@ -130,6 +179,7 @@ impl Radio {
             snr: self.signal.snr,
             tii: tii.clone(),
             reason: reason.to_string(),
+            distance: km.map(|d| d.round() as f32),
             device: self.device.status().name,
             ..Default::default()
         };
@@ -311,6 +361,8 @@ impl Radio {
             "enabled": cfg.enabled,
             "minutes": cfg.minutes,
             "maxMb": cfg.max_mb,
+            "far": cfg.far,
+            "farKm": cfg.far_km,
             "uploadMaxMb": store::UPLOAD_MAX >> 20,
         });
         if with_list {
@@ -346,7 +398,7 @@ impl Radio {
             "record" => {
                 // (the length asked for: the button of the Ensemble view)
                 let seconds = msg["seconds"].as_u64().map(|s| s.clamp(5, 3600) as u32);
-                if let Err(e) = self.dxrec_start("manual", seconds) {
+                if let Err(e) = self.dxrec_start("manual", seconds, None) {
                     log::info!("client {client}: no DX recording: {e}");
                     self.notice(client, "warning", "dxrec_no_start");
                 }
@@ -413,6 +465,13 @@ impl Radio {
                 }
                 if let Some(mb) = msg["maxMb"].as_u64() {
                     cfg.max_mb = (mb as u32).clamp(100, 100_000);
+                }
+                if let Some(on) = msg["far"].as_bool() {
+                    cfg.far = on;
+                    log::info!("DX recordings of multiplexes from afar during scans switched {}", if on { "on" } else { "off" });
+                }
+                if let Some(km) = msg["farKm"].as_u64() {
+                    cfg.far_km = km.clamp(10, 3000) as u32;
                 }
                 self.settings_dirty = true;
                 let s = self.settings_json();

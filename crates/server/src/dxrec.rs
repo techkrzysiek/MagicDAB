@@ -123,8 +123,12 @@ pub struct Meta {
     pub duration: f32,
     pub size: u64,
     pub frames: u64,
-    /// Why: ensembleNew, ensembleId, manual; upload for a loaded file.
+    /// Why: ensembleNew, ensembleId, serviceAdded, structure, far (a scan
+    /// heard it from afar), manual; upload for a loaded file.
     pub reason: String,
+    /// Km to its nearest transmitter heard (far).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distance: Option<f32>,
     /// How it ended: complete, retuned, noSync, stopped, error; empty while
     /// it runs.
     pub ended: String,
@@ -228,6 +232,11 @@ pub fn list(dir: &Path) -> Vec<Value> {
     let mut v: Vec<Value> = files(dir).iter().filter_map(|p| entry(p)).collect();
     v.sort_by_key(|e| std::cmp::Reverse(e["time"].as_i64().unwrap_or(0)));
     v
+}
+
+/// What the recordings of the folder are (those with the JSON beside them).
+pub fn metas(dir: &Path) -> Vec<Meta> {
+    files(dir).iter().filter_map(|p| read_meta(p)).collect()
 }
 
 /// The .eti and .edi files of the folder.

@@ -151,8 +151,9 @@ struct ServiceState {
 enum ScanPhase {
     Settle,
     Wait,
-    /// A multiplex never heard here is being recorded (radio/dxrec.rs): the
-    /// scan stays on it and moves on when the recording ends.
+    /// A multiplex never heard here, or one from afar, is being recorded
+    /// (radio/dxrec.rs): the scan stays on it and moves on when the recording
+    /// ends.
     Hold,
     /// Clips of stations for the server map (radio/clips.rs).
     Clips,

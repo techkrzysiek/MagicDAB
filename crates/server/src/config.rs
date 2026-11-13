@@ -76,11 +76,17 @@ pub struct DxRecordConfig {
     pub minutes: u32,
     /// The folder is kept under this; the oldest recordings go first.
     pub max_mb: u32,
+    /// A scan also records every multiplex from farther than `far_km` (its
+    /// nearest transmitter heard, radio/dxrec.rs); on unless switched off,
+    /// also on installations from before it, but not in the Android app (the
+    /// phone's storage).
+    pub far: bool,
+    pub far_km: u32,
 }
 
 impl Default for DxRecordConfig {
     fn default() -> Self {
-        DxRecordConfig { enabled: false, minutes: 1, max_mb: 2048 }
+        DxRecordConfig { enabled: false, minutes: 1, max_mb: 2048, far: !cfg!(target_os = "android"), far_km: 200 }
     }
 }
 
@@ -377,8 +383,9 @@ impl Default for Settings {
 impl Settings {
     /// The Android app: one listener on a phone with a battery, DAB only.
     /// Scans while idle and the DLS and slides of every station (the whole
-    /// multiplex decoded) cost battery, the chat has no one to talk to (both
-    /// can be switched on in the settings), there is no FM tuner.
+    /// multiplex decoded) cost battery, the chat has no one to talk to, DX
+    /// recordings take the phone's storage (DxRecordConfig::default; all can
+    /// be switched on in the settings), there is no FM tuner.
     fn android(s: Settings) -> Settings {
         let mut s = Settings { idle_scan: IdleScan { enabled: false, ..s.idle_scan }, background_pad: false, ..s };
         s.phone_only(true);

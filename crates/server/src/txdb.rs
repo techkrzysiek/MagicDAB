@@ -132,6 +132,31 @@ impl TxDb {
     pub fn ensemble(&self, eid: u16) -> Vec<&Transmitter> {
         self.by_key.iter().filter(|((e, _, _), _)| *e == eid).flat_map(|(_, v)| v.iter()).collect()
     }
+
+    /// How far (km) from `lat`, `lon` the ensemble on `freq_khz` comes: its
+    /// nearest transmitter heard (`heard`: TII codes), else its nearest one
+    /// known on that frequency (every one is at least that far); with the
+    /// code of the transmitter heard.
+    pub fn reception_km(
+        &self,
+        eid: u16,
+        ecc: Option<u8>,
+        freq_khz: u32,
+        heard: &[(u8, u8)],
+        lat: f64,
+        lon: f64,
+    ) -> Option<(f64, Option<(u8, u8)>)> {
+        let km = |t: &Transmitter| distance_azimuth(lat, lon, t.lat, t.lon).0;
+        let nearest = |a: &(f64, Option<(u8, u8)>), b: &(f64, Option<(u8, u8)>)| a.0.total_cmp(&b.0);
+        let tx = heard.iter().filter_map(|&(m, s)| self.find(eid, ecc, m, s, freq_khz).map(|t| (km(t), Some((m, s))))).min_by(nearest);
+        tx.or_else(|| {
+            self.ensemble(eid)
+                .into_iter()
+                .filter(|t| t.frequency.abs_diff(freq_khz) <= 50 && ecc.is_none_or(|e| t.ecc == 0 || t.ecc == e))
+                .map(|t| (km(t), None))
+                .min_by(nearest)
+        })
+    }
 }
 
 /// Great circle distance (km) and initial bearing (degrees) between two points.
@@ -145,4 +170,27 @@ pub fn distance_azimuth(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> (f64, f64
     let x = p1.cos() * p2.sin() - p1.sin() * p2.cos() * dl.cos();
     let az = (y.atan2(x).to_degrees() + 360.0) % 360.0;
     (d, az)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_multiplex_is_as_far_as_its_nearest_transmitter_heard_else_known() {
+        let mut db = TxDb::default();
+        db.parse(
+            "id;country;channel;label;eid;tii;location;lat;lon;alt;height;pol;freq;power\n\
+             1;PL;10D;MUX;3A01;101;Near;50.0;19.0;0;0;H;215.072;10\n\
+             2;PL;10D;MUX;3A01;102;Far;52.5;19.0;0;0;H;215.072;10\n\
+             3;PL;5A;MUX;3A01;103;Other channel;50.1;19.0;0;0;H;174.928;10\n",
+        );
+        let at = |heard: &[(u8, u8)], f: u32| db.reception_km(0x3A01, Some(0xE2), f, heard, 50.0, 19.0).map(|(d, c)| (d.round(), c));
+        // the far one heard alone, both heard, none heard (the nearest known on 10D)
+        assert_eq!(at(&[(1, 2)], 215072), Some((278.0, Some((1, 2)))));
+        assert_eq!(at(&[(1, 2), (1, 1)], 215072), Some((0.0, Some((1, 1)))));
+        assert_eq!(at(&[], 215072), Some((0.0, None)));
+        assert_eq!(at(&[], 174928).map(|x| x.0), Some(11.0));
+        assert_eq!(at(&[], 227360), None);
+    }
 }

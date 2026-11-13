@@ -28,6 +28,7 @@ export default function DxRecordings() {
   const notify = useStore((s) => s.notify)
   const audioOn = useStore((s) => s.audioEnabled)
   const selected = useStore((s) => s.selected?.sid)
+  const located = useStore((s) => !!s.hello?.location)
   const [uploading, setUploading] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
 
@@ -66,7 +67,8 @@ export default function DxRecordings() {
 
   const list = dx?.recordings ?? []
   const active = dx?.active ?? null
-  const reason = (r: string) => (r ? t('dxrec_reason_' + r) : '')
+  const reason = (r: DxRecording) =>
+    r.reason === 'far' ? t('dxrec_reason_far').replace('{km}', r.distance != null ? String(Math.round(r.distance)) : '?') : r.reason ? t('dxrec_reason_' + r.reason) : ''
   const ended = (e: string) => (e && e !== 'complete' ? t('dxrec_ended_' + e) : '')
 
   return (
@@ -77,6 +79,28 @@ export default function DxRecordings() {
           <input type="checkbox" checked={!!dx?.enabled} onChange={(e) => send({ type: 'dxrec', action: 'settings', enabled: e.target.checked })} />
           {t('dxrec_auto')}
         </label>
+        <span style={{ display: 'flex', gap: 6, alignItems: 'center' }} title={t('dxrec_far_help')}>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input type="checkbox" checked={dx?.far ?? true} onChange={(e) => send({ type: 'dxrec', action: 'settings', far: e.target.checked })} />
+            {t('dxrec_far')}
+          </label>
+          <input
+            type="number"
+            className="input"
+            min={10}
+            max={3000}
+            step={10}
+            style={{ width: 72 }}
+            key={dx?.farKm}
+            defaultValue={dx?.farKm ?? 200}
+            onBlur={(e) => {
+              const v = parseInt(e.target.value)
+              if (v && v !== dx?.farKm) send({ type: 'dxrec', action: 'settings', farKm: v })
+            }}
+          />
+          km
+          {dx?.far && !located && <span className="hint">({t('dxrec_far_no_location')})</span>}
+        </span>
         <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           {t('dxrec_minutes')}
           <input
@@ -155,7 +179,7 @@ export default function DxRecordings() {
                   <td>
                     <b>{r.label}</b> <span className="hint">{r.ecc && r.eid ? `${r.ecc}${r.eid}` : ''}</span>
                     <div className="hint">
-                      {reason(r.reason)}
+                      {reason(r)}
                       {r.tii.length ? `, TII ${r.tii.join(', ')}` : ''}
                       {r.side ? `, ${t('dxrec_side')}` : ''}
                       {ended(r.ended) ? `, ${ended(r.ended)}` : ''}

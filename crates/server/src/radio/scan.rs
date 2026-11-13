@@ -269,6 +269,13 @@ impl Radio {
                 }
             }
         }
+        // a multiplex from afar: recorded, the scan waits on it (radio/dxrec.rs)
+        let done = self.scan.as_ref().is_some_and(|s| matches!(s.phase, ScanPhase::Wait | ScanPhase::Clips));
+        if next && done && self.ensemble.eid.is_some() && self.dxrec_far(&self.scan_heard()) && self.holds_scan() {
+            let scan = self.scan.as_mut().unwrap();
+            scan.phase = ScanPhase::Hold;
+            next = false;
+        }
         if other_gain && !self.scan_other_gain() {
             next = true;
         }
@@ -323,6 +330,18 @@ impl Radio {
             self.tune(&ch);
             self.broadcast_state();
         }
+    }
+
+    /// The TII codes heard on the channel being scanned.
+    fn scan_heard(&self) -> Vec<(u8, u8)> {
+        let Some(scan) = self.scan.as_ref() else { return Vec::new() };
+        scan.tii
+            .iter()
+            .filter_map(|c| {
+                let (m, s) = c.split_once('-')?;
+                Some((m.parse().ok()?, s.parse().ok()?))
+            })
+            .collect()
     }
 
     /// Second try of a scanned channel at another gain: a low one when the

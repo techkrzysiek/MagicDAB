@@ -161,6 +161,8 @@ export interface DxRecording {
   size: number
   frames: number
   reason: string
+  /** km to its nearest transmitter heard (reason far) */
+  distance?: number
   ended: string
   /** TII, spectrum and signal recorded with it */
   side?: boolean
@@ -171,6 +173,9 @@ export interface DxRecState {
   enabled: boolean
   minutes: number
   maxMb: number
+  /** a scan records every multiplex from farther than farKm */
+  far?: boolean
+  farKm?: number
   uploadMaxMb: number
   recordings?: DxRecording[]
   usedMb?: number
