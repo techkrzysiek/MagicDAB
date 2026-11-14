@@ -406,8 +406,20 @@ class MainActivity : Activity() {
             ): Boolean {
                 files?.onReceiveValue(null)
                 files = callback
+                // (not params.createIntent(): it takes the first accept type as the MIME type,
+                // ".csv" of the transmitter list, and the picker greys out every file; a phone
+                // gives a .csv or .eti any type - text/comma-separated-values, octet-stream - so
+                // with an extension among them any file goes and the page checks it)
+                val types = params.acceptTypes.flatMap { it.split(',') }.map { it.trim() }.filter { it.isNotEmpty() }
+                val intent = Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                if (types.isNotEmpty() && types.none { it.startsWith('.') }) {
+                    intent.putExtra(Intent.EXTRA_MIME_TYPES, types.toTypedArray())
+                }
+                if (params.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
+                    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                }
                 return try {
-                    startActivityForResult(params.createIntent(), REQUEST_FILE)
+                    startActivityForResult(intent, REQUEST_FILE)
                     true
                 } catch (e: ActivityNotFoundException) {
                     files = null
