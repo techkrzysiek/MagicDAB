@@ -129,6 +129,13 @@ fn window_advance() -> usize {
 }
 /// Maximum integer carrier offset searched during acquisition (+-35 kHz).
 const MAX_CARRIER_OFFSET: i32 = 35;
+/// The frequency correction stays this close to the tuned frequency (a tuner
+/// is off by tens of ppm, under 30 kHz in Band III). Without a limit, each
+/// acquisition moved it by up to MAX_CARRIER_OFFSET more and the tracking
+/// followed: on an empty channel it wandered off to a neighbouring multiplex
+/// folded into the band (a HackRF at 2.048 MS/s shows the one 1.712 MHz up
+/// at -336 kHz) and the channel got that ensemble.
+const MAX_NCO_HZ: f32 = (MAX_CARRIER_OFFSET + 5) as f32 * CARRIER_SPACING;
 /// Smoothing of the soft bit reference level (per symbol, about 8 frames).
 const SOFT_REF_ALPHA: f32 = 1.0 / 600.0;
 
@@ -568,7 +575,8 @@ impl OfdmDemodulator {
         }
         if best_m != 0 {
             let f = self.buf.nco_freq + best_m as f32 * CARRIER_SPACING;
-            self.buf.set_frequency(f);
+            // (not past what a tuner is off: the search starts again from the tuned frequency)
+            self.buf.set_frequency(if f.abs() > MAX_NCO_HZ { 0.0 } else { f });
             // samples in the buffer were corrected with the old frequency
             self.buf.clear();
             return true;
@@ -1144,7 +1152,7 @@ impl OfdmDemodulator {
 
         // frequency tracking
         let f = self.buf.nco_freq + 0.4 * fine_offset;
-        self.buf.set_frequency(f);
+        self.buf.set_frequency(f.clamp(-MAX_NCO_HZ, MAX_NCO_HZ));
 
         // synchronisation supervision
         let null_ok = sig_pw > 0.0 && null_pw < 0.5 * sig_pw;
