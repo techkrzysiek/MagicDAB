@@ -57,6 +57,21 @@ impl Default for TunnelConfig {
     }
 }
 
+/// Whether a token saved for tunnel server `old` may go on to `new`: the same
+/// server, or one under the other in the same domain (dxserver.eu and
+/// premium.dxserver.eu), whose owner holds both. Never a server elsewhere.
+pub fn token_stays(old: &str, new: &str) -> bool {
+    let (o, n) = (old.trim().trim_end_matches('.').to_ascii_lowercase(), new.trim().trim_end_matches('.').to_ascii_lowercase());
+    if o.is_empty() || n.is_empty() {
+        return false;
+    }
+    // (an address is not a domain: only itself)
+    if o.parse::<std::net::IpAddr>().is_ok() || n.parse::<std::net::IpAddr>().is_ok() {
+        return o == n;
+    }
+    o == n || n.ends_with(&format!(".{o}")) || o.ends_with(&format!(".{n}"))
+}
+
 impl TunnelConfig {
     pub fn url(&self) -> Option<String> {
         (!self.subdomain.is_empty() && !self.host.is_empty()).then(|| format!("https://{}.{}", self.subdomain, self.host))
@@ -725,6 +740,19 @@ mod leftovers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_token_stays_within_the_domain_of_the_tunnel_server() {
+        assert!(token_stays("dxserver.eu", "dxserver.eu"));
+        assert!(token_stays("dxserver.eu", "premium.dxserver.eu"));
+        assert!(token_stays("Premium.DXserver.eu", "dxserver.eu."));
+        assert!(!token_stays("dxserver.eu", "dxserver.eu.example.com"));
+        assert!(!token_stays("dxserver.eu", "evil-dxserver.eu"));
+        assert!(!token_stays("dxserver.eu", "example.com"));
+        assert!(!token_stays("dxserver.eu", ""));
+        assert!(token_stays("192.0.2.1", "192.0.2.1"));
+        assert!(!token_stays("192.0.2.1", "2.1"));
+    }
 
     /// With a real frpc: FRPC=/path/to/frpc cargo test -p magicdab leftover -- --ignored
     #[cfg(target_os = "linux")]

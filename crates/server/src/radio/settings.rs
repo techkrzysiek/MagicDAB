@@ -216,10 +216,11 @@ impl Radio {
         }
         if let Some(v) = s.get("tunnel") {
             if let Ok(mut t) = serde_json::from_value::<crate::tunnel::TunnelConfig>(v.clone()) {
-                // (the interface never has the token: an empty one keeps it, for
-                // the same server and user only, never sent to another one)
+                // (the interface never has the token: an empty one keeps it, also
+                // when the rest changes, but it goes to no server outside the
+                // domain of the one it was saved for: tunnel::token_stays)
                 let old = &self.settings.tunnel;
-                if t.token.is_empty() && t.host == old.host && t.port == old.port && t.username == old.username {
+                if t.token.is_empty() && crate::tunnel::token_stays(&old.host, &t.host) {
                     t.token = old.token.clone();
                 }
                 self.settings.tunnel = t;
