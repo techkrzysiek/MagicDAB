@@ -20,16 +20,20 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake curl ca-certificates pkg-config patch \
        libusb-1.0-0-dev \
     && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL --retry 5 --retry-all-errors https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+# (what a build downloads is checked: build/fetch.sh, build/sources.sha256)
+COPY build/fetch.sh build/sources.sha256 /opt/fetch/
+ARG RUSTUP_VERSION=1.29.3
+RUN sh /opt/fetch/fetch.sh https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/$(uname -m)-unknown-linux-gnu/rustup-init > /tmp/rustup-init \
+    && chmod +x /tmp/rustup-init && /tmp/rustup-init -y --profile minimal --default-toolchain stable && rm /tmp/rustup-init
 ENV PATH=/root/.cargo/bin:$PATH
 # codecs as static libraries (no codec packages needed where it runs)
 ARG OPUS_VERSION=1.5.2
 ARG FAAD_VERSION=2.11.2
-RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/xiph/opus/releases/download/v${OPUS_VERSION}/opus-${OPUS_VERSION}.tar.gz | tar xz -C /tmp \
+RUN sh /opt/fetch/fetch.sh https://github.com/xiph/opus/releases/download/v${OPUS_VERSION}/opus-${OPUS_VERSION}.tar.gz | tar xz -C /tmp \
     && cmake -S /tmp/opus-${OPUS_VERSION} -B /tmp/opus -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
        -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DOPUS_BUILD_TESTING=OFF -DOPUS_BUILD_PROGRAMS=OFF -DCMAKE_INSTALL_PREFIX=/opt/static \
     && cmake --build /tmp/opus -j"$(nproc)" && cmake --install /tmp/opus
-RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/knik0/faad2/archive/refs/tags/${FAAD_VERSION}.tar.gz | tar xz -C /tmp \
+RUN sh /opt/fetch/fetch.sh https://github.com/knik0/faad2/archive/refs/tags/${FAAD_VERSION}.tar.gz | tar xz -C /tmp \
     && cmake -S /tmp/faad2-${FAAD_VERSION} -B /tmp/faad -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
        -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DFAAD_BUILD_CLI=OFF -DFAAD_APPLY_DRC=OFF -DCMAKE_INSTALL_PREFIX=/opt/static \
     && cmake --build /tmp/faad -j"$(nproc)" && cmake --install /tmp/faad
@@ -38,7 +42,7 @@ RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/knik0/faad2/archi
 ARG RTLSDR_VERSION=2.0.3
 # (build/rtlsdr-async-cancel.patch: no use of freed transfers when the stick is closed)
 COPY build/rtlsdr-async-cancel.patch /tmp/
-RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/osmocom/rtl-sdr/archive/refs/tags/v${RTLSDR_VERSION}.tar.gz | tar xz -C /tmp \
+RUN sh /opt/fetch/fetch.sh https://github.com/osmocom/rtl-sdr/archive/refs/tags/v${RTLSDR_VERSION}.tar.gz | tar xz -C /tmp \
     && patch -p1 -d /tmp/rtl-sdr-${RTLSDR_VERSION} < /tmp/rtlsdr-async-cancel.patch \
     && cmake -S /tmp/rtl-sdr-${RTLSDR_VERSION} -B /tmp/rtlsdr -DCMAKE_BUILD_TYPE=Release -DDETACH_KERNEL_DRIVER=ON \
        -DINSTALL_UDEV_RULES=OFF -DCMAKE_INSTALL_PREFIX=/opt/rtlsdr \

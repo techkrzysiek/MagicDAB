@@ -26,7 +26,12 @@ mkdir -p "$OUT/build/MagicDAB" "$DEPS/src"
 (cd web && npm ci --no-audit --no-fund && npm run build)
 
 fetch() {
-    [ -d "$DEPS/src/$2" ] || curl -fsSL --retry 5 --retry-all-errors "$1" | tar x -C "$DEPS/src" -f -
+    # (checked against its checksum: build/fetch.sh, build/sources.sha256)
+    if [ ! -d "$DEPS/src/$2" ]; then
+        build/fetch.sh "$1" > "$DEPS/src/$2.archive"
+        tar x -C "$DEPS/src" -f "$DEPS/src/$2.archive"
+        rm -f "$DEPS/src/$2.archive"
+    fi
 }
 fetch "https://github.com/xiph/opus/releases/download/v$OPUS_VERSION/opus-$OPUS_VERSION.tar.gz" "opus-$OPUS_VERSION"
 fetch "https://github.com/knik0/faad2/archive/refs/tags/$FAAD_VERSION.tar.gz" "faad2-$FAAD_VERSION"

@@ -92,8 +92,8 @@ codecs() {
         return
     fi
     mkdir -p "$src"
-    [ -d "$src/opus-$OPUS_VERSION" ] || curl -fsSL "https://downloads.xiph.org/releases/opus/opus-$OPUS_VERSION.tar.gz" | tar xz -C "$src"
-    [ -d "$src/faad2-$FAAD_VERSION" ] || curl -fsSL "https://github.com/knik0/faad2/archive/refs/tags/$FAAD_VERSION.tar.gz" | tar xz -C "$src"
+    [ -d "$src/opus-$OPUS_VERSION" ] || build/fetch.sh "https://github.com/xiph/opus/releases/download/v$OPUS_VERSION/opus-$OPUS_VERSION.tar.gz" | tar xz -C "$src"
+    [ -d "$src/faad2-$FAAD_VERSION" ] || build/fetch.sh "https://github.com/knik0/faad2/archive/refs/tags/$FAAD_VERSION.tar.gz" | tar xz -C "$src"
     # (CMAKE_POLICY_VERSION_MINIMUM: CMake 4 refuses projects written for old versions)
     local android=(
         -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake"
@@ -120,9 +120,9 @@ rtlsdr() {
         return
     fi
     mkdir -p "$src"
-    [ -d "$src/libusb-$LIBUSB_VERSION" ] || curl -fsSL "https://github.com/libusb/libusb/releases/download/v$LIBUSB_VERSION/libusb-$LIBUSB_VERSION.tar.bz2" | tar xj -C "$src"
+    [ -d "$src/libusb-$LIBUSB_VERSION" ] || build/fetch.sh "https://github.com/libusb/libusb/releases/download/v$LIBUSB_VERSION/libusb-$LIBUSB_VERSION.tar.bz2" | tar xj -C "$src"
     if [ ! -d "$src/rtl-sdr-$RTLSDR_VERSION" ]; then
-        curl -fsSL "https://github.com/osmocom/rtl-sdr/archive/refs/tags/v$RTLSDR_VERSION.tar.gz" | tar xz -C "$src"
+        build/fetch.sh "https://github.com/osmocom/rtl-sdr/archive/refs/tags/v$RTLSDR_VERSION.tar.gz" | tar xz -C "$src"
         patch -p1 -d "$src/rtl-sdr-$RTLSDR_VERSION" < build/android/rtlsdr-open-fd.patch
     fi
     # (sources kept from a build before it: patched once)

@@ -1,0 +1,22 @@
+# SHA-256 and address of everything the builds download (build/fetch.sh).
+# A new version: its line here, with the checksum its publisher gives, or of
+# the file once it was looked at.
+
+# codecs and the RTL-SDR library (sources)
+65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1  https://github.com/xiph/opus/releases/download/v1.5.2/opus-1.5.2.tar.gz
+3fcbd305e4abd34768c62050e18ca0986f7d9c5eca343fb98275418013065c0e  https://github.com/knik0/faad2/archive/refs/tags/2.11.2.tar.gz
+ffaa41d741a8a3bee244ac8e54a72ea05bf2879663c098c82fc5757853441575  https://github.com/libusb/libusb/releases/download/v1.0.27/libusb-1.0.27.tar.bz2
+23dec530f40456a8396e7c897f313859877e18b4c6432c6d323645871e351f6f  https://github.com/osmocom/rtl-sdr/archive/refs/tags/v2.0.3.tar.gz
+
+# Zadig for the Windows package
+4ecaa95df3da3621486a043aef8b3050b8bafe7c901402871e816229ef82039b  https://github.com/pbatard/libwdi/releases/download/v1.5.1/zadig-2.9.exe
+
+# rustup (as its .sha256 files say)
+b1c8cb14e30889e7e2999e6b69e62d9e9b9ffc0f4df8180564d306d9680e6c55  https://static.rust-lang.org/rustup/archive/1.29.3/x86_64-unknown-linux-gnu/rustup-init
+9f608c142e0e38a78957d0661ba1dfaf0b6fb37184cfaa4b9a0aa57af6184282  https://static.rust-lang.org/rustup/archive/1.29.3/aarch64-unknown-linux-gnu/rustup-init
+
+# Android: NDK and command line tools (the files Google's repository lists by
+# their SHA-1), Gradle (as its .sha256 file says)
+59c2f6dc96743b5daf5d1626684640b20a6bd2b1d85b13156b90333741bad5cc  https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+2d2d50857e4eb553af5a6dc3ad507a17adf43d115264b1afc116f95c92e5e258  https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531  https://services.gradle.org/distributions/gradle-8.14.3-bin.zip

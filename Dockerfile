@@ -18,7 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libo
 # makes of some stations' DRC data (one station: +25 dB) distort them. Debian's
 # libfaad2 applies it.
 ARG FAAD_VERSION=2.11.2
-RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/knik0/faad2/archive/refs/tags/${FAAD_VERSION}.tar.gz | tar xz -C /tmp \
+# (what a build downloads is checked: build/fetch.sh, build/sources.sha256)
+COPY build/fetch.sh build/sources.sha256 /opt/fetch/
+RUN sh /opt/fetch/fetch.sh https://github.com/knik0/faad2/archive/refs/tags/${FAAD_VERSION}.tar.gz | tar xz -C /tmp \
     && cmake -S /tmp/faad2-${FAAD_VERSION} -B /tmp/faad -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
        -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DFAAD_BUILD_CLI=OFF -DFAAD_APPLY_DRC=OFF -DCMAKE_INSTALL_PREFIX=/opt/static \
     && cmake --build /tmp/faad -j1 && cmake --install /tmp/faad && rm -rf /tmp/faad /tmp/faad2-${FAAD_VERSION}
@@ -46,8 +48,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends librtlsdr0 libh
 COPY --from=build /usr/local/bin/magicdab /usr/local/bin/magicdab
 COPY --from=web /web/dist /usr/share/magicdab/web
 COPY LICENSE LICENSE-EXCEPTION.txt THIRD-PARTY.md /usr/share/doc/magicdab/
-# frp client for the public tunnel (Settings > Tunnel)
-COPY --from=fatedier/frpc:v0.61.1 /usr/bin/frpc /usr/local/bin/frpc
+# frp client for the public tunnel (Settings > Tunnel), the image of that
+# release by its digest (a tag can be moved)
+# (the version of FRP_VERSION in crates/server/src/tunnel.rs)
+COPY --from=fatedier/frpc:v0.72.0@sha256:c447f0c3572a02bd3da5677f249db3b62cb02d7367d1d5bb420678ce092d65c8 /usr/bin/frpc /usr/local/bin/frpc
 ENV MAGICDAB_LISTEN=0.0.0.0:8080 \
     MAGICDAB_DATA_DIR=/data \
     MAGICDAB_WEB_ROOT=/usr/share/magicdab/web

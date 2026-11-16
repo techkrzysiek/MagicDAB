@@ -16,21 +16,23 @@ FROM rust:1-slim-trixie AS toolchain
 RUN apt-get update && apt-get install -y --no-install-recommends cmake make curl ca-certificates unzip openjdk-21-jdk-headless bzip2 patch \
     && rm -rf /var/lib/apt/lists/*
 RUN rustup target add aarch64-linux-android x86_64-linux-android armv7-linux-androideabi
+# (what a build downloads is checked: build/fetch.sh, build/sources.sha256)
+COPY build/fetch.sh build/sources.sha256 /opt/fetch/
 # the NDK: C compilers and the Android C library (the codecs and the server)
 ARG NDK_VERSION=r27c
-RUN curl -fsSL -o /tmp/ndk.zip https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip \
+RUN sh /opt/fetch/fetch.sh https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip > /tmp/ndk.zip \
     && unzip -q /tmp/ndk.zip -d /opt && rm /tmp/ndk.zip && mv /opt/android-ndk-${NDK_VERSION} /opt/ndk
 # the SDK: the platform the app is compiled against and the build tools of the Android Gradle plugin
 ARG CMDLINE_TOOLS=11076708
 ENV ANDROID_HOME=/opt/sdk ANDROID_NDK_HOME=/opt/ndk
-RUN curl -fsSL -o /tmp/tools.zip https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS}_latest.zip \
+RUN sh /opt/fetch/fetch.sh https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS}_latest.zip > /tmp/tools.zip \
     && mkdir -p $ANDROID_HOME/cmdline-tools && unzip -q /tmp/tools.zip -d $ANDROID_HOME/cmdline-tools \
     && mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest && rm /tmp/tools.zip \
     && yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null \
     && $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "build-tools;35.0.0"
 # (the version of android/gradle/wrapper/gradle-wrapper.properties)
 ARG GRADLE_VERSION=8.14.3
-RUN curl -fsSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip \
+RUN sh /opt/fetch/fetch.sh https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip > /tmp/gradle.zip \
     && unzip -q /tmp/gradle.zip -d /opt && rm /tmp/gradle.zip && ln -s /opt/gradle-${GRADLE_VERSION}/bin/gradle /usr/local/bin/gradle
 
 # ---- server and app ----
@@ -41,6 +43,8 @@ COPY crates ./crates
 COPY third_party ./third_party
 COPY android ./android
 COPY build/android ./build/android
+# (build.sh takes them from build/: the patch of librtlsdr, the checked downloads)
+COPY build/rtlsdr-async-cancel.patch build/fetch.sh build/sources.sha256 ./build/
 COPY --from=web /web/dist ./web/dist
 ARG VERSION=0.2.0
 ARG VERSION_CODE=1

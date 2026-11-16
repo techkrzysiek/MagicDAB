@@ -16,16 +16,18 @@ FROM rust:1-slim-trixie AS toolchain
 RUN apt-get update && apt-get install -y --no-install-recommends mingw-w64 cmake make curl ca-certificates bzip2 unzip patch \
     && rm -rf /var/lib/apt/lists/*
 RUN rustup target add x86_64-pc-windows-gnu
+# (what a build downloads is checked: build/fetch.sh, build/sources.sha256)
+COPY build/fetch.sh build/sources.sha256 /opt/fetch/
 
 # codecs as static libraries
 ARG OPUS_VERSION=1.5.2
 ARG FAAD_VERSION=2.11.2
-RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/xiph/opus/releases/download/v${OPUS_VERSION}/opus-${OPUS_VERSION}.tar.gz | tar xz -C /tmp \
+RUN sh /opt/fetch/fetch.sh https://github.com/xiph/opus/releases/download/v${OPUS_VERSION}/opus-${OPUS_VERSION}.tar.gz | tar xz -C /tmp \
     && cmake -S /tmp/opus-${OPUS_VERSION} -B /tmp/opus -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
        -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DOPUS_BUILD_TESTING=OFF -DOPUS_BUILD_PROGRAMS=OFF \
        -DCMAKE_INSTALL_PREFIX=/opt/win \
     && cmake --build /tmp/opus -j"$(nproc)" && cmake --install /tmp/opus
-RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/knik0/faad2/archive/refs/tags/${FAAD_VERSION}.tar.gz | tar xz -C /tmp \
+RUN sh /opt/fetch/fetch.sh https://github.com/knik0/faad2/archive/refs/tags/${FAAD_VERSION}.tar.gz | tar xz -C /tmp \
     && cmake -S /tmp/faad2-${FAAD_VERSION} -B /tmp/faad -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
        -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DFAAD_BUILD_CLI=OFF -DFAAD_APPLY_DRC=OFF -DCMAKE_INSTALL_PREFIX=/opt/win \
     && cmake --build /tmp/faad -j"$(nproc)" && cmake --install /tmp/faad
@@ -37,13 +39,13 @@ RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/knik0/faad2/archi
 # (LoadLibraryExW failed)". The dongle needs WinUSB (Zadig, in the package).
 ARG LIBUSB_VERSION=1.0.27
 ARG RTLSDR_VERSION=2.0.3
-RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/libusb/libusb/releases/download/v${LIBUSB_VERSION}/libusb-${LIBUSB_VERSION}.tar.bz2 | tar xj -C /tmp \
+RUN sh /opt/fetch/fetch.sh https://github.com/libusb/libusb/releases/download/v${LIBUSB_VERSION}/libusb-${LIBUSB_VERSION}.tar.bz2 | tar xj -C /tmp \
     && cd /tmp/libusb-${LIBUSB_VERSION} \
     && ./configure -q --host=x86_64-w64-mingw32 --prefix=/opt/win --disable-shared --enable-static \
     && make -s -j"$(nproc)" >/dev/null 2>&1 && make -s install >/dev/null
 # (build/rtlsdr-async-cancel.patch: no crash in libusb when the stick is closed)
 COPY build/rtlsdr-async-cancel.patch build/windows/rtlsdr.rc.in /tmp/
-RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/osmocom/rtl-sdr/archive/refs/tags/v${RTLSDR_VERSION}.tar.gz | tar xz -C /tmp \
+RUN sh /opt/fetch/fetch.sh https://github.com/osmocom/rtl-sdr/archive/refs/tags/v${RTLSDR_VERSION}.tar.gz | tar xz -C /tmp \
     && r=/tmp/rtl-sdr-${RTLSDR_VERSION} && patch -p1 -d $r < /tmp/rtlsdr-async-cancel.patch && mkdir -p /opt/rtlsdr \
     && sed -e "s/@COMMAS@/$(echo ${RTLSDR_VERSION} | tr . ,)/" -e "s/@VERSION@/${RTLSDR_VERSION}/g" -e "s/@LIBUSB@/${LIBUSB_VERSION}/" \
        /tmp/rtlsdr.rc.in > /tmp/rtlsdr.rc && x86_64-w64-mingw32-windres /tmp/rtlsdr.rc -O coff -o /tmp/rtlsdr-res.o \
@@ -56,10 +58,8 @@ RUN curl -fsSL --retry 5 --retry-all-errors https://github.com/osmocom/rtl-sdr/a
 # Zadig (GPL-3.0, Pete Batard, https://zadig.akeo.ie) for the WinUSB driver of
 # the dongle; source: https://github.com/pbatard/libwdi/tree/v1.5.1
 ARG ZADIG_TAG=v1.5.1 ZADIG_VERSION=2.9
-ARG ZADIG_SHA256=4ecaa95df3da3621486a043aef8b3050b8bafe7c901402871e816229ef82039b
 RUN mkdir -p /opt/zadig \
-    && curl -fsSL --retry 5 --retry-all-errors -o /opt/zadig/zadig.exe https://github.com/pbatard/libwdi/releases/download/${ZADIG_TAG}/zadig-${ZADIG_VERSION}.exe \
-    && echo "${ZADIG_SHA256}  /opt/zadig/zadig.exe" | sha256sum -c - \
+    && sh /opt/fetch/fetch.sh https://github.com/pbatard/libwdi/releases/download/${ZADIG_TAG}/zadig-${ZADIG_VERSION}.exe > /opt/zadig/zadig.exe \
     && curl -fsSL --retry 5 --retry-all-errors -o /opt/zadig/LICENSE-Zadig.txt https://raw.githubusercontent.com/pbatard/libwdi/${ZADIG_TAG}/COPYING
 ENV FAAD_LIB_DIR=/opt/win/lib OPUS_LIB_DIR=/opt/win/lib
 

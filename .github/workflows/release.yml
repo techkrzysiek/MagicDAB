@@ -6,6 +6,10 @@
 # last v0.3.* tag plus one, so no numbers are skipped); so is a pushed tag like v0.3.0, or a run from the
 # Actions tab. Installed copies look for updates at
 # releases/latest/download/latest.json of this repository.
+#
+# Actions are named by their commit (the tag in the comment): a tag can be
+# moved to other code, and what builds the packages decides what installed
+# copies get. The job that signs the manifest runs GitHub's own actions only.
 name: Release
 
 on:
@@ -17,11 +21,9 @@ on:
     # releases anyway)
     paths-ignore: ['**.md', 'docs/**', 'LICENSE*', '.github/**']
 
+# (each job has what it needs: the builds only read)
 permissions:
-  contents: write
-  packages: write
-  # (starting android.yml for the release)
-  actions: write
+  contents: read
 
 # (one release at a time, in the order of the pushes)
 concurrency:
@@ -38,7 +40,7 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
       - name: Version and notes
@@ -52,7 +54,7 @@ jobs:
           prev=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)
           git log --no-merges --format='- %s' ${prev:+$prev..}HEAD | head -n 30 > notes.md
           cat notes.md
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: pkg-notes
           path: notes.md
@@ -61,14 +63,14 @@ jobs:
     needs: version
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - name: Windows package
         env:
           VERSION: ${{ needs.version.outputs.version }}
           PACKAGE_URL: https://github.com/${{ github.repository }}/releases/download/v${{ needs.version.outputs.version }}
         run: build/windows.sh
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: pkg-windows
           path: |
@@ -88,14 +90,14 @@ jobs:
     # (a release without the arm64 package rather than none)
     continue-on-error: ${{ matrix.runner == 'ubuntu-26.04-arm' }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - name: Linux package
         env:
           VERSION: ${{ needs.version.outputs.version }}
           PACKAGE_URL: https://github.com/${{ github.repository }}/releases/download/v${{ needs.version.outputs.version }}
         run: build/linux.sh
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: pkg-linux-${{ matrix.runner }}
           path: |
@@ -109,12 +111,13 @@ jobs:
     # (built here only: a broken macOS build does not hold up the others)
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 20
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
+          toolchain: stable
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - name: Build tools
         run: brew install pkgconf cmake || true
@@ -123,7 +126,7 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           PACKAGE_URL: https://github.com/${{ github.repository }}/releases/download/v${{ needs.version.outputs.version }}
         run: build/macos.sh
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: pkg-macos
           path: |
@@ -136,14 +139,22 @@ jobs:
     # (the Windows and x64 Linux packages at least)
     if: ${{ !cancelled() && needs.windows.result == 'success' }}
     runs-on: ubuntu-26.04
+    permissions:
+      # the release and its tag
+      contents: write
+      # starting android.yml for the release
+      actions: write
+      # the attestation of the packages
+      id-token: write
+      attestations: write
     steps:
       # (the keys the program believes, for the check of the signing key)
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           sparse-checkout: crates/server/src/update.rs
           sparse-checkout-cone-mode: false
       # (ours only: the Docker job leaves a build record that is no zip)
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: pkg-*
           path: dist
@@ -184,6 +195,15 @@ jobs:
           rm -f "$key"
           grep -q "\"$pub\"" crates/server/src/update.rs || { echo "::error::the signing key is not one of SIGNING_KEYS in update.rs"; exit 1; }
           test "$(wc -c < dist/latest.json.sig)" -eq 64
+      # which run of which commit made the packages, signed by GitHub and kept
+      # with the repository: `gh attestation verify <zip> --repo <this one>`
+      # (a release goes on without it)
+      - name: Attestation of the packages
+        continue-on-error: true
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: dist/MagicDAB-*.zip
+          create-storage-record: false
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -215,10 +235,13 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # (an image without arm64 rather than none)
     continue-on-error: ${{ matrix.arch == 'arm64' }}
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -228,7 +251,7 @@ jobs:
         run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/magicdab" >> "$GITHUB_OUTPUT"
       - name: Docker image
         id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         env:
           DOCKER_BUILD_RECORD_UPLOAD: false
         with:
@@ -243,7 +266,7 @@ jobs:
         run: mkdir -p digests && touch "digests/${DIGEST#sha256:}"
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: digest-${{ matrix.arch }}
           path: digests/*
@@ -253,19 +276,26 @@ jobs:
     needs: [version, docker]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: write
+      # the attestation of the image
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: digest-*
           path: digests
           merge-multiple: true
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - name: One tag for every architecture
+        id: tags
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
@@ -273,3 +303,17 @@ jobs:
           test -n "$(ls digests)" || { echo "::error::no image built"; exit 1; }
           docker buildx imagetools create -t "$image:$VERSION" -t "$image:latest" $(for d in digests/*; do echo "$image@sha256:${d#digests/}"; done)
           docker buildx imagetools inspect "$image:$VERSION"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "digest=$(docker buildx imagetools inspect "$image:$VERSION" --format '{{json .Manifest.Digest}}' | tr -d '"')" >> "$GITHUB_OUTPUT"
+      # which run of which commit made the image, signed by GitHub and kept
+      # next to it in the registry:
+      # `gh attestation verify oci://ghcr.io/<owner>/magicdab:<version> --repo <this one>`
+      # (the image is out without it too)
+      - name: Attestation of the image
+        continue-on-error: true
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-name: ${{ steps.tags.outputs.image }}
+          subject-digest: ${{ steps.tags.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false

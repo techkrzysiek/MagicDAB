@@ -2,7 +2,10 @@
 # The admin password is logged at the first start (or set MAGICDAB_ADMIN_PASSWORD).
 # Watchtower below keeps the image up to date: it updates only the containers with
 # the label com.centurylinklabs.watchtower.scope=magicdab, so it leaves the other
-# containers of the host (and another Watchtower) alone.
+# containers of the host (and another Watchtower) alone. It takes whatever the
+# registry has under "latest": to choose the updates yourself, name a version
+# (ghcr.io/techkrzysiek/magicdab:0.3.N) and leave Watchtower out; an image can be
+# checked against the build that made it (README, "Docker").
 services:
   magicdab:
     image: ghcr.io/techkrzysiek/magicdab:latest
@@ -14,6 +17,15 @@ services:
       com.centurylinklabs.watchtower.scope: magicdab
     # the receiver before other work on the host (audio without gaps)
     cpu_shares: 8192
+    # nothing in the container gains rights it was not started with, and it
+    # has none of root's special ones but reading and writing files of other
+    # users (a data folder made by another one)
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
     ports:
       # (3222 on this computer: 8080 is often FM-DX-Webserver's)
       - "3222:8080"
@@ -48,8 +60,9 @@ services:
   # a new release of the image: pulled and MagicDAB restarted with it, at 4:30 at night
   # (a restart is a short break for the listeners)
   watchtower:
-    # the maintained Watchtower (containrrr/watchtower is archived)
-    image: nickfedor/watchtower
+    # the maintained Watchtower (containrrr/watchtower is archived), one release
+    # by its digest: it holds the Docker socket, so not whatever "latest" is
+    image: nickfedor/watchtower:1.24.0@sha256:e96976bcbeaf0a9adeddc9016a539c27a2245ef6bb7d3ca97ed106783350d387
     container_name: watchtower-magicdab
     restart: unless-stopped
     volumes:

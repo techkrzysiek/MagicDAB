@@ -1,5 +1,8 @@
 # Formatting, clippy, tests and a build of the web interface for every push
 # and pull request.
+#
+# Actions are named by their commit (the tag in the comment): a tag can be
+# moved to other code.
 name: CI
 
 on:
@@ -7,24 +10,29 @@ on:
     branches: [main]
   pull_request:
 
+# (nothing is written: the code is read, built and tested)
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Libraries
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libfaad-dev libopus-dev
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
+          toolchain: stable
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Formatting
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Tests
         run: cargo test --release --workspace
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 20
           cache: npm
@@ -37,10 +45,12 @@ jobs:
     # the server builds with the Rust of Debian 13 (rust-version in Cargo.toml)
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Libraries
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libfaad-dev libopus-dev
-      - uses: dtolnay/rust-toolchain@1.85
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: "1.85"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Build with Rust 1.85
         run: cargo check --workspace --all-targets --locked
