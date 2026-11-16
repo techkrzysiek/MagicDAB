@@ -11,18 +11,22 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 
-const FRP_VERSION: &str = "0.61.1";
+/// The frp release of the frpc this program downloads (and of the one in the
+/// Docker image, Dockerfile). frp keeps a client working with servers eight
+/// minor releases older and newer, no further: a new one here from time to
+/// time, the server first when both move.
+const FRP_VERSION: &str = "0.72.0";
 /// SHA-256 of the archives of that release (frp_sha256_checksums.txt): a
 /// program downloaded and run must be the one checked here.
 const FRP_SHA256: &[(&str, &str)] = &[
-    ("darwin_amd64", "403a0ee5e92f083a863d984b7af1e9d70ba2aaa28e87f42f1fe085adf76b8491"),
-    ("darwin_arm64", "3e65f13a17a284bd6013e6bb6856bc2720074cea6094cc446c1f4c3932154c2d"),
-    ("freebsd_amd64", "cb5edf41be38bd47bd7f68210c34500f5dac74423d8084ed8d7e0f3bce050cf5"),
-    ("linux_amd64", "bff260b68ca7b1461182a46c4f34e9709ba32764eed30a15dd94ac97f50a2c40"),
-    ("linux_arm", "8c7ebb07916e69d959d2a90f80900850c41b6dc1decdb87ccba4bc2f3574f855"),
-    ("linux_arm64", "af6366f2b43920ebfe6235dba6060770399ed1fb18601e5818552bd46a7621f8"),
-    ("windows_amd64", "e0094cd0baf03d5ff9ce9739199406871ad8788cf51e766f00ad3a9e7a836f3a"),
-    ("windows_arm64", "099914b6f66b1d983a9402e3a9a116bccc683c877f6dbfbbb5c0f171b584675f"),
+    ("darwin_amd64", "60439dc6bf794c4182a1a4cac147d642f839d55201607208979eb23aecd09be9"),
+    ("darwin_arm64", "6e8576c5b6b9914a86850f6ff4fb81c5a09e706f91f70f64d5f398558bdc9db8"),
+    ("freebsd_amd64", "584662abdb72ca01cf01fb9734d99b3bb7183d4cb564dc50b549ee4a46bbf21b"),
+    ("linux_amd64", "daf719b32ca2778770bb92955e231a07414d754378b9af328aa2642862479804"),
+    ("linux_arm", "d0531b20c7fef4c7d2efb281931e62f0612bb7f0de62d200fa9020fd58d319ca"),
+    ("linux_arm64", "02180b857480302fd934e9ddbd50fe2f73229f99062f88756abc6de9df5e95cf"),
+    ("windows_amd64", "5197c1b69564089cdc229fc1260a0e25db1e722b1b7db45fe1542c3c43edf9ae"),
+    ("windows_arm64", "e4b83b66c4045971dd9a47cdef16dd02af471aaa6667dd303e63b1a669162927"),
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -128,6 +132,16 @@ impl Tunnel {
                 }
             };
             let frpc = match find_frpc(&data_dir) {
+                // the frpc this program downloaded before, of another release:
+                // the one of FRP_VERSION replaces it (it runs on with the old
+                // one when that cannot be had now)
+                Some(p) if downloaded_before(&p, &data_dir) && version_of(&p).as_deref() != Some(FRP_VERSION) => {
+                    set("downloading", format!("frp {FRP_VERSION}"));
+                    download_frpc(&data_dir).unwrap_or_else(|e| {
+                        log::warn!("tunnel: cannot get frpc {FRP_VERSION} ({e}): going on with the one here");
+                        p
+                    })
+                }
                 Some(p) => p,
                 None => {
                     set("downloading", format!("frp {FRP_VERSION}"));
@@ -270,13 +284,8 @@ fn write_config(path: &Path, c: &TunnelConfig, port: u16) -> std::io::Result<()>
         "\n[[proxies]]\nname = \"web\"\ntype = \"http\"\nlocalIP = \"127.0.0.1\"\nlocalPort = {port}\nsubdomain = {}\n",
         toml_str(&c.subdomain)
     );
-    std::fs::write(path, s)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
-    Ok(())
+    // (only its user reads it, from its first byte: the tunnel's token is in it)
+    crate::config::write_private(path, s.as_bytes())
 }
 
 fn exe_name() -> &'static str {
@@ -303,6 +312,26 @@ fn find_frpc(data_dir: &Path) -> Option<PathBuf> {
         candidates.extend(std::env::split_paths(&path).map(|d| d.join(exe_name())));
     }
     candidates.into_iter().find(|p| p.is_file())
+}
+
+/// The frpc in `<data>/bin`: the one this program downloaded (not one the
+/// package or the admin put next to the program, into PATH or MAGICDAB_FRPC).
+fn downloaded_before(frpc: &Path, data_dir: &Path) -> bool {
+    frpc == data_dir.join("bin").join(exe_name())
+}
+
+/// What `frpc --version` says ("0.72.0").
+fn version_of(frpc: &Path) -> Option<String> {
+    let mut cmd = Command::new(frpc);
+    cmd.arg("--version").stdin(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let out = cmd.output().ok()?;
+    let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!version.is_empty()).then_some(version)
 }
 
 /// Download the official frp release and extract frpc into `<data>/bin`.
@@ -349,12 +378,20 @@ fn download_frpc(data_dir: &Path) -> Result<PathBuf, String> {
     let dir = data_dir.join("bin");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(exe_name());
-    std::fs::write(&path, bin).map_err(|e| e.to_string())?;
+    // (next to it first, then in its place: an frpc of an earlier release
+    // may still be there, and a file being run cannot be written into)
+    let new = dir.join(format!("{}.new", exe_name()));
+    std::fs::write(&new, bin).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+        let _ = std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755));
     }
+    std::fs::rename(&new, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&new);
+        e.to_string()
+    })?;
+    log::info!("tunnel: frpc {FRP_VERSION} in {}", path.display());
     Ok(path)
 }
 
