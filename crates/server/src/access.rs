@@ -1,7 +1,7 @@
 //! Who may use the receiver: banned addresses and networks (by the admin, or
 //! for a while after a flood), refused Tor exit nodes and autonomous systems,
-//! the address of a client behind the tunnel, wrong tuning passwords and the
-//! channels listeners may tune to.
+//! the address of a client behind the tunnel or a reverse proxy, passwords
+//! tried too often and the channels listeners may tune to.
 //!
 //! Every HTTP request passes `admit` (main.rs): a refused address gets 403 on
 //! any path, so neither the page nor a WebSocket (/ws, /chat). Open connections
@@ -92,22 +92,27 @@ fn parse_addr(s: &str) -> Option<IpAddr> {
 }
 
 /// The client's address. Forwarded headers count only when the request came
-/// from a proxy (frpc on this machine, a reverse proxy in the network): from
-/// the right, the first address that is not a proxy is the client's, so what a
-/// client writes into X-Forwarded-For itself (it stays on the left) changes
-/// nothing - a banned client cannot come back with a made-up address.
+/// from a proxy (`is_proxy`: frpc on this machine, a reverse proxy the admin
+/// trusts): from the right, the first address that is not a hop on the way
+/// is the client's, so what a client writes into X-Forwarded-For itself (it
+/// stays on the left) changes nothing - a banned client cannot come back
+/// with a made-up address. `is_hop`: the proxies, and for a request through
+/// the tunnel the private addresses too (the tunnel server's own hops: its
+/// TLS proxy reaches frps from a network of its own, and frps adds that
+/// address after the client's).
 pub fn client_addr<'a>(
     forwarded_for: impl Iterator<Item = &'a str>,
     real_ip: Option<&str>,
     peer: IpAddr,
     is_proxy: impl Fn(IpAddr) -> bool,
+    is_hop: impl Fn(IpAddr) -> bool,
 ) -> IpAddr {
     let peer = normalize(peer);
     if !is_proxy(peer) {
         return peer;
     }
     let chain: Vec<IpAddr> = forwarded_for.flat_map(|h| h.split(',')).filter_map(parse_addr).collect();
-    if let Some(a) = chain.iter().rev().find(|a| !is_proxy(**a)) {
+    if let Some(a) = chain.iter().rev().find(|a| !is_hop(**a)) {
         return *a;
     }
     // only proxies and this network: the first one (a listener at home behind a proxy)
@@ -325,40 +330,57 @@ pub fn clean_channels<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
     out
 }
 
-/// Wrong passwords per address and of everyone together: guessing stops for a
-/// while (forwarded addresses can be made up, so everyone counts too).
+/// The network a password is tried from: an IPv4 address, the /64 of an IPv6
+/// one (one subscriber, who takes a new address inside it at will).
+pub fn network(address: &str) -> String {
+    match address.trim().parse::<IpAddr>().map(normalize) {
+        Ok(ip @ IpAddr::V6(_)) => Net { addr: mask(ip, 64), prefix: 64 }.to_string(),
+        Ok(ip) => ip.to_string(),
+        Err(_) => address.trim().to_string(),
+    }
+}
+
+/// Passwords tried per network and by everyone together: guessing stops for
+/// a while. A network someone logged in from before is not held up by the
+/// guesses of the others (whoever wants the admin out would only have to
+/// keep guessing from many addresses), only by its own.
 pub struct Attempts {
     tries: u32,
     tries_all: usize,
     lock: Duration,
-    per_ip: HashMap<String, (u32, Instant)>,
-    all: VecDeque<Instant>,
+    per_net: HashMap<String, (u32, Instant)>,
+    all: VecDeque<(Instant, String)>,
 }
 
 impl Attempts {
     pub fn new(tries: u32, tries_all: usize, lock: Duration) -> Self {
-        Attempts { tries, tries_all, lock, per_ip: HashMap::new(), all: VecDeque::new() }
+        Attempts { tries, tries_all, lock, per_net: HashMap::new(), all: VecDeque::new() }
     }
 
-    pub fn locked(&mut self, ip: &str, now: Instant) -> bool {
+    /// No password is taken from `net` now; `known`: someone logged in from it before.
+    pub fn locked(&mut self, net: &str, known: bool, now: Instant) -> bool {
         let lock = self.lock;
-        self.per_ip.retain(|_, (_, first)| now.duration_since(*first) < lock);
-        while self.all.front().is_some_and(|t| now.duration_since(*t) >= lock) {
+        self.per_net.retain(|_, (_, first)| now.duration_since(*first) < lock);
+        while self.all.front().is_some_and(|(t, _)| now.duration_since(*t) >= lock) {
             self.all.pop_front();
         }
-        self.per_ip.get(ip).is_some_and(|(n, _)| *n >= self.tries) || self.all.len() >= self.tries_all
+        self.per_net.get(net).is_some_and(|(n, _)| *n >= self.tries) || (!known && self.all.len() >= self.tries_all)
     }
 
-    /// A wrong password: the count of the address and of everyone.
-    pub fn failed(&mut self, ip: &str, now: Instant) -> (u32, usize) {
-        let e = self.per_ip.entry(ip.to_string()).or_insert((0, now));
+    /// A password is tried (counted before it is checked: the check takes a
+    /// while, and many tries at once must not get past the count): the count
+    /// of the network and of everyone.
+    pub fn tried(&mut self, net: &str, now: Instant) -> (u32, usize) {
+        let e = self.per_net.entry(net.to_string()).or_insert((0, now));
         e.0 += 1;
-        self.all.push_back(now);
+        self.all.push_back((now, net.to_string()));
         (e.0, self.all.len())
     }
 
-    pub fn succeeded(&mut self, ip: &str) {
-        self.per_ip.remove(ip);
+    /// The right password: the tries of its network are forgotten.
+    pub fn succeeded(&mut self, net: &str) {
+        self.per_net.remove(net);
+        self.all.retain(|(_, n)| n != net);
     }
 }
 
@@ -368,6 +390,8 @@ struct Rules {
     block_tor: bool,
     blocked_asns: Vec<u32>,
     auto_ban_hours: u32,
+    /// A reverse proxy of this network forwards for its visitors.
+    trust_local_proxies: bool,
 }
 
 /// The address space of the refused ASes.
@@ -404,6 +428,9 @@ pub struct Access {
     pending: Mutex<HashSet<IpAddr>>,
     /// Addresses of the tunnel server: a proxy in forwarded headers, not a client.
     tunnel_server: RwLock<Vec<IpAddr>>,
+    /// The name this receiver has in the tunnel ("mydab.tunnel.example",
+    /// lower case; empty without a tunnel): the Host of a request through it.
+    tunnel_name: RwLock<String>,
     /// When a refusal of an address was logged.
     refused_logged: Mutex<HashMap<IpAddr, Instant>>,
     events: broadcast::Sender<Event>,
@@ -427,6 +454,7 @@ impl Access {
             asn: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashSet::new()),
             tunnel_server: RwLock::new(Vec::new()),
+            tunnel_name: RwLock::new(String::new()),
             refused_logged: Mutex::new(HashMap::new()),
             events: broadcast::channel(64).0,
             wake: crossbeam_channel::bounded(1),
@@ -447,6 +475,7 @@ impl Access {
             r.block_tor = cfg.block_tor;
             r.blocked_asns = cfg.blocked_asns.clone();
             r.auto_ban_hours = cfg.auto_ban_hours;
+            r.trust_local_proxies = cfg.trust_local_proxies;
         }
         // (the Tor list and the prefixes of new ASes are fetched at once)
         let _ = self.wake.0.try_send(());
@@ -640,8 +669,10 @@ impl Access {
 
     /// The tunnel server is a proxy in front of frpc: its address in forwarded
     /// headers is not a client's (resolved in the background; "" when off).
-    pub fn set_tunnel_host(&'static self, host: &str) {
+    /// `name`: this receiver's name in the tunnel (`through_tunnel`).
+    pub fn set_tunnel_host(&'static self, host: &str, name: &str) {
         let host = host.trim().to_string();
+        *self.tunnel_name.write() = if host.is_empty() { String::new() } else { name.trim().to_ascii_lowercase() };
         if host.is_empty() {
             self.tunnel_server.write().clear();
             return;
@@ -655,9 +686,26 @@ impl Access {
         });
     }
 
-    /// A proxy in front of the program: this network or the tunnel server.
+    /// A proxy in front of the program, whose forwarded headers name the
+    /// client: this machine (frpc, a reverse proxy on it), the tunnel server,
+    /// and, where the admin says a reverse proxy of the network is in front
+    /// (Settings > Access), any address of a private network. Not without
+    /// that: every listener at home, on the Docker host or in the same VPN
+    /// could come under an address it made up (past its ban, or to have
+    /// another address banned for its flood).
     pub fn is_proxy(&self, ip: IpAddr) -> bool {
-        is_local(ip) || self.tunnel_server.read().contains(&normalize(ip))
+        let ip = normalize(ip);
+        ip.is_loopback() || self.tunnel_server.read().contains(&ip) || (is_local(ip) && self.rules.read().trust_local_proxies)
+    }
+
+    /// A request that came through the tunnel: from frpc on this machine, for
+    /// this receiver's name there (frps hands on only requests for it). On
+    /// its way the tunnel server's own hops may have private addresses.
+    pub fn through_tunnel(&self, peer: IpAddr, host: &str) -> bool {
+        let name = self.tunnel_name.read();
+        // ("name:443", "name")
+        let host = host.trim().rsplit_once(':').filter(|(_, p)| p.bytes().all(|b| b.is_ascii_digit())).map_or(host.trim(), |(h, _)| h);
+        normalize(peer).is_loopback() && !name.is_empty() && host.eq_ignore_ascii_case(&name)
     }
 
     /// The Tor exit list for the settings: addresses, when, the last error.
@@ -934,7 +982,7 @@ mod tests {
     fn address_behind_proxies() {
         let proxy = |a: IpAddr| is_local(a) || a == ip("198.51.100.7");
         let lo = ip("127.0.0.1");
-        let addr = |xff: &[&str], real: Option<&str>, peer: IpAddr| client_addr(xff.iter().copied(), real, peer, proxy);
+        let addr = |xff: &[&str], real: Option<&str>, peer: IpAddr| client_addr(xff.iter().copied(), real, peer, proxy, proxy);
         // frps adds the address it saw, the TLS proxy in front of it its own
         assert_eq!(addr(&["203.0.113.5, 127.0.0.1"], None, lo), ip("203.0.113.5"));
         assert_eq!(addr(&["203.0.113.5, 198.51.100.7"], None, lo), ip("203.0.113.5"));
@@ -950,6 +998,45 @@ mod tests {
         assert_eq!(addr(&["192.168.1.20, 172.17.0.1"], None, ip("172.17.0.2")), ip("192.168.1.20"));
         assert_eq!(addr(&[], Some("203.0.113.8"), lo), ip("203.0.113.8"));
         assert_eq!(addr(&[], None, ip("::ffff:127.0.0.1")), lo);
+    }
+
+    #[test]
+    fn who_forwards_for_its_visitors() {
+        let a = Access::new();
+        a.load(&AccessConfig::default());
+        *a.tunnel_server.write() = vec![ip("198.51.100.7")];
+        assert!(a.is_proxy(ip("127.0.0.1")) && a.is_proxy(ip("::1")) && a.is_proxy(ip("::ffff:127.0.0.1")));
+        assert!(a.is_proxy(ip("198.51.100.7")));
+        // a listener at home, the Docker host, a neighbour in a VPN: not believed
+        for peer in ["192.168.1.20", "172.17.0.1", "100.64.0.9", "fd00::5"] {
+            assert!(!a.is_proxy(ip(peer)), "{peer}");
+            let seen = client_addr(["8.8.8.8"].into_iter(), Some("8.8.8.8"), ip(peer), |p| a.is_proxy(p), |p| a.is_proxy(p));
+            assert_eq!(seen, normalize(ip(peer)));
+        }
+        // a reverse proxy on this machine names the listener of the network, whatever that one claimed
+        let seen = |xff: &'static str, peer: &str, host: &str| {
+            let tunnel = a.through_tunnel(ip(peer), host);
+            client_addr([xff].into_iter(), None, ip(peer), |p| a.is_proxy(p), |p| a.is_proxy(p) || (tunnel && is_local(p)))
+        };
+        assert_eq!(seen("8.8.8.8, 192.168.1.50", "127.0.0.1", "192.168.1.10:3222"), ip("192.168.1.50"));
+        // through the tunnel: the tunnel server's TLS proxy names the listener,
+        // frps adds the address of that proxy in its own network after it
+        *a.tunnel_name.write() = "mydab.tunnel.example".into();
+        assert!(a.through_tunnel(ip("127.0.0.1"), "MyDAB.tunnel.example") && a.through_tunnel(ip("::1"), "mydab.tunnel.example:443"));
+        assert!(!a.through_tunnel(ip("127.0.0.1"), "other.tunnel.example") && !a.through_tunnel(ip("127.0.0.1"), "192.168.1.10:3222"));
+        assert_eq!(seen("203.0.113.5, 172.25.0.1", "127.0.0.1", "mydab.tunnel.example"), ip("203.0.113.5"));
+        assert_eq!(seen("1.1.1.1, 203.0.113.5, 172.25.0.1", "127.0.0.1", "mydab.tunnel.example"), ip("203.0.113.5"));
+        // (frps alone, without a proxy in front: the address it saw)
+        assert_eq!(seen("1.1.1.1, 203.0.113.5", "127.0.0.1", "mydab.tunnel.example"), ip("203.0.113.5"));
+        // a neighbour of the network that names the tunnel in Host is still itself
+        assert!(!a.through_tunnel(ip("192.168.1.20"), "mydab.tunnel.example"));
+        assert_eq!(seen("8.8.8.8", "192.168.1.20", "mydab.tunnel.example"), ip("192.168.1.20"));
+        // and a listener of the network behind a proxy on this machine, not through the tunnel
+        assert_eq!(seen("8.8.8.8, 192.168.1.50", "127.0.0.1", "localhost:3222"), ip("192.168.1.50"));
+        // the admin says a reverse proxy of the network is in front
+        a.configure(&AccessConfig { trust_local_proxies: true, ..Default::default() });
+        assert!(a.is_proxy(ip("172.17.0.1")) && !a.is_proxy(ip("203.0.113.9")));
+        assert_eq!(seen("203.0.113.5", "172.18.0.3", "dab.example.org"), ip("203.0.113.5"));
     }
 
     #[test]
@@ -1096,20 +1183,35 @@ mod tests {
     fn password_guessing() {
         let mut a = Attempts::new(3, 5, Duration::from_secs(60));
         let t = Instant::now();
-        assert!(!a.locked("1.1.1.1", t));
+        assert!(!a.locked("1.1.1.1", false, t));
         for _ in 0..3 {
-            a.failed("1.1.1.1", t);
+            a.tried("1.1.1.1", t);
         }
-        assert!(a.locked("1.1.1.1", t) && !a.locked("2.2.2.2", t));
-        // everyone together
-        a.failed("2.2.2.2", t);
-        a.failed("3.3.3.3", t);
-        assert!(a.locked("4.4.4.4", t));
+        assert!(a.locked("1.1.1.1", false, t) && !a.locked("2.2.2.2", false, t));
+        // (its own tries hold up a network someone logged in from, too)
+        assert!(a.locked("1.1.1.1", true, t));
+        // everyone together: not the network someone logged in from before
+        a.tried("2.2.2.2", t);
+        a.tried("3.3.3.3", t);
+        assert!(a.locked("4.4.4.4", false, t) && !a.locked("4.4.4.4", true, t));
         // a quarter of an hour later (here a minute): open again
         let later = t + Duration::from_secs(61);
-        assert!(!a.locked("1.1.1.1", later) && !a.locked("4.4.4.4", later));
-        a.failed("2.2.2.2", later);
+        assert!(!a.locked("1.1.1.1", false, later) && !a.locked("4.4.4.4", false, later));
+        // the right password: the tries of its network no longer count, for no one
+        a.tried("2.2.2.2", later);
+        a.tried("5.5.5.5", later);
         a.succeeded("2.2.2.2");
-        assert_eq!(a.failed("2.2.2.2", later), (1, 2));
+        assert_eq!(a.tried("2.2.2.2", later), (1, 2));
+    }
+
+    #[test]
+    fn networks_of_password_tries() {
+        assert_eq!(network(" 203.0.113.7 "), "203.0.113.7");
+        assert_eq!(network("::ffff:203.0.113.7"), "203.0.113.7");
+        // one subscriber, whatever address inside its /64
+        assert_eq!(network("2001:db8:5:6:a:b:c:d"), "2001:db8:5:6::/64");
+        assert_eq!(network("2001:db8:5:6::1"), network("2001:db8:5:6:ffff:ffff:ffff:ffff"));
+        assert_ne!(network("2001:db8:5:6::1"), network("2001:db8:5:7::1"));
+        assert_eq!(network("not an address"), "not an address");
     }
 }

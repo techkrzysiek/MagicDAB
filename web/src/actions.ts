@@ -207,18 +207,19 @@ export function setCodec(codec: 'opus' | 'pcm') {
   if (s.audioEnabled && !nativeAudio()) send({ type: 'audio', enabled: true, codec })
 }
 
+/** The admin login: the password goes to the server once, its answer brings the token kept for reconnects (ws.ts). */
 export function login(password: string) {
-  sessionSet('magicdab.pw', password)
   send({ type: 'login', password })
 }
 
 export function logout() {
+  sessionSet('magicdab.session', null)
   sessionSet('magicdab.pw', null)
   send({ type: 'logout' })
 }
 
 /** The gate of a private server: the administrator or the tuning password
- *  (the server tells which it was; ws.ts keeps it for reconnects). */
+ *  (the server tells which it was; ws.ts keeps the token of the login for reconnects). */
 export function enter(password: string) {
   useStore.getState().set({ gate: { pending: password, error: false, locked: false } })
   send({ type: 'enter', password })
@@ -230,13 +231,13 @@ export function stillHere() {
   send({ type: 'stillHere' })
 }
 
-/** Unlock tuning with the tuning password (kept for reconnects as the admin's). */
+/** Unlock tuning with the tuning password (the token of the login is kept for reconnects, as the admin's). */
 export function tuneLogin(password: string) {
-  sessionSet('magicdab.tunepw', password)
   send({ type: 'tuneLogin', password })
 }
 
 export function tuneLogout() {
+  sessionSet('magicdab.tunesession', null)
   sessionSet('magicdab.tunepw', null)
   send({ type: 'tuneLogout' })
 }

@@ -3,6 +3,12 @@
 
 use super::*;
 
+/// Text a listener's page sent, for a line of the log: one line, no longer
+/// than `max` characters.
+fn said(text: &str, max: usize) -> String {
+    text.chars().take(max).map(|c| if c.is_control() { ' ' } else { c }).collect()
+}
+
 impl Radio {
     pub(super) fn on_message(&mut self, client: u64, msg: Value) {
         let kind = msg["type"].as_str().unwrap_or("");
@@ -13,38 +19,27 @@ impl Radio {
         self.note_action(client, kind, &msg);
         match kind {
             "login" => {
-                let pw = msg["password"].as_str().unwrap_or("");
-                let ip = self.client_ip(client);
-                // the program's own window (Windows application) needs no password
-                let desktop = msg["desktop"].as_str().is_some_and(crate::desktop::is_token);
-                // password guessing: a few attempts per address, not many of everyone
-                // together (forwarded addresses can be made up)
-                let locked = !desktop && self.login_locked(&ip);
-                let ok = !locked
-                    && (desktop || self.settings.admin_password_hash.as_deref().map(|h| config::verify_password(h, pw)).unwrap_or(false));
-                if locked {
-                    self.notice(client, "warning", "login_locked");
-                } else if ok {
-                    self.login_failures.remove(&ip);
-                    // automatic re-login after reconnects is not worth a log line
+                // the program's own window (Windows application, the Android app) needs no password
+                if msg["desktop"].as_str().is_some_and(crate::desktop::is_token) {
+                    let ip = self.client_ip(client);
                     let was = self.grant_admin(client);
                     if !was && !msg["auto"].as_bool().unwrap_or(false) {
                         log::info!("client {client} ({ip}) logged in as admin");
                     }
-                } else {
-                    log::warn!("client {client} ({ip}): wrong admin password");
-                    self.login_failed(&ip);
-                }
-                // (a client at the gate of a private server comes in; one that failed there learns it)
-                let chat_token = if ok { self.after_login(client) } else { None };
-                self.hub.send_always(client, text(&json!({"type": "login", "ok": ok, "admin": ok, "chatToken": chat_token})));
-                if ok {
+                    let chat_token = self.after_login(client);
+                    self.hub.send_always(client, text(&json!({"type": "login", "ok": true, "admin": true, "chatToken": chat_token})));
                     self.hub.send(client, text(&self.settings_json()));
                     self.hub.send(client, text(&self.update_json()));
                     self.send_dxrec_list(client);
+                } else if msg["session"].is_string() {
+                    // a page that logged in before (radio/login.rs)
+                    self.resume_session(client, login::Ask::Login, &msg);
+                } else {
+                    self.ask_password(client, login::Ask::Login, &msg);
                 }
             }
             "logout" => {
+                self.end_session(client, crate::sessions::Kind::Admin);
                 self.hub.update(client, |c| {
                     c.admin = false;
                     c.chat_token = None;
@@ -53,7 +48,7 @@ impl Radio {
                 self.after_logout(client);
             }
             // the gate of a private server: the admin or the tuning password
-            "enter" => self.on_enter(client, &msg),
+            "enter" => self.ask_password(client, login::Ask::Enter, &msg),
             // the answer to "are you still listening?" (an action like any other)
             "stillHere" => {}
             "select" => {
@@ -512,21 +507,30 @@ impl Radio {
                 self.last_linking_sent = Instant::now().checked_sub(Duration::from_secs(5)).unwrap_or_else(Instant::now);
             }
             "diag" => {
+                // (anyone may send these, also at the gate of a private server:
+                // a few a minute, and no more of each than a page writes)
+                if !self.hub.update(client, |c| c.may_report()).unwrap_or(false) {
+                    return;
+                }
                 let ip = self.client_ip(client);
                 let bg = if msg["visible"].as_bool() == Some(false) { ", page in the background" } else { "" };
                 match msg["event"].as_str() {
                     Some("reconnected") => {
                         let down = msg["downMs"].as_f64().unwrap_or(0.0) / 1000.0;
                         let code = msg["code"].as_u64().unwrap_or(0);
-                        let why = msg["reason"].as_str().filter(|r| !r.is_empty()).map(|r| format!(", {r}")).unwrap_or_default();
+                        let why =
+                            msg["reason"].as_str().filter(|r| !r.is_empty()).map(|r| format!(", {}", said(r, 120))).unwrap_or_default();
                         let how = if msg["clean"].as_bool() == Some(true) { "closed" } else { "broken" };
                         let offline = if msg["online"].as_bool() == Some(false) { ", browser offline" } else { "" };
                         log::info!("client {client} ({ip}): reconnected after {down:.1} s, the previous connection was {how} (code {code}{why}){offline}{bg}");
                     }
                     Some("uiError") => {
-                        let message = msg["message"].as_str().unwrap_or("");
-                        let stack = msg["stack"].as_str().unwrap_or("");
-                        log::warn!("client {client} ({ip}): UI error: {message} (view {})\n{stack}", msg["view"].as_str().unwrap_or("?"));
+                        let message = said(msg["message"].as_str().unwrap_or(""), 500);
+                        let view = said(msg["view"].as_str().unwrap_or("?"), 40);
+                        // (its lines indented: none of them reads as a line of the log)
+                        let stack: String = msg["stack"].as_str().unwrap_or("").chars().take(4000).collect();
+                        let stack: Vec<String> = stack.lines().map(|l| format!("    {}", said(l, 400))).collect();
+                        log::warn!("client {client} ({ip}): UI error: {message} (view {view})\n{}", stack.join("\n"));
                     }
                     Some("underruns") => {
                         let n = msg["count"].as_u64().unwrap_or(0);
@@ -582,8 +586,9 @@ impl Radio {
                         let p = r.finish();
                         log::info!("raw recording stopped: {}", p.display());
                     }
-                } else if self.eti_input.is_some() || self.dongle_active() {
-                    // (a stream, a recording of ETI or the DTR-100: no IQ samples to record)
+                } else if self.eti_input.is_some() || self.dongle_active() || matches!(self.input, DeviceConfig::RawFile { .. }) {
+                    // (a stream, a recording of ETI or the DTR-100: no IQ samples to
+                    // record; a file played as the tuner: its bytes are not handed out again)
                     self.notice(client, "warning", "raw_unavailable");
                 } else if self.raw_recorder.lock().is_none() {
                     let seconds = msg["seconds"].as_u64().unwrap_or(60).clamp(1, 3600) as u32;
@@ -654,6 +659,22 @@ impl Radio {
                     };
                     changes::post_discord(&self.settings.discord_webhook, &self.settings.station_name, None, &ev);
                 }
+            }
+            // a download by an admin's page: a ticket for it, used once (hub.rs)
+            "ticket" => {
+                if !self.hub.is_admin(client) {
+                    self.notice(client, "warning", "admin_required");
+                    return;
+                }
+                let what = msg["for"].as_str().unwrap_or("");
+                let name = msg["name"].as_str().and_then(|n| match what {
+                    "raw" => crate::rawrec::safe_name(n),
+                    "dxrec" => crate::dxrec::safe_name(n),
+                    _ => None,
+                });
+                let Some(name) = name else { return };
+                let ticket = self.hub.ticket(what, &name);
+                self.hub.send(client, text(&json!({"type": "ticket", "for": what, "name": name, "ticket": ticket})));
             }
             "listeners" | "kick" | "ban" | "unban" | "tuneLogin" | "tuneLogout" => self.on_access_message(client, kind, &msg),
             "dxrec" => self.on_dxrec_message(client, &msg),

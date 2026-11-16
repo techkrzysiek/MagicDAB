@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
-import { send } from '../ws'
+import { send, downloadFile } from '../ws'
 import { selectService, startAudio } from '../actions'
 import { formatDuration, whenShort } from '../util'
 import type { DxRecording } from '../types'
@@ -36,19 +36,13 @@ export default function DxRecordings() {
     send({ type: 'dxrec', action: 'list' })
   }, [])
 
-  const download = (r: DxRecording) => {
-    const a = document.createElement('a')
-    a.href = `${base}dxrec/${encodeURIComponent(r.name)}?token=${encodeURIComponent(token ?? '')}`
-    a.download = r.name
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-  }
+  // (the server gives a ticket for it: the token of the login stays out of the address)
+  const download = (r: DxRecording) => downloadFile('dxrec', r.name)
 
   const upload = async (file: File) => {
     setUploading(true)
     try {
-      const r = await fetch(`${base}dxrec/upload?token=${encodeURIComponent(token ?? '')}&name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file })
+      const r = await fetch(`${base}dxrec/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file, headers: { 'x-magicdab-token': token ?? '' } })
       if (!r.ok) notify('error', 'dxrec_upload_failed')
     } catch {
       notify('error', 'dxrec_upload_failed')

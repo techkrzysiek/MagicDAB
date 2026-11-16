@@ -32,6 +32,7 @@ mod radiovis;
 mod rawrec;
 mod servermap;
 mod servicelist;
+mod sessions;
 mod sichanges;
 mod speaker;
 mod spi;
@@ -575,6 +576,15 @@ async fn cache_headers(req: axum::extract::Request, next: axum::middleware::Next
     let path = req.uri().path().to_string();
     let get = req.method() == axum::http::Method::GET;
     let mut res = next.run(req).await;
+    // the interface: scripts of this server only (none written into the page,
+    // none from elsewhere), so a text that got into the page as markup runs nothing
+    let page =
+        res.headers().get(axum::http::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with("text/html"));
+    if page && !res.headers().contains_key(axum::http::header::CONTENT_SECURITY_POLICY) {
+        res.headers_mut().insert(axum::http::header::CONTENT_SECURITY_POLICY, axum::http::HeaderValue::from_static(PAGE_POLICY));
+        res.headers_mut()
+            .insert(axum::http::header::REFERRER_POLICY, axum::http::HeaderValue::from_static("strict-origin-when-cross-origin"));
+    }
     let immutable = get && (path.starts_with("/assets/") || (path.starts_with(background::URL_PREFIX) && res.status().is_success()));
     let v = if immutable { "public, max-age=31536000, immutable" } else { "no-cache" };
     res.headers_mut().insert(axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static(v));
@@ -582,6 +592,18 @@ async fn cache_headers(req: axum::extract::Request, next: axum::middleware::Next
     res.headers_mut().insert(axum::http::header::X_CONTENT_TYPE_OPTIONS, axum::http::HeaderValue::from_static("nosniff"));
     res
 }
+
+/// Content-Security-Policy of the interface. Scripts and styles come from
+/// this server; `blob:` is the player's audio worklet, `wasm-unsafe-eval`
+/// its Opus decoder (WebAssembly; `unsafe-eval` for the browsers that know no
+/// other word for it). Pictures come from anywhere (map tiles, the background
+/// picture of the settings), so the WebSocket is named by its scheme only
+/// (older browsers do not take `'self'` for it, and a proxy may have put
+/// another name into Host). Not `frame-ancestors`: a receiver may be shown
+/// inside a page of its owner's site.
+const PAGE_POLICY: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' blob:; worker-src 'self' blob:; \
+     style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; media-src 'self' blob: data:; \
+     font-src 'self' data:; connect-src 'self' blob: data: ws: wss:; object-src 'none'; base-uri 'self'; form-action 'self'";
 
 #[cfg(unix)]
 async fn terminate() {
@@ -715,16 +737,34 @@ async fn og_image_handler(State(state): State<AppState>) -> impl IntoResponse {
             p.logo.clone()
         }
     };
-    let (data, mime) = match logo.and_then(|(f, m)| std::fs::read(state.data_dir.join("logos").join(f)).ok().map(|d| (d, m))) {
+    // (a picture by its bytes, whatever the index says of it: spi.rs, sniff_mime)
+    let logo = logo.and_then(|(f, _)| std::fs::read(state.data_dir.join("logos").join(f)).ok());
+    let logo = logo.map(|d| (spi::sniff_mime(&d).to_string(), d)).filter(|(m, _)| spi::is_picture_mime(m));
+    let (mime, data) = match logo {
         Some(x) => x,
-        None => (std::fs::read(state.web_root.join("og.png")).unwrap_or_default(), "image/png".to_string()),
+        None => ("image/png".to_string(), std::fs::read(state.web_root.join("og.png")).unwrap_or_default()),
     };
-    ([(axum::http::header::CONTENT_TYPE, mime), (axum::http::header::CACHE_CONTROL, "max-age=300".to_string())], data)
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, mime),
+            (axum::http::header::CACHE_CONTROL, "max-age=300".to_string()),
+            // (shown as a page of its own it runs nothing)
+            (axum::http::header::CONTENT_SECURITY_POLICY, "default-src 'none'; sandbox".to_string()),
+        ],
+        data,
+    )
 }
 
 /// The admin's token of the query (`?token=`, as the chat knows admins).
 fn admin_query(state: &AppState, query: &std::collections::HashMap<String, String>) -> bool {
     query.get("token").is_some_and(|t| state.hub.is_admin_token(t))
+}
+
+/// A download an admin may have: with the ticket its page got for it
+/// (`?ticket=`, used once: hub.rs), or with the token of an admin's login
+/// (`?token=`, for scripts).
+fn may_download(state: &AppState, query: &std::collections::HashMap<String, String>, what: &str, name: &str) -> bool {
+    query.get("ticket").is_some_and(|t| state.hub.take_ticket(t, what, name)) || admin_query(state, query)
 }
 
 /// A DX recording for the admin (dxrec.rs), paced: the listeners' audio
@@ -737,10 +777,10 @@ async fn dxrec_download_handler(
     axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Response {
     use axum::http::StatusCode;
-    if !admin_query(&state, &query) {
+    let Some(name) = dxrec::safe_name(&name) else { return StatusCode::NOT_FOUND.into_response() };
+    if !may_download(&state, &query, "dxrec", &name) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(name) = dxrec::safe_name(&name) else { return StatusCode::NOT_FOUND.into_response() };
     paced_download(&client_ip(&headers, addr), state.data_dir.join(dxrec::DIR).join(&name), name).await
 }
 
@@ -753,10 +793,10 @@ async fn raw_download_handler(
     axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Response {
     use axum::http::StatusCode;
-    if !admin_query(&state, &query) {
+    let Some(name) = rawrec::safe_name(&name) else { return StatusCode::NOT_FOUND.into_response() };
+    if !may_download(&state, &query, "raw", &name) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(name) = rawrec::safe_name(&name) else { return StatusCode::NOT_FOUND.into_response() };
     paced_download(&client_ip(&headers, addr), state.data_dir.join(rawrec::DIR).join(&name), name).await
 }
 
@@ -857,17 +897,21 @@ async fn stream_handler(
 }
 
 /// An .eti or .edi file of the admin's to play back for a day (dxrec.rs):
-/// the file as the body, `?token=&name=`; checked to hold ETI frames or EDI
-/// packets (the name gets the extension of what it holds), capped.
+/// the file as the body, `?name=`, the token of the admin's login in the
+/// header `x-magicdab-token` (as the background picture; `?token=` for
+/// scripts); checked to hold ETI frames or EDI packets (the name gets the
+/// extension of what it holds), capped.
 async fn dxrec_upload_handler(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
     body: axum::body::Body,
 ) -> axum::response::Response {
     use axum::http::StatusCode;
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
-    if !admin_query(&state, &query) {
+    let token = headers.get("x-magicdab-token").and_then(|v| v.to_str().ok()).unwrap_or("");
+    if !state.hub.is_admin_token(token) && !admin_query(&state, &query) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let original = query.get("name").cloned().unwrap_or_default();
@@ -970,7 +1014,17 @@ async fn dxrec_upload_handler(
 fn client_addr(headers: &axum::http::HeaderMap, addr: SocketAddr) -> std::net::IpAddr {
     let forwarded = headers.get_all("x-forwarded-for").into_iter().filter_map(|v| v.to_str().ok());
     let real_ip = headers.get("x-real-ip").and_then(|v| v.to_str().ok());
-    access::client_addr(forwarded, real_ip, addr.ip(), |ip| access::get().is_proxy(ip))
+    let access = access::get();
+    // (through the tunnel the tunnel server's own hops are private addresses)
+    let host = headers.get(axum::http::header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let tunnel = access.through_tunnel(addr.ip(), host);
+    access::client_addr(
+        forwarded,
+        real_ip,
+        addr.ip(),
+        |ip| access.is_proxy(ip),
+        |ip| access.is_proxy(ip) || (tunnel && access::is_local(ip)),
+    )
 }
 
 fn client_ip(headers: &axum::http::HeaderMap, addr: SocketAddr) -> String {
@@ -1012,14 +1066,24 @@ fn same_origin_host(origin: &str, host: &str) -> bool {
     origin.split_once("://").is_some_and(|(scheme, rest)| matches!(scheme, "http" | "https") && rest.eq_ignore_ascii_case(host))
 }
 
+/// Connections of the interface at once, and of one address of the internet
+/// (each holds a queue of messages; a receiver's listeners are far fewer).
+const CLIENTS_MAX: usize = 2000;
+const CLIENTS_PER_ADDRESS: usize = 40;
+
 async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: axum::http::HeaderMap,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     let get = |k: &str| headers.get(k).and_then(|v| v.to_str().ok()).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
-    let ip = client_ip(&headers, addr);
+    let address = client_addr(&headers, addr);
+    let ip = address.to_string();
+    // (an address of this network may be a proxy with all the listeners behind it)
+    if state.hub.total() >= CLIENTS_MAX || (!access::is_local(address) && state.hub.of_address(&ip) >= CLIENTS_PER_ADDRESS) {
+        return (axum::http::StatusCode::TOO_MANY_REQUESTS, "too many connections\n").into_response();
+    }
     let host = get("x-forwarded-host").or_else(|| get("host")).unwrap_or_default();
     let local = host.split(':').next().map(|h| h == "localhost" || h.parse::<std::net::IpAddr>().is_ok()).unwrap_or(true);
     // on this computer: a loopback connection that no proxy or tunnel forwarded
@@ -1035,12 +1099,26 @@ async fn ws_handler(
         local: same_computer,
     };
     // listeners send small messages (the transmitter list comes in parts)
-    ws.max_message_size(1 << 20).max_frame_size(1 << 20).on_upgrade(move |socket| ws::handle(socket, state.hub, state.radio, meta))
+    ws.max_message_size(1 << 20)
+        .max_frame_size(1 << 20)
+        .on_upgrade(move |socket| ws::handle(socket, state.hub, state.radio, meta))
+        .into_response()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_policy_of_the_page() {
+        // (one line for the header: the breaks of the source are not in it)
+        assert!(!PAGE_POLICY.contains('\n') && !PAGE_POLICY.contains("  "));
+        assert!(axum::http::HeaderValue::from_str(PAGE_POLICY).is_ok());
+        assert!(PAGE_POLICY.contains("object-src 'none'") && !PAGE_POLICY.contains("frame-ancestors"));
+        // no script written into the page, none from elsewhere
+        let scripts = PAGE_POLICY.split(';').find(|d| d.trim().starts_with("script-src")).unwrap();
+        assert!(scripts.contains("'self'") && !scripts.contains("'unsafe-inline'") && !scripts.contains("http"));
+    }
 
     #[test]
     fn only_a_page_of_this_computer_is_local() {

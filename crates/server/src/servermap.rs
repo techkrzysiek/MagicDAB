@@ -1648,14 +1648,14 @@ mod tests {
         let mut spi = SpiStore::load(&dir);
         // squares of 128 and 32, the 320x240 one; the same SId of another country;
         // a station of a stream (not on the map)
-        spi.add_logo(0x4A91, 0xE2, 128, 128, &png(128, 128, 1), "SPI", "a", Some("image/png"));
-        spi.add_logo(0x4A91, 0xE2, 32, 32, &png(32, 32, 2), "SPI", "b", Some("image/png"));
-        spi.add_logo(0x4A91, 0xE2, 320, 240, &png(320, 240, 3), "SPI", "c", Some("image/png"));
-        spi.add_logo(0x4A91, 0xE1, 128, 128, &png(128, 128, 4), "SPI", "d", Some("image/png"));
-        spi.add_logo(0x4A92, 0xE2, 128, 128, &png(128, 128, 5), "SPI", "e", Some("image/png"));
+        spi.add_logo(0x4A91, 0xE2, 128, 128, &png(128, 128, 1), "SPI", "a");
+        spi.add_logo(0x4A91, 0xE2, 32, 32, &png(32, 32, 2), "SPI", "b");
+        spi.add_logo(0x4A91, 0xE2, 320, 240, &png(320, 240, 3), "SPI", "c");
+        spi.add_logo(0x4A91, 0xE1, 128, 128, &png(128, 128, 4), "SPI", "d");
+        spi.add_logo(0x4A92, 0xE2, 128, 128, &png(128, 128, 5), "SPI", "e");
         spi.set_text(0xE2, 0x4A91, crate::spi::ServiceText { long_name: Some("Radio Alfa".into()), ..Default::default() });
         let station = |sid| Station { sid, ecc: 0xE2, label: "PR".into(), ..Default::default() };
-        spi.add_logo(0x4B6E, 0xE2, 128, 128, &png(128, 128, 6), "SPI", "f", Some("image/png"));
+        spi.add_logo(0x4B6E, 0xE2, 128, 128, &png(128, 128, 6), "SPI", "f");
         let s = Snapshot {
             ensembles: vec![
                 Received {

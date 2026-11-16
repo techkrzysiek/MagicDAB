@@ -58,7 +58,8 @@ pub(super) fn slide_header(key: ServiceKey, object: &magicdab_dab::mot::MotObjec
         "sid": key.sid,
         "scids": key.scids,
         "contentName": object.content_name,
-        "mime": object.mime_type(),
+        // (by its bytes, not as the broadcaster names it: spi.rs, sniff_mime)
+        "mime": crate::spi::sniff_mime(&object.body),
         "size": object.body.len(),
         "transportId": object.transport_id,
         "categoryTitle": cat_title,
@@ -84,9 +85,11 @@ pub(super) fn load_slide_cache(dir: &std::path::Path) -> HashMap<String, (Value,
         if p.extension().and_then(|x| x.to_str()) != Some("json") {
             continue;
         }
-        let Some(h) = std::fs::read_to_string(&p).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()) else { continue };
+        let Some(mut h) = std::fs::read_to_string(&p).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()) else { continue };
         let img = ["jpg", "png"].iter().find_map(|x| std::fs::read(dir.join(format!("{stem}.{x}"))).ok());
         if let Some(img) = img.filter(|d| crate::spi::sniff_mime(d) != "application/octet-stream") {
+            // (a slide kept by a version that passed the broadcaster's type on)
+            h["mime"] = json!(crate::spi::sniff_mime(&img));
             m.insert(stem, (h, Arc::new(img)));
         }
     }

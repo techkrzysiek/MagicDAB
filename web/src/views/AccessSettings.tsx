@@ -22,8 +22,8 @@ function parseAsns(text: string) {
 const asnText = (asns: number[] | undefined) => (asns ?? []).map((n) => `AS${n}`).join(', ')
 
 rule('blockedAsns', { ok: (v: string) => /^[\sAa-zA-Z0-9,;]*$/.test(v), encode: parseAsns })
-rule('tunePassword', { ok: (v: string) => v === '' || v.length >= 4 })
-rule('adminPassword', { ok: (v: string) => v.length >= 4 })
+rule('tunePassword', { ok: (v: string) => v === '' || [...v].length >= 8 })
+rule('adminPassword', { ok: (v: string) => [...v].length >= 8 })
 
 const when = (unix: number) => new Date(unix * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })
 
@@ -45,6 +45,7 @@ export default function AccessSettings() {
   const [blockTor, setBlockTor] = useField('blockTor', !!access?.blockTor)
   const [asns, setAsns] = useField('blockedAsns', asnText(access?.blockedAsns))
   const [hours, setHours] = useField('autoBanHours', access?.autoBanHours ?? 24)
+  const [proxies, setProxies] = useField('trustLocalProxies', !!access?.trustLocalProxies)
   const [adminPw, setAdminPw] = useField<string | null>('adminPassword', null)
   const [ban, setBan] = useState({ address: '', reason: '', hours: 0 })
   if (!access) return null
@@ -115,6 +116,9 @@ export default function AccessSettings() {
         </Row>
         <Row label={t('auto_ban')} hint={t('auto_ban_help')}>
           <input type="number" className="num" min={0} max={8760} value={hours} onChange={(e) => setHours(Math.max(0, Math.min(8760, parseInt(e.target.value) || 0)))} />
+        </Row>
+        <Row label={t('trust_proxies')} hint={t('trust_proxies_help')}>
+          <Toggle checked={proxies} onChange={setProxies} />
         </Row>
       </Card>
 

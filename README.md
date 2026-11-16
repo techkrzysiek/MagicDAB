@@ -50,7 +50,7 @@ listeners in the browser, each on the station of their choice.
 | HackRF One | receive only, the amplifier always off, fixed LNA and VGA gains (`--hackrf`); Linux and Docker (libhackrf) |
 | DTR-100 / wRadio C100 USB DAB+ dongle | the dongle demodulates by itself: no spectrum, TII, DX scan or gain control |
 | ETI / EDI streams | `eti+tcp://host:port`, `edi+tcp://host:port`, mapped to channels |
-| IQ recordings | `.uff`, raw u8 / s16 at 2.048 MS/s, played as channels |
+| IQ recordings | `.uff`, raw u8 / s16 at 2.048 MS/s (`.raw`, `.iq`, `.cu8`, `.s16`, `.cs16`, `.bin`), played as channels |
 | FM-DX-Tuner (TEF668x) | FM only, for DAB/FM service following |
 
 ## Running
@@ -125,7 +125,20 @@ OS bookworm: librtlsdr 0.6.0) sees a V4 but receives nothing.
   then start the container; the admin password and the tunnel address stay.
 - Updates: Watchtower from the same file installs each new release at 4:30
   at night (a short break for the listeners). By hand:
-  `sudo docker compose pull && sudo docker compose up -d`.
+  `sudo docker compose pull && sudo docker compose up -d`. To choose the
+  updates yourself, name a version in `docker-compose.yml`
+  (`ghcr.io/techkrzysiek/magicdab:0.3.N`) and leave Watchtower out.
+- An image can be checked against the build that made it (GitHub signs which
+  run of which commit it was):
+  `gh attestation verify oci://ghcr.io/techkrzysiek/magicdab:0.3.N --repo techkrzysiek/MagicDAB`.
+  The same for a downloaded package:
+  `gh attestation verify MagicDAB-0.3.N-linux-x64.zip --repo techkrzysiek/MagicDAB`.
+- A reverse proxy on another computer or in another container in front of
+  MagicDAB: turn on Settings > Access > "Reverse proxy in my network", so
+  that the addresses of the listeners are taken from it. It is off on a new
+  installation: without such a proxy nobody in the local network can come
+  under a made-up address then. The tunnel and a proxy on the same computer
+  need nothing.
 - The log: `sudo docker logs -f magicdab`. When the stick opens, the
   RTL-SDR library names it (for a V4: `RTL-SDR Blog V4 Detected`).
 - The stick busy or not opening: the kernel's DVB-T driver holds it. Block

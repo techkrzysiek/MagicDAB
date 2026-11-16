@@ -32,6 +32,11 @@ const NICKNAME_MAX: usize = 32;
 const MESSAGE_MAX: usize = 255;
 /// Bigger frames are ignored.
 pub const PAYLOAD_MAX: usize = 512;
+/// Messages a listener may write at once, and seconds until the next one
+/// after that (the antispam of FM-DX-Webserver below lets through dozens of
+/// different ones a second, each kept and logged).
+const BURST: f64 = 5.0;
+const SECONDS_EACH: f64 = 2.0;
 
 pub struct Chat {
     history: Mutex<VecDeque<Value>>,
@@ -139,6 +144,7 @@ pub async fn handle(
     let mut same: VecDeque<(Instant, String)> = VecDeque::new();
     let addr: Option<std::net::IpAddr> = ip.parse().ok();
     let mut access_events = crate::access::get().events();
+    let (mut allowed, mut refilled) = (BURST, Instant::now());
     loop {
         tokio::select! {
             ev = access_events.recv() => {
@@ -196,6 +202,12 @@ pub async fn handle(
                         let _ = chat.tx.send(if kind == "clear" { json!({"type": "clear"}) } else { json!({"type": "delete", "id": id}) });
                     }
                     _ => {
+                        allowed = (allowed + now.duration_since(refilled).as_secs_f64() / SECONDS_EACH).min(BURST);
+                        refilled = now;
+                        if allowed < 1.0 && !is_admin() {
+                            continue;
+                        }
+                        allowed = (allowed - 1.0).max(0.0);
                         let id = chat.next_id.load(Ordering::Relaxed);
                         let Some(m) = message(&v, &ip, id, is_admin()) else { continue };
                         chat.next_id.fetch_add(1, Ordering::Relaxed);

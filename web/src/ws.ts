@@ -85,9 +85,8 @@ function handleText(m: any) {
       checkUiVersion()
       break
     case 'enter': {
-      // the gate of a private server: the accepted password is kept for reconnects as the admin's
-      const pw = st.gate.pending
-      if (m.ok && pw) sessionSet(m.admin ? 'magicdab.pw' : 'magicdab.tunepw', pw)
+      // the gate of a private server: the token of the login is kept for reconnects, never the password
+      keepSession(m)
       st.set({
         admin: !!m.admin,
         tuner: !!m.tuner,
@@ -105,13 +104,15 @@ function handleText(m: any) {
     case 'tuneLogin':
       // (on a private server a trusted listener gets a token for the chat)
       st.set({ tuner: !!m.tuner, ...(m.ok && m.chatToken ? { chatToken: m.chatToken } : {}) })
+      keepSession(m)
       if (!m.ok) {
-        // a stored password that no longer works
-        sessionSet('magicdab.tunepw', null)
-        // (too many wrong ones: the server says so in a notice)
+        // a kept login that no longer works
+        sessionSet('magicdab.tunesession', null)
+        // (too many wrong ones: the server says so in a notice; a kept login that ended: tuning is locked again, no more)
         if (st.tuneOpen) st.set({ tuneError: true })
-        else if (!m.locked) st.notify('error', 'tune_failed')
+        else if (!m.locked && !resumed.tune) st.notify('error', 'tune_failed')
       }
+      resumed.tune = false
       break
     case 'listenerList':
       st.set({ listenerList: { clients: m.clients ?? [], self: m.self } })
@@ -295,14 +296,27 @@ function handleText(m: any) {
       })
       break
     }
+    case 'ticket':
+      // a download asked for by downloadFile: its address works once
+      if (typeof m.ticket === 'string' && (m.for === 'raw' || m.for === 'dxrec') && typeof m.name === 'string') {
+        const a = document.createElement('a')
+        a.href = `${location.pathname.replace(/[^/]*$/, '')}${m.for}/${encodeURIComponent(m.name)}?ticket=${encodeURIComponent(m.ticket)}`
+        a.download = m.name
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+      }
+      break
     case 'login':
       st.set({ admin: !!m.admin, chatToken: m.chatToken ?? null })
+      keepSession(m)
       if (!m.ok) {
-        // a stored password that no longer works
-        sessionSet('magicdab.pw', null)
+        // a kept login that no longer works (ended by a new password, or not used for long)
+        sessionSet('magicdab.session', null)
         if (st.loginOpen) st.set({ loginError: true })
-        else st.notify('error', 'login_failed')
+        else st.notify(resumed.login ? 'warning' : 'error', resumed.login ? 'login_expired' : 'login_failed')
       }
+      resumed.login = false
       break
     case 'settings':
       st.set({ settings: m })
@@ -388,12 +402,12 @@ function handleBinary(buf: ArrayBuffer) {
   const payload = b.subarray(5 + hlen)
   const st = useStore.getState()
   if (kind === 2 && header.kind === 'gallery') {
-    const url = URL.createObjectURL(new Blob([payload], { type: header.mime }))
+    const url = URL.createObjectURL(new Blob([payload], { type: pictureType(header.mime) }))
     st.set({ galleryUrls: { ...st.galleryUrls, [header.id]: url } })
     return
   }
   if (kind === 2) {
-    const blob = new Blob([payload], { type: header.mime })
+    const blob = new Blob([payload], { type: pictureType(header.mime) })
     const url = URL.createObjectURL(blob)
     const vis = header.source === 'RadioVIS'
     const old = vis ? st.services[header.sid]?.visSlide?.url : st.services[header.sid]?.slide?.url
@@ -411,7 +425,7 @@ function handleBinary(buf: ArrayBuffer) {
   } else if (kind === 5) {
     recordEncoded(header.sid, !!header.aac, payload)
   } else if (kind === 4) {
-    const url = URL.createObjectURL(new Blob([payload], { type: header.mime }))
+    const url = URL.createObjectURL(new Blob([payload], { type: pictureType(header.mime) }))
     // (the same logo again after a reconnect)
     const old = st.logoUrls[header.id]
     st.set({ logoUrls: { ...st.logoUrls, [header.id]: url } })
@@ -440,6 +454,32 @@ function handleBinary(buf: ArrayBuffer) {
   }
 }
 
+/**
+ * The token of a login (the admin's, the one with the tuning password) for
+ * the next connections of this tab: the server gives it for the right
+ * password, and the page keeps it instead of the password.
+ */
+/** The login sent after this connect was a kept one (its failure is no wrong password). */
+const resumed = { login: false, tune: false }
+
+function keepSession(m: any) {
+  if (!m.ok) return
+  if (typeof m.session === 'string') sessionSet('magicdab.session', m.session)
+  if (typeof m.tuneSession === 'string') sessionSet('magicdab.tunesession', m.tuneSession)
+  // (a password kept by the interface of an earlier version)
+  if (m.admin) sessionSet('magicdab.pw', null)
+  if (m.tuner) sessionSet('magicdab.tunepw', null)
+}
+
+/** An admin's download of a recording (raw IQ, DX): the server gives a ticket for it, the answer starts it. */
+export function downloadFile(what: 'raw' | 'dxrec', name: string) {
+  send({ type: 'ticket', for: what, name })
+}
+
+/** Pictures from the server are shown as pictures only (never as a document that could run scripts). */
+const PICTURES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp']
+const pictureType = (mime: unknown) => (typeof mime === 'string' && PICTURES.includes(mime) ? mime : 'application/octet-stream')
+
 const requested = new Set<string>()
 /** Request a logo image once per session. */
 export function requestLogo(id: string) {
@@ -459,13 +499,20 @@ export function connect() {
     requested.clear()
     useStore.getState().set({ connection: 'open' })
     const s = useStore.getState()
-    // restore session state after a reconnect
+    // restore session state after a reconnect: the logins by their tokens
+    // (a password only where the interface of an earlier version kept one: once, a token replaces it)
+    const session = sessionGet('magicdab.session')
     const pw = sessionGet('magicdab.pw')
     // the program's own window logs in with its token
     if (desktopToken) send({ type: 'login', desktop: desktopToken, auto: true })
+    else if (session) send({ type: 'login', session, auto: true })
     else if (pw) send({ type: 'login', password: pw, auto: true })
+    resumed.login = !desktopToken && !!session
+    resumed.tune = !!sessionGet('magicdab.tunesession')
+    const tuneSession = sessionGet('magicdab.tunesession')
     const tunePw = sessionGet('magicdab.tunepw')
-    if (tunePw) send({ type: 'tuneLogin', password: tunePw, auto: true })
+    if (tuneSession) send({ type: 'tuneLogin', session: tuneSession, auto: true })
+    else if (tunePw) send({ type: 'tuneLogin', password: tunePw, auto: true })
     // a listener on a multiplex of its own goes back to it (if the server still lets it)
     // (auto: restored, not an action of the listener)
     const own = s.state?.slot && !s.admin ? s.state.channel : null

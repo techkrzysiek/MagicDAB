@@ -42,6 +42,7 @@ mod device;
 mod dxrec;
 mod gate;
 mod incoming;
+mod login;
 mod newmux;
 mod outgoing;
 mod presence;
@@ -98,6 +99,8 @@ pub enum Command {
         client: u64,
         result: Result<(), String>,
     },
+    /// A password was checked (radio/login.rs).
+    Password(login::Checked),
     Shutdown,
 }
 
@@ -119,10 +122,11 @@ fn now_ms() -> u64 {
     EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
-/// Wrong admin passwords allowed from one address and from everyone together
-/// before logins are refused, and for how long.
+/// Passwords tried from one network and by everyone together before more
+/// are refused, and for how long (access.rs: Attempts; a network someone
+/// logged in from before is held up only by its own tries).
 const LOGIN_TRIES: u32 = 8;
-const LOGIN_TRIES_ALL: usize = 40;
+const LOGIN_TRIES_ALL: usize = 100;
 const LOGIN_LOCK: Duration = Duration::from_secs(15 * 60);
 
 /// Service a client has selected, on which channel, and whether it plays
@@ -355,12 +359,14 @@ pub struct Radio {
     slide_cache: HashMap<String, (Value, Arc<Vec<u8>>)>,
     /// Slideshow objects that are not pictures, already reported.
     rejected: HashSet<String>,
-    /// Wrong admin passwords per address (count, first) and of everyone
-    /// (times): password guessing is stopped for a while.
-    login_failures: HashMap<String, (u32, Instant)>,
-    login_failures_all: VecDeque<Instant>,
-    /// Wrong tuning passwords (limited as the admin login).
-    tune_failures: crate::access::Attempts,
+    /// Admin passwords tried (also at the gate of a private server), and
+    /// tuning passwords: guessing is stopped for a while (radio/login.rs).
+    login_tries: crate::access::Attempts,
+    tune_tries: crate::access::Attempts,
+    /// The logins browsers keep (sessions.rs).
+    sessions: crate::sessions::Sessions,
+    /// To the thread that checks passwords (started with the first one).
+    password_checks: Option<Sender<login::Check>>,
     /// Transmitter list arriving in parts (client, text so far).
     txdb_upload: Option<(u64, String)>,
     tuned_at: Instant,
@@ -436,9 +442,16 @@ impl Radio {
         if let Some(d) = settings_override {
             settings.device = d;
         }
+        let mut sessions = crate::sessions::Sessions::load(&data_dir);
         if let Ok(pw) = std::env::var("MAGICDAB_ADMIN_PASSWORD") {
-            if !pw.is_empty() {
+            // (the same one as at the last start: its hash and the logins kept
+            // with it stay; another one ends them)
+            let same = settings.admin_password_hash.as_deref().is_some_and(|h| config::verify_password(h, &pw));
+            if !pw.is_empty() && (!same || settings.admin_password_hash.as_deref().is_some_and(config::hash_outdated)) {
                 settings.admin_password_hash = Some(config::hash_password(&pw));
+                if !same {
+                    sessions.close_all(crate::sessions::Kind::Admin, None);
+                }
             }
         }
         if settings.phone_only(cfg!(target_os = "android")) {
@@ -567,9 +580,10 @@ impl Radio {
             spi_mapped_at: Instant::now().checked_sub(Duration::from_secs(1500)),
             slide_cache,
             rejected: HashSet::new(),
-            login_failures: HashMap::new(),
-            login_failures_all: VecDeque::new(),
-            tune_failures: crate::access::Attempts::new(LOGIN_TRIES, LOGIN_TRIES_ALL, LOGIN_LOCK),
+            login_tries: crate::access::Attempts::new(LOGIN_TRIES, LOGIN_TRIES_ALL, LOGIN_LOCK),
+            tune_tries: crate::access::Attempts::new(LOGIN_TRIES, LOGIN_TRIES_ALL, LOGIN_LOCK),
+            sessions,
+            password_checks: None,
             txdb_upload: None,
             tuned_at: Instant::now(),
             last_observe: Instant::now(),
@@ -697,7 +711,7 @@ impl Radio {
             }
             Command::Message { client, msg } => self.on_message(client, msg),
             Command::RadioDnsLogo(l) => {
-                if self.spi.add_logo(l.sid, l.ecc, l.width, l.height, &l.data, "RadioDNS", &l.url, l.mime.as_deref()) {
+                if self.spi.add_logo(l.sid, l.ecc, l.width, l.height, &l.data, "RadioDNS", &l.url) {
                     self.logos_dirty = true;
                     self.logos_changed = Some(Instant::now());
                 }
@@ -754,6 +768,7 @@ impl Radio {
                 }
                 self.broadcast_update();
             }
+            Command::Password(checked) => self.on_password(checked),
             Command::Firewall { client, result } => {
                 let message = match &result {
                     Ok(()) => "firewall_allowed",

@@ -29,7 +29,7 @@ const TAB_OF: Record<string, Tab> = {
   fmEnabled: 'fm', fmPort: 'fm', fmAudio: 'fm', fmAntennas: 'fm', linkingEnabled: 'fm', linkingMatchLevel: 'fm',
   tiiMode: 'tii', tiiLog: 'tii',
   internet: 'internet', radioVis: 'internet', discordWebhook: 'internet', chatEnabled: 'internet', noIndex: 'internet', updateUrl: 'internet', updateAuto: 'internet',
-  publicServer: 'access', tunerLocked: 'access', tunePassword: 'access', allowedChannels: 'access', blockTor: 'access', blockedAsns: 'access', autoBanHours: 'access', adminPassword: 'access', idleCheck: 'access',
+  publicServer: 'access', tunerLocked: 'access', tunePassword: 'access', allowedChannels: 'access', blockTor: 'access', blockedAsns: 'access', autoBanHours: 'access', trustLocalProxies: 'access', adminPassword: 'access', idleCheck: 'access',
   tunnel: 'tunnel',
 }
 

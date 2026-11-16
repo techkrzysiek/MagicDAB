@@ -3,6 +3,17 @@
 use super::*;
 
 impl Radio {
+    /// A file the interface names as the receiver's input: one that is the
+    /// input already (set on the command line, or by a version before the
+    /// check), or a recording by its name.
+    fn recording_allowed(&self, path: &str) -> bool {
+        let now = match &self.settings.device {
+            DeviceConfig::RawFile { path, .. } => Some(path.as_str()),
+            _ => None,
+        };
+        now == Some(path) || self.settings.channel_maps.iter().any(|m| m.file() == Some(path)) || config::recording_path_ok(path)
+    }
+
     pub(super) fn apply_settings(&mut self, client: u64, s: &Value) {
         // the Android app has none of these (Settings::phone_only)
         let phone;
@@ -44,6 +55,11 @@ impl Radio {
         }
         if let Some(v) = s.get("device") {
             match serde_json::from_value::<DeviceConfig>(v.clone()) {
+                // (a recording as the tuner: a file that is one, config::recording_path_ok)
+                Ok(DeviceConfig::RawFile { path, .. }) if !self.recording_allowed(&path) => {
+                    log::warn!("client {client}: {path} is not taken as a recording");
+                    self.notice(client, "error", "recording_refused");
+                }
                 Ok(d) => {
                     if d != self.settings.device {
                         self.settings.device = d;
@@ -130,7 +146,14 @@ impl Radio {
         }
         let port = s.get("fmPort").and_then(|v| v.as_str()).map(|v| v.trim().to_string());
         let audio = s.get("fmAudio").and_then(|v| v.as_str()).map(|v| v.trim().to_string());
-        if port.is_some() || audio.is_some() {
+        // (a serial port and a sound device, nothing else that can be opened by a name)
+        let unchanged = |new: &Option<String>, old: &str| new.as_deref().is_none_or(|n| n == old);
+        let refused = (!unchanged(&port, &self.settings.fm.port) && !port.as_deref().is_some_and(config::serial_port_ok))
+            || (!unchanged(&audio, &self.settings.fm.audio) && !audio.as_deref().is_some_and(config::capture_name_ok));
+        if refused {
+            log::warn!("client {client}: FM tuner port {port:?} or sound device {audio:?} not taken");
+            self.notice(client, "error", "fm_device_refused");
+        } else if port.is_some() || audio.is_some() {
             let changed =
                 port.as_ref().is_some_and(|p| *p != self.settings.fm.port) || audio.as_ref().is_some_and(|a| *a != self.settings.fm.audio);
             if let Some(p) = port {
@@ -207,10 +230,17 @@ impl Radio {
         }
         if let Some(v) = s.get("channelMaps") {
             if let Ok(mut maps) = serde_json::from_value::<Vec<config::ChannelMap>>(v.clone()) {
-                maps.retain(|m| channel_frequency(&m.channel).is_some() && !m.url.trim().is_empty());
                 for m in maps.iter_mut() {
                     m.channel = m.channel.to_uppercase();
                     m.url = m.url.trim().to_string();
+                }
+                maps.retain(|m| channel_frequency(&m.channel).is_some() && !m.url.is_empty());
+                // (a recording mapped to a channel: a file that is one)
+                let n = maps.len();
+                maps.retain(|m| m.file().is_none_or(|path| self.recording_allowed(path)));
+                if maps.len() != n {
+                    log::warn!("client {client}: a file mapped to a channel is not taken as a recording");
+                    self.notice(client, "error", "recording_refused");
                 }
                 let cur = self.channel.clone();
                 let before = cur.as_deref().and_then(|c| self.mapped_source(c));
@@ -262,9 +292,13 @@ impl Radio {
             self.settings.scan_channels = v.iter().filter_map(|c| c.as_str().map(|s| s.to_string())).collect();
         }
         if let Some(pw) = s.get("adminPassword").and_then(|v| v.as_str()) {
-            if pw.len() >= 4 {
+            if pw.chars().count() >= config::PASSWORD_MIN {
                 self.settings.admin_password_hash = Some(config::hash_password(pw));
+                // (the logins browsers kept with the old one end, but this admin's)
+                self.password_changed(crate::sessions::Kind::Admin, client);
                 log::info!("admin password changed");
+            } else if !pw.is_empty() {
+                self.notice(client, "error", "password_short");
             }
         }
         self.apply_access_settings(s);

@@ -193,7 +193,8 @@ fn connection(server: &Server, topics: &Topics, events: &Sender<Command>) {
     let (host, port) = server;
     let mut idle_since: Option<Instant> = None;
     loop {
-        let addr = (host.as_str(), *port).to_socket_addrs().ok().and_then(|mut a| a.next());
+        // (a server in the internet: radiodns.rs, PublicOnly)
+        let addr = (host.as_str(), *port).to_socket_addrs().ok().and_then(|mut a| a.find(|a| crate::radiodns::public_address(a.ip())));
         match addr.and_then(|a| TcpStream::connect_timeout(&a, Duration::from_secs(10)).ok()) {
             Some(stream) => {
                 session(stream, server, topics, events, &mut idle_since);

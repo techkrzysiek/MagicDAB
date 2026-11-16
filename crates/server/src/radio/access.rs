@@ -7,7 +7,9 @@ impl Radio {
     /// The tunnel server forwards for its visitors: it is not a client (access.rs).
     pub(super) fn note_tunnel_server(&self) {
         let t = &self.settings.tunnel;
-        crate::access::get().set_tunnel_host(if t.enabled { &t.host } else { "" });
+        let on = t.enabled && !t.host.trim().is_empty() && !t.subdomain.trim().is_empty();
+        let name = format!("{}.{}", t.subdomain.trim(), t.host.trim());
+        crate::access::get().set_tunnel_host(if on { &t.host } else { "" }, &name);
     }
 
     /// The admin tunes anywhere, listeners to the channels of Settings > Access.
@@ -71,40 +73,11 @@ impl Radio {
         let ip = self.client_ip(client);
         match kind {
             // a trusted listener may tune while the tuner is locked, without becoming admin
-            "tuneLogin" => {
-                let pw = msg["password"].as_str().unwrap_or("");
-                let now = Instant::now();
-                let locked = self.tune_failures.locked(&ip, now);
-                let ok = !locked && self.settings.access.tune_password_hash.as_deref().is_some_and(|h| config::verify_password(h, pw));
-                if locked {
-                    self.notice(client, "warning", "login_locked");
-                } else if ok {
-                    self.tune_failures.succeeded(&ip);
-                    let was = self.hub.update(client, |c| std::mem::replace(&mut c.tuner, true)).unwrap_or(false);
-                    if !was && !msg["auto"].as_bool().unwrap_or(false) {
-                        log::info!("client {client} ({ip}) may tune (tuning password)");
-                    }
-                } else {
-                    log::warn!("client {client} ({ip}): wrong tuning password");
-                    let (n, all) = self.tune_failures.failed(&ip, now);
-                    if n == LOGIN_TRIES {
-                        log::warn!("{n} wrong tuning passwords from {ip}: none accepted from there for {} min", LOGIN_LOCK.as_secs() / 60);
-                    }
-                    if all == LOGIN_TRIES_ALL {
-                        log::warn!(
-                            "{all} wrong tuning passwords within {} min: tuning passwords refused for a while",
-                            LOGIN_LOCK.as_secs() / 60
-                        );
-                    }
-                }
-                // (a client at the gate of a private server comes in, with a token for its chat)
-                let chat_token = if ok { self.after_login(client) } else { None };
-                self.hub.send_always(
-                    client,
-                    text(&json!({"type": "tuneLogin", "ok": ok, "tuner": ok, "locked": locked, "chatToken": chat_token})),
-                );
-            }
+            // (the password, or the token of a login with it before: radio/login.rs)
+            "tuneLogin" if msg["session"].is_string() => self.resume_session(client, login::Ask::Tune, msg),
+            "tuneLogin" => self.ask_password(client, login::Ask::Tune, msg),
             "tuneLogout" => {
+                self.end_session(client, crate::sessions::Kind::Tuner);
                 self.hub.update(client, |c| c.tuner = false);
                 self.hub.send(client, text(&json!({"type": "tuneLogin", "ok": true, "tuner": false})));
                 self.after_logout(client);
@@ -175,6 +148,9 @@ impl Radio {
             asns.dedup();
             a.blocked_asns = asns;
         }
+        if let Some(v) = s.get("trustLocalProxies").and_then(|v| v.as_bool()) {
+            a.trust_local_proxies = v;
+        }
         if let Some(v) = s.get("autoBanHours").and_then(|v| v.as_u64()) {
             a.auto_ban_hours = v.min(24 * 365) as u32;
         }
@@ -185,7 +161,7 @@ impl Radio {
             // empty: no tuning password any more
             if pw.is_empty() {
                 a.tune_password_hash = None;
-            } else if pw.len() >= 4 {
+            } else if pw.chars().count() >= config::PASSWORD_MIN {
                 a.tune_password_hash = Some(config::hash_password(pw));
             }
         }
@@ -200,6 +176,11 @@ impl Radio {
             let list: Vec<String> = cfg.blocked_asns.iter().map(|n| format!("AS{n}")).collect();
             log::info!("refused networks: {}", if list.is_empty() { "none".to_string() } else { list.join(", ") });
         }
+        if cfg.trust_local_proxies != before.trust_local_proxies {
+            let who =
+                if cfg.trust_local_proxies { "this computer, the tunnel and this network" } else { "this computer and the tunnel only" };
+            log::info!("addresses of listeners forwarded by a proxy: believed from {who}");
+        }
         if cfg.auto_ban_hours != before.auto_ban_hours {
             log::info!("automatic bans: {}", if cfg.auto_ban_hours == 0 { "off".to_string() } else { format!("{} h", cfg.auto_ban_hours) });
         }
@@ -209,9 +190,13 @@ impl Radio {
         }
         if cfg.tune_password_hash != before.tune_password_hash {
             log::info!("tuning password {}", if cfg.tune_password_hash.is_some() { "set" } else { "removed" });
-            // trusted listeners give the new one
+            // trusted listeners give the new one (the logins kept with the old one end)
+            self.sessions.close_all(crate::sessions::Kind::Tuner, None);
             for id in self.hub.ids() {
-                self.hub.update(id, |c| c.tuner = false);
+                self.hub.update(id, |c| {
+                    c.tuner = false;
+                    c.tune_session = None;
+                });
             }
         }
         // (listeners of a newly refused network are closed once its prefixes are in)

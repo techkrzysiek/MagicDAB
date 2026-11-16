@@ -132,9 +132,8 @@ export function SaveBar({ where }: { where?: (key: string) => string }) {
   const save = () => {
     const out: Record<string, unknown> = {}
     for (const k of keys) out[k] = rules[k]?.encode ? rules[k].encode!(values[k]) : values[k]
+    // (a new admin password: this login stays, the server ends the others)
     saveSettings(out)
-    // (reconnecting logs in again with it)
-    if (typeof out.adminPassword === 'string' && out.adminPassword) sessionStorage.setItem('magicdab.pw', out.adminPassword)
     useDraft.getState().clear()
   }
   return (

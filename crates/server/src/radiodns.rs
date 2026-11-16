@@ -36,7 +36,6 @@ pub struct LogoResult {
     pub ecc: u8,
     pub width: u16,
     pub height: u16,
-    pub mime: Option<String>,
     pub url: String,
     pub data: Vec<u8>,
 }
@@ -97,7 +96,8 @@ fn read_name(msg: &[u8], mut i: usize) -> Option<(String, usize)> {
 
 /// Answers of the given record type: (type, data offset, data length).
 fn query(name: &str, qtype: u16) -> Option<(Vec<u8>, Vec<(u16, usize, usize)>)> {
-    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
+    let server = nameserver();
+    let sock = UdpSocket::bind(if server.starts_with('[') { "[::]:0" } else { "0.0.0.0:0" }).ok()?;
     sock.set_read_timeout(Some(Duration::from_secs(3))).ok()?;
     let id: u16 = rand::random();
     let mut q = Vec::new();
@@ -106,18 +106,31 @@ fn query(name: &str, qtype: u16) -> Option<(Vec<u8>, Vec<(u16, usize, usize)>)> 
     encode_name(name, &mut q);
     q.extend_from_slice(&qtype.to_be_bytes());
     q.extend_from_slice(&[0, 1]);
-    sock.send_to(&q, nameserver()).ok()?;
+    // (connected: only what the server asked sends reaches the socket)
+    sock.connect(server).ok()?;
+    sock.send(&q).ok()?;
     let mut buf = vec![0u8; 4096];
-    let (n, _) = sock.recv_from(&mut buf).ok()?;
-    let msg = buf[..n].to_vec();
+    let n = sock.recv(&mut buf).ok()?;
+    answers_to(name, id, &buf[..n])
+}
+
+/// The answers of a DNS message, if it answers the question `id` for `name`.
+fn answers_to(name: &str, id: u16, msg: &[u8]) -> Option<(Vec<u8>, Vec<(u16, usize, usize)>)> {
+    let msg = msg.to_vec();
     if msg.len() < 12 || u16::from_be_bytes([msg[0], msg[1]]) != id {
         return None;
     }
     let qd = u16::from_be_bytes([msg[4], msg[5]]) as usize;
     let an = u16::from_be_bytes([msg[6], msg[7]]) as usize;
+    if qd != 1 {
+        return None;
+    }
     let mut i = 12;
     for _ in 0..qd {
-        let (_, e) = read_name(&msg, i)?;
+        let (asked, e) = read_name(&msg, i)?;
+        if !asked.eq_ignore_ascii_case(name.trim_end_matches('.')) {
+            return None;
+        }
         i = e + 4;
     }
     let mut answers = Vec::new();
@@ -300,15 +313,59 @@ fn all_dab_logos(xml: &str) -> Vec<(u8, u32, String, u16, u16, Option<String>)> 
     result
 }
 
+/// An address in the internet: not this machine, not a network behind it
+/// (private, link-local, carrier NAT), no multicast.
+pub(crate) fn public_address(ip: std::net::IpAddr) -> bool {
+    let ip = crate::access::normalize(ip);
+    let other = match ip {
+        std::net::IpAddr::V4(a) => a.is_multicast() || a.is_broadcast() || a.octets()[0] == 0,
+        std::net::IpAddr::V6(a) => a.is_multicast(),
+    };
+    !crate::access::is_local(ip) && !other
+}
+
+/// The names broadcasters give (the SPI and RadioVIS servers of their
+/// RadioDNS entries, the addresses of logos and slides in what those send)
+/// lead to addresses in the internet only. A name of this machine or of a
+/// host in its network would have the receiver fetch from there for whoever
+/// sets up such an entry or answers on the way. Every name is resolved here,
+/// a redirect's too, and the connection goes to what was checked.
+#[derive(Debug, Default)]
+struct PublicOnly(ureq::unversioned::resolver::DefaultResolver);
+
+impl ureq::unversioned::resolver::Resolver for PublicOnly {
+    fn resolve(
+        &self,
+        uri: &ureq::http::Uri,
+        config: &ureq::config::Config,
+        timeout: ureq::unversioned::transport::NextTimeout,
+    ) -> Result<ureq::unversioned::resolver::ResolvedSocketAddrs, ureq::Error> {
+        let all = self.0.resolve(uri, config, timeout)?;
+        // (a proxy of the system's settings: this is its address, the name is resolved by it)
+        if config.proxy().is_some() {
+            return Ok(all);
+        }
+        let mut public = self.empty();
+        for a in all.iter().filter(|a| public_address(a.ip())) {
+            public.push(*a);
+        }
+        if public.is_empty() {
+            log::debug!("{uri}: not fetched, an address of this machine or a private network");
+            return Err(ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "not an address in the internet")));
+        }
+        Ok(public)
+    }
+}
+
 pub(crate) fn http_get(url: &str) -> Option<Vec<u8>> {
-    // (a stalled server must not stop the lookups of all other services)
-    let mut resp = ureq::get(url)
-        .header("User-Agent", "MagicDAB/0.1")
-        .config()
-        .timeout_global(Some(std::time::Duration::from_secs(30)))
-        .build()
-        .call()
-        .ok()?;
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    let agent = AGENT.get_or_init(|| {
+        // (a stalled server must not stop the lookups of all other services)
+        let config =
+            ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(30))).user_agent("MagicDAB/0.1").build();
+        ureq::Agent::with_parts(config, ureq::unversioned::transport::DefaultConnector::default(), PublicOnly::default())
+    });
+    let mut resp = agent.get(url).call().ok()?;
     resp.body_mut().with_config().limit(4 << 20).read_to_vec().ok()
 }
 
@@ -368,11 +425,11 @@ fn lookup(req: &Request, cache: &mut SiCache, docs: &mut Vec<SiDocument>) -> Vec
     }
     log::info!("RadioDNS: {} logo(s) for {:04X} from {base}", refs.len(), req.sid);
     let mut out = Vec::new();
-    for (url, w, h, mime) in refs {
+    for (url, w, h, _) in refs {
         let full = if url.starts_with("http") { url.clone() } else { format!("{base}/{}", url.trim_start_matches('/')) };
         std::thread::sleep(LOGO_PACE);
         if let Some(data) = http_get(&full) {
-            out.push(LogoResult { sid: req.sid, ecc: req.ecc, width: w, height: h, mime, url: full, data });
+            out.push(LogoResult { sid: req.sid, ecc: req.ecc, width: w, height: h, url: full, data });
         }
     }
     // the logos of all other services of the document too, so that the SPI view
@@ -388,7 +445,7 @@ fn lookup(req: &Request, cache: &mut SiCache, docs: &mut Vec<SiDocument>) -> Vec
     };
     if first {
         let mut fetched = 0;
-        for (ecc, sid, url, w, h, mime) in all_dab_logos(&xml) {
+        for (ecc, sid, url, w, h, _) in all_dab_logos(&xml) {
             if (sid == req.sid && ecc == req.ecc) || !req.known.contains(&sid) {
                 continue;
             }
@@ -396,7 +453,7 @@ fn lookup(req: &Request, cache: &mut SiCache, docs: &mut Vec<SiDocument>) -> Vec
             std::thread::sleep(LOGO_PACE);
             if let Some(data) = http_get(&full) {
                 fetched += 1;
-                out.push(LogoResult { sid, ecc, width: w, height: h, mime, url: full, data });
+                out.push(LogoResult { sid, ecc, width: w, height: h, url: full, data });
             }
         }
         log::info!("RadioDNS: {fetched} logo(s) of further services from {base}");
@@ -450,6 +507,57 @@ mod tests {
         let all = all_dab_logos(xml);
         assert_eq!(all.iter().map(|l| (l.1, l.2.as_str())).collect::<Vec<_>>(), vec![(0x5d27, "main.png")]);
     }
+    #[test]
+    fn only_addresses_in_the_internet_are_fetched() {
+        let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
+        for a in ["203.0.113.7", "2001:db8::1", "8.8.8.8"] {
+            assert!(public_address(ip(a)), "{a}");
+        }
+        for a in [
+            "127.0.0.1",
+            "10.0.0.5",
+            "192.168.1.1",
+            "172.17.0.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "0.0.0.0",
+            "0.1.2.3",
+            "224.0.0.1",
+            "255.255.255.255",
+            "::1",
+            "::",
+            "fd00::1",
+            "fe80::1",
+            "ff02::1",
+            "::ffff:127.0.0.1",
+            "::ffff:192.168.0.1",
+        ] {
+            assert!(!public_address(ip(a)), "{a}");
+        }
+        // an address written as a number in the URL, a name of this machine: nothing fetched
+        assert!(http_get("http://127.0.0.1:9/radiodns/spi/3.1/SI.xml").is_none());
+        assert!(http_get("http://localhost:9/logo.png").is_none());
+        assert!(http_get("http://[::1]:9/logo.png").is_none());
+        assert!(http_get("http://169.254.169.254/latest/meta-data/").is_none());
+    }
+
+    #[test]
+    fn only_the_answer_to_the_question_asked() {
+        // an answer for "a.example": header (id 0x1234, 1 question, 0 answers), the question
+        let mut msg = vec![0x12, 0x34, 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 0];
+        encode_name("a.example", &mut msg);
+        msg.extend_from_slice(&[0, 5, 0, 1]);
+        assert!(answers_to("a.example", 0x1234, &msg).is_some());
+        assert!(answers_to("A.Example.", 0x1234, &msg).is_some());
+        // another id, another name, no question
+        assert!(answers_to("a.example", 0x1235, &msg).is_none());
+        assert!(answers_to("b.example", 0x1234, &msg).is_none());
+        let mut none = msg.clone();
+        none[5] = 0;
+        assert!(answers_to("a.example", 0x1234, &none).is_none());
+        assert!(answers_to("a.example", 0x1234, &msg[..11]).is_none());
+    }
+
     #[test]
     fn txt_data() {
         assert_eq!(txt_strings(b"\x0513335\x03 | ").as_deref(), Some("13335 | "));

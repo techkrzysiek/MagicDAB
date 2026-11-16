@@ -28,7 +28,7 @@ pub fn token() -> &'static str {
 /// A login with the token of the window.
 pub fn is_token(t: &str) -> bool {
     // (compared in constant time: the time of an answer tells nothing of it)
-    TOKEN.get().is_some_and(|x| !t.is_empty() && x.len() == t.len() && x.bytes().zip(t.bytes()).fold(0u8, |d, (a, b)| d | (a ^ b)) == 0)
+    TOKEN.get().is_some_and(|x| !t.is_empty() && crate::config::same(x.as_bytes(), t.as_bytes()))
 }
 
 /// Where a second start finds the token to reach this one.

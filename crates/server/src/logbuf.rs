@@ -37,6 +37,22 @@ static DROPPED: AtomicU64 = AtomicU64::new(0);
 static FILE: OnceLock<std::path::PathBuf> = OnceLock::new();
 /// Size of the log file before it is moved to `.1` (the one before is dropped).
 const FILE_MAX: u64 = 2 << 20;
+/// Longest line kept: a line may carry what a listener's page sent (its
+/// errors, why it reconnected), and 1000 of them stay in memory.
+const MAX_LINE: usize = 4096;
+
+/// `text` cut to MAX_LINE bytes (at a character).
+fn capped(mut text: String) -> String {
+    if text.len() > MAX_LINE {
+        let mut end = MAX_LINE;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        text.push_str(" ...");
+    }
+    text
+}
 
 /// Write the log into `path` too; before `init`.
 pub fn to_file(path: std::path::PathBuf) {
@@ -51,7 +67,22 @@ fn open_file() -> Option<std::fs::File> {
     if std::fs::metadata(path).is_ok_and(|m| m.len() > FILE_MAX) {
         let _ = std::fs::rename(path, path.with_extension("log.1"));
     }
-    std::fs::OpenOptions::new().create(true).append(true).open(path).ok()
+    let mut open = std::fs::OpenOptions::new();
+    open.create(true).append(true);
+    // (only its user reads it: the password made at the first start is in it,
+    // and the addresses of the listeners)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        open.mode(0o600);
+        // (files an older version left readable by everyone)
+        for old in [path.clone(), path.with_extension("log.1")] {
+            if std::fs::metadata(&old).is_ok_and(|m| m.permissions().mode() & 0o077 != 0) {
+                let _ = std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o600));
+            }
+        }
+    }
+    open.open(path).ok()
 }
 
 impl log::Log for Logger {
@@ -67,7 +98,7 @@ impl log::Log for Logger {
             time: crate::localtime::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             level: record.level().to_string(),
             target: record.target().split("::").last().unwrap_or("").to_string(),
-            message: record.args().to_string(),
+            message: capped(record.args().to_string()),
         };
         let text = format!("{} {:5} [{}] {}", line.time, line.level, line.target, line.message);
         match STDERR.get() {
@@ -184,5 +215,13 @@ mod tests {
             ("2026-10-30 04:08:40", "INFO", "tunnel", "tunnel: online at https://x")
         );
         assert!(parse_line("(3 log lines dropped: stderr too slow)").is_none());
+    }
+
+    #[test]
+    fn a_long_line_is_cut() {
+        assert_eq!(capped("short".into()), "short");
+        let cut = capped("é".repeat(MAX_LINE));
+        assert!(cut.len() <= MAX_LINE + 4 && cut.ends_with(" ..."));
+        assert!(cut.trim_end_matches(" ...").chars().all(|c| c == 'é'));
     }
 }

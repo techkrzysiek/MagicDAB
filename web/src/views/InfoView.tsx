@@ -4,7 +4,7 @@ import { useStore } from '../store'
 import { useT } from '../i18n'
 import { ViewHeader, CacheTag, Logo } from '../components/common'
 import { audioCoding, downloadText, fmMhz, formatDuration, hex, mhz } from '../util'
-import { send } from '../ws'
+import { send, downloadFile } from '../ws'
 import type { AudioStats, Ensemble, Service, Subchannel } from '../types'
 
 const SUBCH_COLORS = ['#7c5cff', '#22b3a6', '#f5a524', '#ef5d8a', '#4a9df8', '#9bc53d', '#c06cdb', '#f08a4b']
@@ -475,7 +475,6 @@ export default function InfoView() {
   const dx = useStore((s) => s.dxrec)
   // (raw IQ only from a tuner or an IQ recording, not from ETI/EDI or the DTR-100)
   const iq = useStore((s) => (s.signal?.input ?? 'rf') === 'rf')
-  const token = useStore((s) => s.chatToken)
   const [rawSecs, setRawSecs] = useState(60)
   // (the recordings made before, to download)
   useEffect(() => {
@@ -539,7 +538,15 @@ export default function InfoView() {
           <div className="raw-files">
             <div className="hint">{t('raw_files')}</div>
             {raw.files.map((f) => (
-              <a key={f.name} href={`${location.pathname.replace(/[^/]*$/, '')}raw/${encodeURIComponent(f.name)}?token=${encodeURIComponent(token ?? '')}`} download={f.name}>
+              <a
+                key={f.name}
+                href="#"
+                onClick={(e) => {
+                  // (the server gives a ticket for it: the token of the login stays out of the address)
+                  e.preventDefault()
+                  downloadFile('raw', f.name)
+                }}
+              >
                 {f.name} <span className="hint">{(f.size / 1048576).toFixed(0)} MB</span>
               </a>
             ))}

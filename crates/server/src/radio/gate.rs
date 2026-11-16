@@ -4,8 +4,10 @@
 //! (hub.rs: `send` and `broadcast` skip it) until the radio thread lets it in
 //! with its snapshot: at once on a public server, after a password on a
 //! private one. With the tuning password the visitor is a listener who may
-//! tune, with the admin password an admin; the window of the Windows
-//! application logs in with its token as always.
+//! tune, with the admin password an admin (radio/login.rs: one message,
+//! `enter`, for both, so that a trusted listener's password is no wrong admin
+//! password; a wrong one counts as a guess at both); the window of the
+//! Windows application logs in with its token as always.
 
 use super::*;
 
@@ -78,32 +80,6 @@ impl Radio {
         !self.hub.is_gated(client) || matches!(kind, "enter" | "login" | "tuneLogin" | "ping" | "diag")
     }
 
-    /// Wrong admin passwords: a few from one address, and not many of everyone
-    /// together (forwarded addresses can be made up), stop logins for a while.
-    pub(super) fn login_locked(&mut self, ip: &str) -> bool {
-        self.login_failures.retain(|_, (_, first)| first.elapsed() < LOGIN_LOCK);
-        while self.login_failures_all.front().is_some_and(|t| t.elapsed() >= LOGIN_LOCK) {
-            self.login_failures_all.pop_front();
-        }
-        self.login_failures.get(ip).is_some_and(|(n, _)| *n >= LOGIN_TRIES) || self.login_failures_all.len() >= LOGIN_TRIES_ALL
-    }
-
-    pub(super) fn login_failed(&mut self, ip: &str) {
-        let e = self.login_failures.entry(ip.to_string()).or_insert((0, Instant::now()));
-        e.0 += 1;
-        let n = e.0;
-        self.login_failures_all.push_back(Instant::now());
-        if n == LOGIN_TRIES {
-            log::warn!("{n} wrong admin passwords from {ip}: no logins from there for {} min", LOGIN_LOCK.as_secs() / 60);
-        }
-        if self.login_failures_all.len() == LOGIN_TRIES_ALL {
-            log::warn!(
-                "{LOGIN_TRIES_ALL} wrong admin passwords within {} min: password logins stopped for a while",
-                LOGIN_LOCK.as_secs() / 60
-            );
-        }
-    }
-
     /// The client is admin from now on, with a new token for the chat (a new
     /// one with every login). Whether it was admin already.
     pub(super) fn grant_admin(&self, client: u64) -> bool {
@@ -140,39 +116,6 @@ impl Radio {
         if !self.settings.public_server && !self.hub.may_tune(client) {
             self.gate(client);
             self.broadcast_listeners();
-        }
-    }
-
-    /// A password at the gate: the admin's makes an admin, the tuning password
-    /// a trusted listener. One message for both, so that a trusted listener's
-    /// password is no wrong admin password; a wrong one counts as a guess at
-    /// both and is limited like the admin login.
-    pub(super) fn on_enter(&mut self, client: u64, msg: &Value) {
-        let pw = msg["password"].as_str().unwrap_or("");
-        let ip = self.client_ip(client);
-        let locked = self.login_locked(&ip);
-        let matches = |hash: Option<&String>| !locked && hash.is_some_and(|h| config::verify_password(h, pw));
-        let admin = matches(self.settings.admin_password_hash.as_ref());
-        let tuner = !admin && matches(self.settings.access.tune_password_hash.as_ref());
-        if admin {
-            self.login_failures.remove(&ip);
-            self.grant_admin(client);
-            log::info!("client {client} ({ip}) came in as admin");
-        } else if tuner {
-            self.login_failures.remove(&ip);
-            self.hub.update(client, |c| c.tuner = true);
-            log::info!("client {client} ({ip}) came in with the tuning password");
-        } else if !locked {
-            log::warn!("client {client} ({ip}): wrong password at the gate");
-            self.login_failed(&ip);
-        }
-        let chat_token = if admin || tuner { self.after_login(client) } else { None };
-        let reply =
-            json!({"type": "enter", "ok": admin || tuner, "admin": admin, "tuner": tuner, "chatToken": chat_token, "locked": locked});
-        self.hub.send_always(client, text(&reply));
-        if admin {
-            self.hub.send(client, text(&self.settings_json()));
-            self.hub.send(client, text(&self.update_json()));
         }
     }
 

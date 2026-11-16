@@ -124,7 +124,7 @@ function Wizard() {
 
   const index = STEPS.indexOf(step)
   const location = parseLocation(loc)
-  const pwError = pw && pw.length < 4 ? 'setup_password_short' : pw && pw2 !== pw ? 'setup_password_mismatch' : null
+  const pwError = pw && [...pw].length < 8 ? 'setup_password_short' : pw && pw2 !== pw ? 'setup_password_mismatch' : null
   const devError = dev.type === 'rtlTcp' && (!String(dev.host ?? '').trim() || !(dev.port > 0 && dev.port < 65536))
   const tunnelUrl = tunnel.enabled && tunnel.subdomain && tunnel.host ? `https://${tunnel.subdomain}.${tunnel.host}` : null
   const blocked =
@@ -161,9 +161,8 @@ function Wizard() {
       s.tunnel = tunnel
     }
     if (pw) s.adminPassword = pw
+    // (a new password: this login stays, as after a change in the settings)
     saveSettings(s)
-    // reconnects log in with it (as after a change in the settings)
-    if (pw && !desktop) sessionSet('magicdab.pw', pw)
     // (after the settings: on the new input)
     if (scan && (dev.type === 'rtlSdr' || dev.type === 'dtr100')) send({ type: 'scan', action: 'start' })
     set({ setupOpen: false })

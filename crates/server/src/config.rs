@@ -115,7 +115,7 @@ pub struct Settings {
     pub device: DeviceConfig,
     pub gain: GainMode,
     pub ppm: i32,
-    /// "salt$sha256hex" of the admin password.
+    /// Hash of the admin password (hash_password).
     pub admin_password_hash: Option<String>,
     /// When locked only the admin may change the multiplex.
     pub tuner_locked: bool,
@@ -240,9 +240,14 @@ pub struct AccessConfig {
     pub auto_ban_hours: u32,
     /// Channels listeners may tune to (empty: all); the admin is not limited.
     pub allowed_channels: Vec<String>,
-    /// "salt$sha256hex" of the password with which listeners may tune while
-    /// the tuner is locked (without becoming admin).
+    /// Hash of the password with which listeners may tune while the tuner is
+    /// locked (without becoming admin).
     pub tune_password_hash: Option<String>,
+    /// A reverse proxy in this network (another computer, another container)
+    /// stands in front of the program: the address it forwards is the
+    /// listener's (access.rs: is_proxy). Off for a new installation; on for
+    /// one from before the setting, where it always was so (Store::load).
+    pub trust_local_proxies: bool,
 }
 
 impl Default for AccessConfig {
@@ -254,6 +259,7 @@ impl Default for AccessConfig {
             auto_ban_hours: 24,
             allowed_channels: Vec::new(),
             tune_password_hash: None,
+            trust_local_proxies: false,
         }
     }
 }
@@ -438,24 +444,141 @@ pub fn background_url(v: &str) -> Option<String> {
     (host_ok && chars_ok && v.len() <= 2048).then(|| v.to_string())
 }
 
-pub fn hash_password(password: &str) -> String {
-    let salt: [u8; 8] = rand::random();
-    let salt_hex: String = salt.iter().map(|b| format!("{b:02x}")).collect();
-    format!("{salt_hex}${}", digest(&salt_hex, password))
+/// A file the interface may make the receiver's input (Settings > Receiver:
+/// a raw IQ recording as the tuner, or mapped to a channel): a file that is
+/// one by its name. Its samples can be recorded and downloaded again, so any
+/// other file (the settings with their tokens, a key of the user) is not
+/// taken; nor is a link leading to one.
+pub fn recording_path_ok(path: &str) -> bool {
+    const KINDS: [&str; 7] = ["uff", "raw", "iq", "s16", "cu8", "cs16", "bin"];
+    let Ok(real) = std::fs::canonicalize(path) else { return false };
+    let kind = real.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
+    real.is_file() && kind.is_some_and(|k| KINDS.contains(&k.as_str()))
 }
 
+/// The serial port of the FM tuner as the interface may set it: a serial
+/// device, not any file (the tuner's commands are written to it). Empty: found
+/// by the program.
+pub fn serial_port_ok(port: &str) -> bool {
+    if port.is_empty() {
+        return true;
+    }
+    if cfg!(windows) {
+        let name = port.strip_prefix(r"\\.\").unwrap_or(port);
+        return name.strip_prefix("COM").is_some_and(|n| !n.is_empty() && n.len() <= 3 && n.bytes().all(|b| b.is_ascii_digit()));
+    }
+    let path = Path::new(port);
+    if !path.starts_with("/dev") || path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        // (not plugged in now: nothing to open; else a character device, where a link leads too)
+        std::fs::metadata(path).map_or(true, |m| m.file_type().is_char_device())
+    }
+    #[cfg(not(unix))]
+    true
+}
+
+/// The sound device of the FM tuner as the interface may set it. ALSA takes
+/// more than a device for a name (`tee:` and `file:` write what is captured
+/// into a file): a hardware device only. Empty: the tuner's own.
+pub fn capture_name_ok(name: &str) -> bool {
+    if cfg!(windows) || name.is_empty() {
+        return true;
+    }
+    (name.starts_with("hw:") || name.starts_with("plughw:"))
+        && name.len() <= 80
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'=' | b',' | b'_' | b'-' | b'.'))
+}
+
+/// The shortest password the settings take.
+pub const PASSWORD_MIN: usize = 8;
+
+/// Rounds of PBKDF2-HMAC-SHA256 for a password: whoever gets the settings
+/// file (a backup, a copy) must not find a short password in minutes. A
+/// fraction of a second on a small ARM board, so passwords are checked off
+/// the radio thread (radio/login.rs).
+const PBKDF2_ROUNDS: u32 = 200_000;
+/// A file must not ask for more (a check would take the processor for long).
+const PBKDF2_ROUNDS_MAX: u32 = 5_000_000;
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn unhex(text: &str) -> Option<Vec<u8>> {
+    if text.len() % 2 != 0 || !text.is_ascii() {
+        return None;
+    }
+    (0..text.len() / 2).map(|i| u8::from_str_radix(&text[2 * i..2 * i + 2], 16).ok()).collect()
+}
+
+/// `a` equal to `b`, in a time that tells nothing of where they differ.
+pub fn same(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
+}
+
+/// "pbkdf2$<rounds>$<salt hex>$<hash hex>" of a password.
+pub fn hash_password(password: &str) -> String {
+    let salt: [u8; 16] = rand::random();
+    let mut out = [0u8; 32];
+    let rounds = std::num::NonZeroU32::new(PBKDF2_ROUNDS).expect("rounds");
+    ring::pbkdf2::derive(ring::pbkdf2::PBKDF2_HMAC_SHA256, rounds, &salt, password.as_bytes(), &mut out);
+    format!("pbkdf2${PBKDF2_ROUNDS}${}${}", hex(&salt), hex(&out))
+}
+
+/// The hash of earlier versions ("salt$sha256hex", one round).
 fn digest(salt: &str, password: &str) -> String {
     let mut h = Sha256::new();
     h.update(salt.as_bytes());
     h.update(password.as_bytes());
-    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    hex(&h.finalize())
+}
+
+/// A hash of an earlier kind (one round of SHA-256, or fewer rounds than
+/// now): made anew at the next login with its password.
+pub fn hash_outdated(hash: &str) -> bool {
+    let rounds = hash.strip_prefix("pbkdf2$").and_then(|r| r.split('$').next()).and_then(|r| r.parse::<u32>().ok());
+    rounds.is_none_or(|r| r < PBKDF2_ROUNDS)
 }
 
 pub fn verify_password(hash: &str, password: &str) -> bool {
+    if let Some(rest) = hash.strip_prefix("pbkdf2$") {
+        let mut parts = rest.split('$');
+        let rounds =
+            parts.next().and_then(|r| r.parse::<u32>().ok()).filter(|r| *r <= PBKDF2_ROUNDS_MAX).and_then(std::num::NonZeroU32::new);
+        let (Some(rounds), Some(salt), Some(want), None) =
+            (rounds, parts.next().and_then(unhex), parts.next().and_then(unhex), parts.next())
+        else {
+            return false;
+        };
+        return ring::pbkdf2::verify(ring::pbkdf2::PBKDF2_HMAC_SHA256, rounds, &salt, password.as_bytes(), &want).is_ok();
+    }
     match hash.split_once('$') {
-        Some((salt, d)) => digest(salt, password) == d,
+        Some((salt, d)) => same(digest(salt, password).as_bytes(), d.as_bytes()),
         None => false,
     }
+}
+
+/// A file only its user reads (password hashes, tokens), written whole: first
+/// next to it, then in its place.
+pub fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut tmp = path.as_os_str().to_os_string();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    let _ = std::fs::remove_file(&tmp);
+    let mut open = std::fs::OpenOptions::new();
+    open.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut open, 0o600);
+    open.open(&tmp).and_then(|mut f| {
+        f.write_all(data)?;
+        f.sync_all()
+    })?;
+    std::fs::rename(&tmp, path)
 }
 
 /// The port of a new installation: 3222, DAB+ on a phone's keys (D 3, A 2,
@@ -498,14 +621,16 @@ impl Store {
             }
         }
         match std::fs::read_to_string(&self.path) {
-            Ok(s) => serde_json::from_str(&s).map(Self::fm_off_once).unwrap_or_else(|e| {
-                // (kept aside: the next save would overwrite the passwords and
-                // the tunnel token in it)
-                let aside = self.path.with_extension(format!("json.invalid-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
-                let _ = std::fs::rename(&self.path, &aside);
-                log::warn!("settings.json invalid ({e}), using defaults; the file is kept as {}", aside.display());
-                Settings::default()
-            }),
+            Ok(s) => {
+                serde_json::from_str(&s).map(Self::fm_off_once).map(|settings| Self::proxies_as_before(settings, &s)).unwrap_or_else(|e| {
+                    // (kept aside: the next save would overwrite the passwords and
+                    // the tunnel token in it)
+                    let aside = self.path.with_extension(format!("json.invalid-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+                    let _ = std::fs::rename(&self.path, &aside);
+                    log::warn!("settings.json invalid ({e}), using defaults; the file is kept as {}", aside.display());
+                    Settings::default()
+                })
+            }
             // a new installation: the admin is walked through the setup
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings { setup_pending: true, ..Settings::default() },
             Err(_) => Settings::default(),
@@ -521,6 +646,17 @@ impl Store {
             }
             s.fm.enabled = false;
             s.fm.off_by_default = true;
+        }
+        s
+    }
+
+    /// Settings of a version before `trust_local_proxies`: a reverse proxy of
+    /// the network was always believed, and an installation that has one
+    /// goes on as it did (the admin turns it off in Settings > Access).
+    fn proxies_as_before(mut s: Settings, text: &str) -> Settings {
+        let set = serde_json::from_str::<serde_json::Value>(text).is_ok_and(|v| v.pointer("/access/trustLocalProxies").is_some());
+        if !set && !cfg!(target_os = "android") {
+            s.access.trust_local_proxies = true;
         }
         s
     }
@@ -555,6 +691,109 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn files_and_devices_the_interface_may_name() {
+        let dir = std::env::temp_dir().join(format!("magicdab-inputs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str| {
+            let p = dir.join(name);
+            std::fs::write(&p, b"0123").unwrap();
+            p.to_string_lossy().to_string()
+        };
+        assert!(
+            recording_path_ok(&file("2026-01-01_120000_5A.uff"))
+                && recording_path_ok(&file("capture.RAW"))
+                && recording_path_ok(&file("a.iq"))
+        );
+        // the settings, a key, a file without a kind, a folder, a file that is not there
+        for other in ["settings.json", "id_ed25519", "instance.token", "magicdab.log"] {
+            assert!(!recording_path_ok(&file(other)), "{other}");
+        }
+        assert!(!recording_path_ok(&dir.to_string_lossy()) && !recording_path_ok(&dir.join("missing.uff").to_string_lossy()));
+        assert!(!recording_path_ok("/proc/self/environ") && !recording_path_ok(""));
+        // a link named like a recording leads to another file
+        #[cfg(unix)]
+        {
+            let link = dir.join("link.uff");
+            std::os::unix::fs::symlink(dir.join("settings.json"), &link).unwrap();
+            assert!(!recording_path_ok(&link.to_string_lossy()));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(serial_port_ok(""));
+        if cfg!(windows) {
+            assert!(
+                serial_port_ok("COM5") && serial_port_ok(r"\\.\COM12") && !serial_port_ok(r"C:\Users\x\file.txt") && !serial_port_ok("COM")
+            );
+        } else {
+            // (a port of a tuner not plugged in now)
+            assert!(serial_port_ok("/dev/serial/by-id/usb-Example_Tuner-if00") && serial_port_ok("/dev/hostdev/ttyACM7"));
+            for bad in ["/etc/passwd", "/dev/../etc/passwd", "ttyACM0", "/data/settings.json", "/dev/shm/../../etc/hosts"] {
+                assert!(!serial_port_ok(bad), "{bad}");
+            }
+            // a file below /dev is no serial device
+            #[cfg(target_os = "linux")]
+            assert!(serial_port_ok("/dev/null") && !serial_port_ok("/dev/shm"));
+            assert!(capture_name_ok("") && capture_name_ok("plughw:CARD=Tuner,DEV=0") && capture_name_ok("hw:1,0"));
+            for bad in
+                ["tee:hw:1,'/data/settings.json',raw", "file:/tmp/x", "default", "plughw:CARD=Tuner,DEV=0 x", "plug:tee:hw:0,/tmp/x,raw"]
+            {
+                assert!(!capture_name_ok(bad), "{bad}");
+            }
+        }
+    }
+
+    #[test]
+    fn passwords() {
+        let h = hash_password("correct horse");
+        assert!(h.starts_with("pbkdf2$200000$") && h.split('$').count() == 4, "{h}");
+        assert!(verify_password(&h, "correct horse"));
+        assert!(!verify_password(&h, "correct horsf") && !verify_password(&h, ""));
+        assert!(!hash_outdated(&h));
+        // another salt each time
+        assert_ne!(h, hash_password("correct horse"));
+        // a hash of a version before (one round of SHA-256 over salt and password)
+        let old = format!("0011223344556677${}", digest("0011223344556677", "battery staple"));
+        assert!(verify_password(&old, "battery staple") && !verify_password(&old, "battery stapl"));
+        assert!(hash_outdated(&old));
+        // fewer rounds than now: still checked, and made anew at the next login
+        let salt = [7u8; 16];
+        let mut out = [0u8; 32];
+        ring::pbkdf2::derive(ring::pbkdf2::PBKDF2_HMAC_SHA256, std::num::NonZeroU32::new(1000).unwrap(), &salt, b"pw", &mut out);
+        let weak = format!("pbkdf2$1000${}${}", hex(&salt), hex(&out));
+        assert!(verify_password(&weak, "pw") && hash_outdated(&weak));
+        // nonsense in the file
+        for bad in [
+            "",
+            "pbkdf2$",
+            "pbkdf2$0$00$00",
+            "pbkdf2$x$00$00",
+            "pbkdf2$1000$zz$00",
+            "pbkdf2$1000$00$00$00",
+            "pbkdf2$4000000000$00$00",
+            "nodollar",
+        ] {
+            assert!(!verify_password(bad, "pw"), "{bad}");
+        }
+        assert!(same(b"abc", b"abc") && !same(b"abc", b"abd") && !same(b"abc", b"ab") && same(b"", b""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_private_file_is_its_users() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("magicdab-private-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("sessions.json");
+        write_private(&f, b"one").unwrap();
+        write_private(&f, b"two").unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"two");
+        assert_eq!(std::fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o600);
+        assert!(!dir.join("sessions.json.tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_phone_has_its_stick_and_nothing_public() {
@@ -702,6 +941,12 @@ mod tests {
         assert!(old.tunnel.enabled && old.tuner_locked && !old.public_server);
         store.save(&old);
         assert!(!std::fs::read_to_string(dir.join("settings.json")).unwrap().contains("httpUser"));
+        // a reverse proxy of the network: believed where it always was, until
+        // the admin says otherwise; not on a new installation
+        assert!(old.access.trust_local_proxies);
+        store.save(&Settings { access: AccessConfig { trust_local_proxies: false, ..old.access.clone() }, ..old.clone() });
+        assert!(!store.load().access.trust_local_proxies);
+        assert!(!Settings::default().access.trust_local_proxies);
         // a new installation leaves the tuner to everyone
         assert!(!Settings::default().tuner_locked);
         // nor is a damaged file a new installation; it is kept aside, not

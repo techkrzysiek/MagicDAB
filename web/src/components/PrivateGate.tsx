@@ -21,8 +21,10 @@ export function PrivateGate() {
   const audioEnabled = useStore((s) => s.audioEnabled)
   const [pw, setPw] = useState('')
   const [show, setShow] = useState(false)
-  // a stored password is tried by itself after a connect: a moment before the form
-  const [waiting, setWaiting] = useState(() => !!(sessionGet('magicdab.pw') || sessionGet('magicdab.tunepw')))
+  // a kept login is tried by itself after a connect: a moment before the form
+  const [waiting, setWaiting] = useState(
+    () => !!(sessionGet('magicdab.session') || sessionGet('magicdab.tunesession') || sessionGet('magicdab.pw') || sessionGet('magicdab.tunepw')),
+  )
   const input = useRef<HTMLInputElement>(null)
   useEffect(() => {
     if (!waiting) return

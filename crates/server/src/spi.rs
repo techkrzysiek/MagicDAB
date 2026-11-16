@@ -234,13 +234,24 @@ pub struct SpiStore {
 fn ext_for(mime: &str) -> &'static str {
     match mime {
         "image/png" => "png",
-        "image/jpeg" | "image/jpg" => "jpg",
+        "image/jpeg" => "jpg",
         "image/gif" => "gif",
-        "image/svg+xml" => "svg",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
         _ => "bin",
     }
 }
 
+/// The media types pictures go out under (logos, slides): the ones
+/// `sniff_mime` tells by the first bytes.
+pub fn is_picture_mime(mime: &str) -> bool {
+    matches!(mime, "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/bmp")
+}
+
+/// What a picture is by its first bytes; anything else is
+/// application/octet-stream. The type a broadcaster or its server names is
+/// never passed on: a page shows what it gets as that type, and a picture
+/// that is a document (SVG, HTML) runs scripts as this server's page.
 pub fn sniff_mime(data: &[u8]) -> &'static str {
     if data.starts_with(&[0x89, b'P', b'N', b'G']) {
         "image/png"
@@ -252,8 +263,6 @@ pub fn sniff_mime(data: &[u8]) -> &'static str {
         "image/bmp"
     } else if data.len() > 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
         "image/webp"
-    } else if data.starts_with(b"<svg") || data.starts_with(b"<?xml") {
-        "image/svg+xml"
     } else {
         "application/octet-stream"
     }
@@ -293,7 +302,37 @@ impl SpiStore {
     pub fn load(data_dir: &Path) -> Self {
         let dir = data_dir.join("logos");
         let _ = std::fs::create_dir_all(&dir);
-        let index = std::fs::read_to_string(dir.join("index.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        let mut index: Index =
+            std::fs::read_to_string(dir.join("index.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        // logos kept by a version that took the type a broadcaster named
+        // (an SVG, anything called image/...): each is what its bytes say, and
+        // what is no picture is gone, with its file
+        let before = index.logos.len();
+        let mut renamed = false;
+        index.logos.retain_mut(|v| {
+            if is_picture_mime(&v.mime) {
+                return true;
+            }
+            let inside = !v.file.contains(['/', '\\']);
+            let kind = if inside { std::fs::read(dir.join(&v.file)).ok().map(|d| sniff_mime(&d)) } else { None };
+            match kind.filter(|k| is_picture_mime(k)) {
+                Some(k) => {
+                    v.mime = k.to_string();
+                    renamed = true;
+                    true
+                }
+                None => {
+                    if inside {
+                        let _ = std::fs::remove_file(dir.join(&v.file));
+                    }
+                    false
+                }
+            }
+        });
+        let dropped = before - index.logos.len();
+        if dropped > 0 {
+            log::info!("{dropped} logo(s) that are no PNG, JPEG, GIF, WebP or BMP picture removed");
+        }
         SpiStore {
             dir,
             index,
@@ -304,7 +343,8 @@ impl SpiStore {
             health: HashMap::new(),
             documents: 0,
             docs_dirty: false,
-            unsaved: None,
+            // (written as it is now soon)
+            unsaved: (dropped > 0 || renamed).then(std::time::Instant::now),
         }
     }
 
@@ -343,22 +383,18 @@ impl SpiStore {
         self.pending.clear();
     }
 
-    /// Store a logo image; returns true when something changed.
-    pub fn add_logo(
-        &mut self,
-        sid: u32,
-        ecc: u8,
-        width: u16,
-        height: u16,
-        data: &[u8],
-        source: &str,
-        url: &str,
-        mime: Option<&str>,
-    ) -> bool {
+    /// Store a logo image (a picture by its bytes: PNG, JPEG, GIF, WebP,
+    /// BMP); returns true when something changed.
+    pub fn add_logo(&mut self, sid: u32, ecc: u8, width: u16, height: u16, data: &[u8], source: &str, url: &str) -> bool {
         if data.is_empty() || data.len() > 2_000_000 {
             return false;
         }
-        let mime = mime.filter(|m| m.starts_with("image/")).unwrap_or_else(|| sniff_mime(data)).to_string();
+        // (what it is, not what it is said to be: only a picture is kept; a
+        // server named by a broadcaster may answer with anything)
+        let mime = sniff_mime(data).to_string();
+        if !is_picture_mime(&mime) {
+            return false;
+        }
         let (w, h) = image_size(data).unwrap_or((width, height));
         let id = format!("{ecc:02x}{sid:04x}-{w}x{h}-{}", source.to_lowercase());
         let file = format!("{id}.{}", ext_for(&mime));
@@ -518,14 +554,14 @@ impl SpiStore {
                 resolved.push((i, *sid, *ecc, l.clone(), mime.clone(), data.clone()));
             }
         }
-        for (_, sid, ecc, l, mime, data) in resolved.iter() {
+        for (_, sid, ecc, l, _, data) in resolved.iter() {
             let issues = logo_issues(l, data);
             if let Some(h) = self.health.get_mut(&ueid) {
                 for i in issues {
                     h.logos.note(i);
                 }
             }
-            changed |= self.add_logo(*sid, *ecc, l.width, l.height, data, "SPI", &l.url, l.mime.as_deref().or(Some(mime.as_str())));
+            changed |= self.add_logo(*sid, *ecc, l.width, l.height, data, "SPI", &l.url);
         }
         let done: Vec<usize> = resolved.iter().map(|r| r.0).collect();
         let mut i = 0;
@@ -753,7 +789,7 @@ impl SpiStore {
         self.index
             .logos
             .iter()
-            .filter(|v| v.sid == sid && (v.ecc == ecc || v.ecc == 0 || ecc == 0) && v.width == v.height && v.mime != "image/svg+xml")
+            .filter(|v| v.sid == sid && (v.ecc == ecc || v.ecc == 0 || ecc == 0) && v.width == v.height && is_picture_mime(&v.mime))
             .max_by_key(|v| (v.width.min(600), v.source == "SPI"))
             .map(|v| (v.file.clone(), v.mime.clone()))
     }
@@ -812,17 +848,68 @@ mod tests {
     fn a_new_logo_replaces_the_old_and_one_no_longer_sent_is_gone() {
         let dir = std::env::temp_dir().join(format!("magicdab-spi-{}", std::process::id()));
         let mut s = SpiStore::load(&dir);
-        let add = |s: &mut SpiStore, data: &[u8], url: &str| s.add_logo(0x1234, 0xE1, 128, 128, data, "SPI", url, Some("image/png"));
-        assert!(add(&mut s, b"old picture", "/logo128.png"));
-        assert!(!add(&mut s, b"old picture", "/logo128.png"));
+        let add = |s: &mut SpiStore, data: &[u8], url: &str| s.add_logo(0x1234, 0xE1, 128, 128, data, "SPI", url);
+        let (old, new) = (png(128, 128, 8, 2, 0), png(128, 128, 8, 3, 0));
+        assert!(add(&mut s, &old, "/logo128.png"));
+        assert!(!add(&mut s, &old, "/logo128.png"));
         // (the same name and size, another picture)
-        assert!(add(&mut s, b"new picture", "/logo128.png"));
+        assert!(add(&mut s, &new, "/logo128.png"));
         let v = s.index.logos.iter().find(|v| v.sid == 0x1234).unwrap();
-        assert_eq!(std::fs::read(s.logo_path(v)).unwrap(), b"new picture");
+        assert_eq!(std::fs::read(s.logo_path(v)).unwrap(), new);
         let file = s.logo_path(v);
         assert!(!s.drop_unlisted_logos(0xE1, 0x1234, &[logo_ref("/logo128.png")]));
         assert!(s.drop_unlisted_logos(0xE1, 0x1234, &[logo_ref("/logo600.png")]));
         assert!(s.index.logos.is_empty() && !file.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_pictures_are_kept_as_logos() {
+        let dir = std::env::temp_dir().join(format!("magicdab-spi-kinds-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut s = SpiStore::load(&dir);
+        let add = |s: &mut SpiStore, data: &[u8]| s.add_logo(0x4321, 0xE1, 128, 128, data, "RadioDNS", "http://logos.example.org/a");
+        // a document with a script, a page, the answer of some other server
+        for other in [
+            &b"<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>"[..],
+            b"<?xml version=\"1.0\"?><svg/>",
+            b"<!doctype html><script>1</script>",
+            b"{\"secret\": 1}",
+            b"",
+        ] {
+            assert!(!add(&mut s, other), "{other:?}");
+        }
+        assert!(s.index.logos.is_empty());
+        assert_eq!(sniff_mime(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"), "application/octet-stream");
+        assert!(add(&mut s, &png(128, 128, 8, 2, 0)));
+        assert_eq!(s.index.logos[0].mime, "image/png");
+        assert_eq!(s.best_logo(0x4321, 0xE1).map(|l| l.1).as_deref(), Some("image/png"));
+        // an index of a version that kept the type the broadcaster named
+        s.index.logos.push(LogoVariant {
+            id: "e14321-128x128-spi".into(),
+            file: "e14321-128x128-spi.svg".into(),
+            mime: "image/svg+xml".into(),
+            ..s.index.logos[0].clone()
+        });
+        s.index.logos.push(LogoVariant {
+            id: "e14321-64x64-spi".into(),
+            file: "e14321-64x64-spi.bin".into(),
+            mime: "image/svg+xml;charset=utf-8".into(),
+            ..s.index.logos[0].clone()
+        });
+        std::fs::write(dir.join("logos").join("e14321-128x128-spi.svg"), b"<svg/>").unwrap();
+        // (a picture kept under another name of its type stays, as what it is)
+        s.index.logos.push(LogoVariant {
+            id: "e14321-32x32-spi".into(),
+            file: "e14321-32x32-spi.jpg".into(),
+            mime: "image/jpg".into(),
+            ..s.index.logos[0].clone()
+        });
+        std::fs::write(dir.join("logos").join("e14321-32x32-spi.jpg"), b"\xFF\xD8\xFF\xE0rest").unwrap();
+        s.save();
+        let s = SpiStore::load(&dir);
+        assert_eq!(s.index.logos.iter().map(|v| v.mime.as_str()).collect::<Vec<_>>(), ["image/png", "image/jpeg"]);
+        assert!(!dir.join("logos").join("e14321-128x128-spi.svg").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -18,6 +18,9 @@ const PER_SECOND: f64 = 200.0;
 /// Commands ignored before the address is banned for a while (Settings >
 /// Access): a flood, not a burst of the interface.
 const FLOOD_BAN: u64 = 1000;
+/// The longest command of a listener; an admin's may be longer (a list of
+/// transmitters comes in parts of a few hundred kB).
+const LISTENER_MAX: usize = 64 * 1024;
 
 /// Send one message; a peer that stopped reading (its TCP buffer stays full) is
 /// given up after a while instead of holding the connection until the kernel does.
@@ -144,6 +147,11 @@ pub async fn handle(socket: WebSocket, hub: Arc<Hub>, radio: Sender<Command>, me
                                 continue;
                             }
                             tokens -= 1.0;
+                            if t.len() > LISTENER_MAX && !hub.is_admin(id) {
+                                dropped += 1;
+                                log::debug!("client {id}: a command of {} bytes ignored", t.len());
+                                continue;
+                            }
                             match serde_json::from_str::<serde_json::Value>(&t) {
                                 Ok(v) => {
                                     let _ = radio.send(Command::Message { client: id, msg: v });

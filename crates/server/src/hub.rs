@@ -65,6 +65,11 @@ pub struct Client {
     pub chat_token: Option<String>,
     /// May tune while the tuner is locked (gave the tuning password).
     pub tuner: bool,
+    /// The logins its page keeps for its next connections (sessions.rs): the
+    /// admin's and the one with the tuning password, each as (token, its
+    /// name in the sessions).
+    pub session: Option<(String, String)>,
+    pub tune_session: Option<(String, String)>,
     /// Public host the client came through (the tunnel), empty when local.
     pub via: String,
     /// The receiver it listens to: 0 the main one, else the side slot of a
@@ -80,9 +85,24 @@ pub struct Client {
     pub last_action: Instant,
     /// Asked whether it is still listening, and when.
     pub asked: Option<Instant>,
+    /// Reports of its page for the log (`diag`) in the minute since.
+    pub reports: (Instant, u32),
 }
 
+/// Reports a page may send for the log in a minute (it sends one when it
+/// reconnects, one every 15 s while its sound drops out, its errors).
+const REPORTS_A_MINUTE: u32 = 20;
+
 impl Client {
+    /// Another report of its page may go to the log.
+    pub fn may_report(&mut self) -> bool {
+        if self.reports.0.elapsed() >= std::time::Duration::from_secs(60) {
+            self.reports = (Instant::now(), 0);
+        }
+        self.reports.1 += 1;
+        self.reports.1 <= REPORTS_A_MINUTE
+    }
+
     /// Listens to the main receiver.
     pub fn on_main(&self) -> bool {
         self.slot == 0
@@ -95,7 +115,12 @@ pub struct Hub {
     next: AtomicU64,
     /// Bytes sent to all clients since the start (statistics).
     pub sent: AtomicU64,
+    /// Tickets for a download each (`ticket`): what, its name, since when.
+    tickets: Mutex<HashMap<String, (String, String, Instant)>>,
 }
+
+/// A ticket opens its download for this long, once.
+const TICKET_FOR: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -153,12 +178,15 @@ impl Hub {
                 record: false,
                 chat_token: None,
                 tuner: false,
+                session: None,
+                tune_session: None,
                 via: meta.via.clone(),
                 slot: 0,
                 sent: sent.clone(),
                 gated: true,
                 last_action: Instant::now(),
                 asked: None,
+                reports: (Instant::now(), 0),
             },
         );
         (id, sent)
@@ -177,6 +205,39 @@ impl Hub {
 
     pub fn unregister(&self, id: u64) {
         self.clients.lock().remove(&id);
+    }
+
+    /// Connections in all (also those at the gate of a private server).
+    pub fn total(&self) -> usize {
+        self.clients.lock().len()
+    }
+
+    /// Connections of an address.
+    pub fn of_address(&self, ip: &str) -> usize {
+        self.clients.lock().values().filter(|c| c.ip == ip).count()
+    }
+
+    /// A ticket for one download of `name` (`what`: raw, dxrec) within a
+    /// minute, for an admin's page: the address of a download is kept by
+    /// proxies and the tunnel server in their logs, and a ticket is worth
+    /// nothing once used, unlike the token of the login.
+    pub fn ticket(&self, what: &str, name: &str) -> String {
+        let ticket: String = rand::random::<[u8; 16]>().iter().map(|b| format!("{b:02x}")).collect();
+        let mut t = self.tickets.lock();
+        t.retain(|_, (_, _, since)| since.elapsed() < TICKET_FOR);
+        t.insert(ticket.clone(), (what.to_string(), name.to_string(), Instant::now()));
+        ticket
+    }
+
+    /// The ticket is one for this download: used up now.
+    pub fn take_ticket(&self, ticket: &str, what: &str, name: &str) -> bool {
+        let mut t = self.tickets.lock();
+        t.retain(|_, (_, _, since)| since.elapsed() < TICKET_FOR);
+        let ok = t.get(ticket).is_some_and(|(w, n, _)| w == what && n == name);
+        if ok {
+            t.remove(ticket);
+        }
+        ok
     }
 
     pub fn update<R>(&self, id: u64, f: impl FnOnce(&mut Client) -> R) -> Option<R> {
@@ -294,12 +355,12 @@ impl Hub {
 
     /// The token belongs to a client logged in as admin (chat).
     pub fn is_admin_token(&self, token: &str) -> bool {
-        self.clients.lock().values().any(|c| c.admin && c.chat_token.as_deref() == Some(token))
+        self.clients.lock().values().any(|c| c.admin && c.chat_token.as_deref().is_some_and(|t| same_token(t, token)))
     }
 
     /// The token belongs to a client let in (the chat of a private server).
     pub fn is_token_in(&self, token: &str) -> bool {
-        self.clients.lock().values().any(|c| !c.gated && c.chat_token.as_deref() == Some(token))
+        self.clients.lock().values().any(|c| !c.gated && c.chat_token.as_deref().is_some_and(|t| same_token(t, token)))
     }
 
     /// Free places in a client's send queue (a client that does not read fills it).
@@ -374,6 +435,11 @@ impl Hub {
     pub fn ids(&self) -> Vec<u64> {
         self.clients.lock().keys().copied().collect()
     }
+}
+
+/// A token given is the one kept (compared in a time that tells nothing of it).
+fn same_token(kept: &str, given: &str) -> bool {
+    !given.is_empty() && crate::config::same(kept.as_bytes(), given.as_bytes())
 }
 
 pub fn text(v: &serde_json::Value) -> Out {
