@@ -1916,6 +1916,52 @@ table.table {
   font-size: 13px;
 }
 
+.link-box > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+}
+
+.link-box > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* (folded: the arrow points right, unfolded: down, like Details) */
+.link-box > summary .link-chevron {
+  flex: none;
+  color: var(--accent);
+  transition: transform 0.15s;
+}
+
+.link-box[open] > summary .link-chevron {
+  transform: rotate(90deg);
+}
+
+.link-box > summary .link-title {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.link-box > summary:hover .link-title {
+  text-decoration: underline;
+}
+
+.link-box > summary .link-brief {
+  flex-basis: 100%;
+  padding-left: 22px;
+}
+
+.link-box[open] > summary {
+  margin-bottom: 8px;
+}
+
+.link-box[open] > summary .link-brief {
+  display: none;
+}
+
 .link-box h4 {
   margin: 0 0 6px;
   font-size: 13px;
@@ -2881,14 +2927,31 @@ table.table {
 }
 
 .play-info {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
   min-width: 0;
+  /* (from its own width: the spacer beside it must not take half the row) */
+  flex: 1 1 auto;
 }
 
-.play-stats {
-  white-space: nowrap;
+.play-stats,
+.meter-values {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.play-stats b {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.meter-wrap {
+  flex-wrap: wrap;
+  max-width: 100%;
 }
 
 .chip-btn {
@@ -3630,7 +3693,7 @@ table.table {
     flex-direction: column;
     align-items: flex-start;
     gap: 4px;
-    flex: 1;
+    flex: 1 1 auto;
   }
   /* stations: big rows */
   .stations.full .st-row {
@@ -5772,4 +5835,10 @@ kbd + kbd {
   .stats-value {
     font-size: 20px;
   }
+}
+
+/* the connection to the server stalls (ServiceView LinkProblem) */
+.link-problem {
+  margin-top: 4px;
+  color: var(--warning, #d9a400);
 }

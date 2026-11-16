@@ -251,6 +251,9 @@ export interface Store {
   audioUnderruns: number
   /** Audio frames the server dropped for this browser (player.ts). */
   audioLost: number
+  /** the sound came late or with frames missing while the receiver had the
+   *  signal (audio/player.ts): the connection to the server, the last minute */
+  linkProblem: { stalls: number; longest: number; lost: number } | null
   /** the player's buffer now: the one chosen plus what dropouts added */
   audioTarget: number
   spiDocXml: Record<string, string | null>
@@ -359,6 +362,7 @@ export const useStore = create<Store>((set, get) => ({
   loginError: false,
   audioUnderruns: 0,
   audioLost: 0,
+  linkProblem: null,
   audioTarget: 0,
   spiDocXml: {},
   tuner: false,

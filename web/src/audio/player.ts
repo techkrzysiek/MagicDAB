@@ -354,6 +354,35 @@ class BufferOutput {
  *  and other networks between) than in the same network. */
 export const defaultBuffer = () => (isLocal() ? 0.3 : 0.5)
 
+// Problems of the connection to the server: the sound of the station came
+// more than a second late, or with frames missing, while the receiver had the
+// signal (so it is not the reception) and the page was in view (a page in the
+// background may be held back by the browser). The last minute, for the hint
+// under the player (ServiceView).
+const LINK_LATE_MS = 1000
+const LINK_WINDOW_MS = 60_000
+const linkEvents: { at: number; gap: number; lost: number }[] = []
+
+function linkRefresh() {
+  const now = Date.now()
+  while (linkEvents.length && now - linkEvents[0].at > LINK_WINDOW_MS) linkEvents.shift()
+  const p = linkEvents.length
+    ? {
+        stalls: linkEvents.filter((e) => e.gap > 0).length,
+        longest: Math.max(0, ...linkEvents.map((e) => e.gap)),
+        lost: linkEvents.reduce((a, e) => a + e.lost, 0),
+      }
+    : null
+  const was = useStore.getState().linkProblem
+  if (JSON.stringify(p) !== JSON.stringify(was)) useStore.getState().set({ linkProblem: p })
+}
+setInterval(linkRefresh, 5000)
+
+function linkNote(gap: number, lost: number) {
+  linkEvents.push({ at: Date.now(), gap, lost })
+  linkRefresh()
+}
+
 class Player {
   ctx: AudioContext | null = null
   node: AudioWorkletNode | null = null
@@ -371,6 +400,10 @@ class Player {
   /** Sequence number of the last audio frame and frames the server could
    *  not send to this browser (its queue was full: audio.rs, hub.rs). */
   private lastSeq = -1
+  /** When the last frame came (performance.now), for the link problems. */
+  private arrivedAt = 0
+  /** The station's audio errors then, to tell reception from the connection. */
+  private arrivedErrors = 0
   private lost = 0
   starting: Promise<void> | null = null
   levelTimer: number | null = null
@@ -602,6 +635,9 @@ class Player {
     const sid = dv.getUint32(4, true)
     const sel = useStore.getState().selected
     if (!sel || sel.sid !== sid) return
+    const arrived = performance.now()
+    const before = this.arrivedAt
+    this.arrivedAt = arrived
     if (this.currentSid !== sid) {
       this.currentSid = sid
       this.flush()
@@ -609,6 +645,18 @@ class Player {
     // frames missing in between: counted, faded across; a big jump is
     // another stream (the receiver started the station anew, another slot)
     const missing = this.lastSeq < 0 ? 0 : (seq - this.lastSeq - 1) & 0xffff
+    // (the same station played on, in view, with the receiver's signal and
+    // no new errors of the station's audio meanwhile: not the reception)
+    const st = useStore.getState()
+    const errors = (st.services[sid]?.stats?.auErrors ?? 0) + (st.services[sid]?.stats?.decodeErrors ?? 0)
+    const clean = errors === this.arrivedErrors
+    this.arrivedErrors = errors
+    if (before > 0 && this.lastSeq >= 0 && clean && document.visibilityState === 'visible') {
+      const late = arrived - before
+      if ((!st.signal || st.signal.synced) && (late > LINK_LATE_MS || (missing > 0 && missing < 250))) {
+        linkNote(late > LINK_LATE_MS ? Math.round(late) : 0, missing < 250 ? missing : 0)
+      }
+    }
     this.lastSeq = seq
     const gap = missing > 0
     if (gap && missing < 250) {

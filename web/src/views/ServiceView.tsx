@@ -8,7 +8,7 @@ import { TuneLockButton } from '../components/TuneDialog'
 import { selectService, tune, stepChannel, tuningLocked } from '../actions'
 import { startRecording, stopRecording } from '../audio/recorder'
 import { player } from '../audio/player'
-import { audioCodec } from '../audio/speaker'
+import { pageCodec } from '../audio/speaker'
 import { useEffect, useRef } from 'react'
 import { audioCoding, fullSid, hex, mhz, fmMhz, ageShort } from '../util'
 import type { Service, Linking, LinkInfo } from '../types'
@@ -46,12 +46,46 @@ function fmtFreq(kind: string, f: { khz: number; channel: string | null }) {
   return `${f.khz} kHz`
 }
 
+/** Whether the linking of a station is shown unfolded (this browser remembers it). */
+function linkingOpen(): boolean {
+  try {
+    return localStorage.getItem('magicdab.linkingOpen') === '1'
+  } catch {
+    return false
+  }
+}
+
 function LinkingInfo({ linking, cacheTime }: { linking: Linking; cacheTime?: number }) {
   const t = useT()
   const { links, frequencies, ensembles } = linking
   if (!links.length && !frequencies.length && !ensembles.length) return null
+  // folded: one line of what there is (FM PI 3100, 92.6 MHz, EId 3E22)
+  const brief = [
+    ...links.map((l) => `${l.kind} ${l.id}`),
+    ...frequencies.flatMap((f) => f.frequencies.map((x) => fmtFreq(f.kind, x))),
+    ...ensembles.map((e) => `EId ${e.eid}`),
+  ]
+  const shown = [...new Set(brief)]
   return (
-    <div className="link-box">
+    <details
+      className="link-box"
+      open={linkingOpen()}
+      onToggle={(e) => {
+        try {
+          localStorage.setItem('magicdab.linkingOpen', (e.target as HTMLDetailsElement).open ? '1' : '0')
+        } catch {
+          /* not remembered */
+        }
+      }}
+    >
+      <summary>
+        <ChevronRight size={14} className="link-chevron" aria-hidden />
+        <span className="link-title">{t('linking_title')}</span>
+        <span className="hint link-brief">
+          {shown.slice(0, 4).join(', ')}
+          {shown.length > 4 ? ', …' : ''}
+        </span>
+      </summary>
       {links.length > 0 && (
         <div className="link-sec">
           <h4 title={t('linking_help')}>{t('service_linking_short')}</h4>
@@ -106,7 +140,7 @@ function LinkingInfo({ linking, cacheTime }: { linking: Linking; cacheTime?: num
           </div>
         </div>
       )}
-    </div>
+    </details>
   )
 }
 
@@ -151,7 +185,13 @@ function LevelMeter() {
       </span>
       {meter && !silent && (
         <span className="meter-values">
-          I <b>{fmt(meter.i)}</b> LUFS, S {fmt(meter.s)}, max <b className={meter.max > -1 ? 'over' : ''}>{fmt(meter.max)}</b> dBFS
+          <span>
+            I <b>{fmt(meter.i)}</b> LUFS
+          </span>
+          <span>S {fmt(meter.s)}</span>
+          <span>
+            max <b className={meter.max > -1 ? 'over' : ''}>{fmt(meter.max)}</b> dBFS
+          </span>
         </span>
       )}
       {silent && <span className="silence">{t('silence')}</span>}
@@ -163,7 +203,7 @@ function RecordButtons() {
   const t = useT()
   const rec = useStore((s) => s.recording)
   // (the Opus recording is made of the audio sent to this browser)
-  const codec = useStore((s) => audioCodec(s))
+  const codec = useStore((s) => pageCodec(s))
   const [, force] = useState(0)
   useEffect(() => {
     if (!rec) return
@@ -286,7 +326,7 @@ function ServicePanel({ svc }: { svc?: Service }) {
   const buffer = useStore((s) => s.audioBuffer)
   const underruns = useStore((s) => s.audioUnderruns)
   const lost = useStore((s) => s.audioLost)
-  const codec = useStore((s) => audioCodec(s))
+  const codec = useStore((s) => pageCodec(s))
   const speakerError = useStore((s) => s.speakerError)
   const useRadioDns = useStore((s) => s.useRadioDns)
   const [preferVis, setPreferVis] = useState(false)
@@ -454,12 +494,20 @@ function ServicePanel({ svc }: { svc?: Service }) {
           audioPlaying ? (
             <span className="play-info">
               {/* (one line that does not break; on a phone the meter goes below it) */}
+              {/* (what plays and how well, then the loudness: two lines that wrap, never wider than the panel) */}
               <span className="play-stats">
-                ▶ {codec === 'native' ? t('audio_native_short') : codec.toUpperCase()}, {t('buffer')} {buffer.toFixed(2)} s
-                {underruns > 0 && <span className="hint">, {t('underruns')}: {underruns}</span>}
+                <span>▶ {codec === 'native' ? t('audio_native_short') : codec === 'pcm' ? 'PCM' : 'Opus'}</span>
+                <span>
+                  {t('buffer')} <b>{buffer.toFixed(2)} s</b>
+                </span>
+                {underruns > 0 && (
+                  <span title={t('underruns_help')}>
+                    {t('underruns')} <b>{underruns}</b>
+                  </span>
+                )}
                 {lost > 0 && (
-                  <span className="hint" title={t('audio_lost_help')}>
-                    , {t('audio_lost')}: {lost}
+                  <span title={t('audio_lost_help')}>
+                    {t('audio_lost')} <b>{lost}</b>
                   </span>
                 )}
               </span>
@@ -480,6 +528,7 @@ function ServicePanel({ svc }: { svc?: Service }) {
         <span style={{ flex: 1 }} />
         {audioEnabled && <RecordButtons />}
       </div>
+      {audioEnabled && <LinkProblem />}
     </div>
   )
 }
@@ -726,4 +775,24 @@ function LinkRow({ info }: { info: LinkInfo }) {
       <span>{text}</span>
     </button>
   )
+}
+
+/** Sound late or lost on the way while the receiver has the signal
+ *  (audio/player.ts): the connection to the server, not the reception. */
+function LinkProblem() {
+  const t = useT()
+  const p = useStore((s) => s.linkProblem)
+  if (!p) return null
+  // (one short late frame is what the buffer is for)
+  if (p.stalls >= 2 || p.longest > 2000) {
+    return (
+      <div className="hint link-problem">
+        {t('link_stalls_hint')
+          .replace('{n}', String(p.stalls))
+          .replace('{s}', (p.longest / 1000).toFixed(1))}
+      </div>
+    )
+  }
+  if (p.lost > 0) return <div className="hint link-problem">{t('link_lost_hint').replace('{n}', String(p.lost))}</div>
+  return null
 }
