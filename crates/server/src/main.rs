@@ -417,6 +417,7 @@ async fn main() {
         .route("/dxrec/{name}", get(dxrec_download_handler))
         .route("/raw/{name}", get(raw_download_handler))
         .route("/stream/{name}", get(stream_handler))
+        .route("/audio/{sid}", get(audio_socket_handler))
         // packages of the program for updates (e.g. the Windows build), if published here
         .nest_service("/updates", ServeDir::new(data_dir.join("updates")))
         .fallback_service(ServeDir::new(&web_root).not_found_service(ServeFile::new(index)));
@@ -1070,6 +1071,58 @@ fn same_origin_host(origin: &str, host: &str) -> bool {
 /// (each holds a queue of messages; a receiver's listeners are far fewer).
 const CLIENTS_MAX: usize = 2000;
 const CLIENTS_PER_ADDRESS: usize = 40;
+
+/// The Opus frames of a station of the main receiver (hub::AudioTaps):
+/// `/audio/<SId>` (hex), the same for all its listeners, so a proxy in front
+/// can pass one copy to many. The page says over /ws that it listens
+/// (codec "shared"): that decodes the station and counts the listener. Not
+/// on a private server: a proxy would pass its sound to anyone.
+async fn audio_socket_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(sid): axum::extract::Path<String>,
+) -> axum::response::Response {
+    use axum::extract::ws::Message;
+    use axum::http::StatusCode;
+    if state.public.read().private {
+        return (StatusCode::FORBIDDEN, "This receiver is private.\n").into_response();
+    }
+    let Ok(sid) = u32::from_str_radix(&sid, 16) else { return StatusCode::NOT_FOUND.into_response() };
+    let address = client_addr(&headers, addr);
+    if state.hub.taps.sockets() >= AUDIO_SOCKETS_MAX {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many connections\n").into_response();
+    }
+    let rx = state.hub.taps.subscribe(sid);
+    log::debug!("audio socket: {sid:04X} to {address}");
+    ws.max_message_size(4096).on_upgrade(move |socket| async move {
+        use futures_util::{SinkExt, StreamExt};
+        let (mut out, mut incoming) = socket.split();
+        let mut rx = rx;
+        loop {
+            tokio::select! {
+                frame = rx.recv() => match frame {
+                    Ok(f) => {
+                        if out.send(Message::Binary(axum::body::Bytes::from(f.as_ref().clone()))).await.is_err() {
+                            break;
+                        }
+                    }
+                    // (behind: on from the newest frames)
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                },
+                msg = incoming.next() => match msg {
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    _ => {}
+                },
+            }
+        }
+    })
+}
+
+/// Sockets of /audio at once (a proxy needs one per station it passes on).
+const AUDIO_SOCKETS_MAX: usize = 256;
 
 async fn ws_handler(
     ws: WebSocketUpgrade,

@@ -26,6 +26,9 @@ pub enum Codec {
     Pcm,
     /// Played by the program itself (speaker.rs): nothing is sent.
     Native,
+    /// Opus through /audio/<SId> (AudioTaps), not this connection: it
+    /// counts as a listener, the bytes go one copy for all (a proxy).
+    Shared,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -117,6 +120,42 @@ pub struct Hub {
     pub sent: AtomicU64,
     /// Tickets for a download each (`ticket`): what, its name, since when.
     tickets: Mutex<HashMap<String, (String, String, Instant)>>,
+    /// The Opus audio of the main receiver's stations for /audio/<SId>.
+    pub taps: AudioTaps,
+}
+
+/// Opus frames of the main receiver's stations (as BIN_AUDIO, the same bytes
+/// for every listener) for the sockets of /audio/<SId>: a proxy in front of
+/// the server passes one copy to all the listeners of a station. Who
+/// listens is told over /ws (Codec::Shared), so the station is decoded and
+/// they are counted as they are now.
+#[derive(Default)]
+pub struct AudioTaps {
+    senders: Mutex<HashMap<u32, tokio::sync::broadcast::Sender<Arc<Vec<u8>>>>>,
+}
+
+/// Frames a socket of /audio may fall behind before it skips ahead (5 s).
+const TAP_BACKLOG: usize = 250;
+
+impl AudioTaps {
+    pub fn subscribe(&self, sid: u32) -> tokio::sync::broadcast::Receiver<Arc<Vec<u8>>> {
+        self.senders.lock().entry(sid).or_insert_with(|| tokio::sync::broadcast::channel(TAP_BACKLOG).0).subscribe()
+    }
+
+    /// A frame of station `sid` to its sockets, if it has any.
+    pub fn send(&self, sid: u32, frame: &Arc<Vec<u8>>) {
+        let mut senders = self.senders.lock();
+        if let Some(tx) = senders.get(&sid) {
+            if tx.send(frame.clone()).is_err() {
+                senders.remove(&sid);
+            }
+        }
+    }
+
+    /// Sockets open in all.
+    pub fn sockets(&self) -> usize {
+        self.senders.lock().values().map(|tx| tx.receiver_count()).sum()
+    }
 }
 
 /// A ticket opens its download for this long, once.
@@ -331,7 +370,7 @@ impl Hub {
                 let e = map.entry(k).or_insert((false, false));
                 if c.audio {
                     match c.codec {
-                        Codec::Opus => e.0 = true,
+                        Codec::Opus | Codec::Shared => e.0 = true,
                         Codec::Pcm => e.1 = true,
                         Codec::Native => {}
                     }

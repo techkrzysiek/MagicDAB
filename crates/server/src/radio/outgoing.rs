@@ -197,6 +197,8 @@ impl Radio {
             "admin": self.hub.is_admin(client),
             // the program can play the sound itself (a page on this computer)
             "speaker": self.speaker_possible(client),
+            // the main receiver's stations also through /audio/<SId> (not on a private server)
+            "audioSocket": self.settings.public_server,
             "chat": self.settings.chat_enabled,
             "tunerLocked": self.settings.tuner_locked,
             "fixedChannel": self.fixed_channel,

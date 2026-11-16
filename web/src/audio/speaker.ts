@@ -5,15 +5,22 @@
 import { useStore, load } from '../store'
 import type { Store } from '../store'
 import { defaultBuffer, player } from './player'
+import { sharedWanted } from './shared'
 
 /** The program plays the sound (it can here, and it was not turned off). */
 export function nativeAudio(s: Store = useStore.getState()): boolean {
   return !!s.hello?.speaker && s.nativeAudio
 }
 
-/** The codec asked of the server. */
-export function audioCodec(s: Store = useStore.getState()): 'opus' | 'pcm' | 'native' {
-  return nativeAudio(s) ? 'native' : s.codec
+/** The codec asked of the server ("shared": Opus through /audio, audio/shared.ts). */
+export function audioCodec(s: Store = useStore.getState()): 'opus' | 'pcm' | 'native' | 'shared' {
+  return nativeAudio(s) ? 'native' : sharedWanted(s) ? 'shared' : s.codec
+}
+
+/** What the page plays, for showing it: "shared" is Opus too. */
+export function pageCodec(s: Store = useStore.getState()): 'opus' | 'pcm' | 'native' {
+  const codec = audioCodec(s)
+  return codec === 'shared' ? 'opus' : codec
 }
 
 /** The volume and the buffer for the program's output. */

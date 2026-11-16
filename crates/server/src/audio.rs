@@ -3,6 +3,9 @@
 //!
 //! Audio frame layout (binary WebSocket message):
 //! `[0]=1 [1]=codec (1 Opus, 2 PCM s16le) [2..4]=sequence u16 LE [4..8]=SId u32 LE` + payload
+//!
+//! The Opus frames of the main receiver's stations also go to the sockets of
+//! /audio/<SId> (hub::AudioTaps), the same bytes.
 
 use crate::hub::{Codec, Hub, Out, BIN_AUDIO};
 use magicdab_codecs::opus::{OpusEncoder, FRAME};
@@ -87,8 +90,13 @@ impl AudioHub {
                     if let Some(pkt) = pkt {
                         let mut v = Self::header(1, st.seq, key.sid);
                         v.extend_from_slice(pkt);
-                        let msg = Out::Binary(Arc::new(v));
-                        hub.broadcast(msg, |c| c.audio && c.codec == Codec::Opus && c.service == Some(key) && c.slot == slot);
+                        let frame = Arc::new(v);
+                        if slot == 0 && key.scids == 0 {
+                            hub.taps.send(key.sid, &frame);
+                        }
+                        hub.broadcast(Out::Binary(frame), |c| {
+                            c.audio && c.codec == Codec::Opus && c.service == Some(key) && c.slot == slot
+                        });
                     }
                 }
             }

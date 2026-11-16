@@ -5,6 +5,7 @@ import { desktopToken } from './desktop'
 import { restartChat } from './chat'
 import { player } from './audio/player'
 import { audioCodec, onSpeaker, speakerSettings } from './audio/speaker'
+import { told } from './audio/shared'
 import { recordEncoded, recordingActive } from './audio/recorder'
 
 let socket: WebSocket | null = null
@@ -520,7 +521,9 @@ export function connect() {
     else if (own) send({ type: 'tune', channel: own, rejoin: true, auto: true })
     if (s.audioEnabled) {
       if (audioCodec() === 'native') send(speakerSettings())
-      send({ type: 'audio', enabled: true, codec: audioCodec(), auto: true })
+      const codec = audioCodec()
+      told(codec)
+      send({ type: 'audio', enabled: true, codec, auto: true })
     }
     // the server keeps the recording flag per connection
     if (recordingActive()?.format === 'aac') send({ type: 'record', enabled: true, auto: true })

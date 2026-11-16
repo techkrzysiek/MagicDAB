@@ -9,6 +9,8 @@ export interface Hello {
   description?: string
   /** the program can play the sound itself (a page on its computer: speaker.rs) */
   speaker?: boolean
+  /** the main receiver's stations also through /audio/<SId> (audio/shared.ts) */
+  audioSocket?: boolean
   /** the chat of the listeners is on (/chat) */
   chat?: boolean
   version: string

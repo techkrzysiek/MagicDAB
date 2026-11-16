@@ -2,7 +2,8 @@ import { useStore, save, sessionSet, fixedChannelOf } from './store'
 import { dropSlide, send } from './ws'
 import { player } from './audio/player'
 import { initMediaSession, mediaStart, mediaStop } from './audio/mediasession'
-import { nativeAudio, speakerSettings } from './audio/speaker'
+import { audioCodec, nativeAudio, speakerSettings } from './audio/speaker'
+import { told } from './audio/shared'
 
 /** Counts starts and stops: a stop while a start is still loading wins. */
 let audioRequest = 0
@@ -33,8 +34,11 @@ export async function startAudio() {
     player.suspend()
     return
   }
+  // (the codec first: the store's change would tell it once more)
+  const codec = audioCodec({ ...useStore.getState(), audioEnabled: true })
+  told(codec)
   useStore.getState().set({ audioEnabled: true })
-  send({ type: 'audio', enabled: true, codec: useStore.getState().codec })
+  send({ type: 'audio', enabled: true, codec })
 }
 
 export function stopAudio() {
@@ -204,7 +208,11 @@ export function setCodec(codec: 'opus' | 'pcm') {
   const s = useStore.getState()
   s.set({ codec })
   save('codec', codec)
-  if (s.audioEnabled && !nativeAudio()) send({ type: 'audio', enabled: true, codec })
+  if (s.audioEnabled && !nativeAudio()) {
+    const c = audioCodec()
+    told(c)
+    send({ type: 'audio', enabled: true, codec: c })
+  }
 }
 
 /** The admin login: the password goes to the server once, its answer brings the token kept for reconnects (ws.ts). */

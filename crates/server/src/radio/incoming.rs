@@ -173,6 +173,8 @@ impl Radio {
                 }
                 let codec = match msg["codec"].as_str() {
                     Some("pcm") => hub::Codec::Pcm,
+                    // (the bytes through /audio/<SId>: only where there is one)
+                    Some("shared") if self.settings.public_server => hub::Codec::Shared,
                     // (the program plays it: only for a page on this computer)
                     Some("native") if self.speaker_allowed(client) => hub::Codec::Native,
                     _ => hub::Codec::Opus,
