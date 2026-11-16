@@ -679,21 +679,52 @@ function Receiver() {
   )
 }
 
+/** The slider of the manual gain sets it once it rests this long, or is let go of. */
+const GAIN_REST_MS = 400
+
 /** Gain works at once: it is listened to while being set. */
 function Gain() {
   const t = useT()
   const saved = useStore((st) => st.settings?.settings?.gain)
   const state = useStore((st) => st.state)
   const [gain, setGain] = useState<any>(saved)
+  // The slider on its way is not the gain yet: every position passed would be
+  // set in the tuner (each change is heard), and the server's answers to the
+  // ones before would pull the slider back under the finger.
+  const [sliding, setSliding] = useState<number | null>(null)
+  const pending = useRef<number | null>(null)
+  const rest = useRef<number | undefined>(undefined)
   useEffect(() => {
     setGain(saved)
   }, [saved])
+  // (the settings left with the slider on its way)
+  useEffect(
+    () => () => {
+      window.clearTimeout(rest.current)
+      if (pending.current !== null) saveSettings({ gain: { mode: 'manual', index: pending.current } })
+    },
+    [],
+  )
   if (!gain) return null
   const gains = state?.device.gains ?? []
   const apply = (g: any) => {
     setGain(g)
     saveSettings({ gain: g })
   }
+  const settle = () => {
+    window.clearTimeout(rest.current)
+    const index = pending.current
+    pending.current = null
+    setSliding(null)
+    if (index !== null) apply({ mode: 'manual', index })
+  }
+  const slide = (index: number) => {
+    pending.current = index
+    setSliding(index)
+    window.clearTimeout(rest.current)
+    rest.current = window.setTimeout(settle, GAIN_REST_MS)
+  }
+  const index = sliding ?? gain.index
   return (
     <Card title={t('set_card_gain')} note={t('set_gain_live')}>
       <Row label={t('gain_mode')}>
@@ -710,8 +741,17 @@ function Gain() {
       {gain.mode === 'manual' && gains.length > 0 && (
         <Row label={t('set_gain_value')}>
           <div className="set-inline">
-            <input type="range" min={0} max={gains.length - 1} value={gain.index} onChange={(e) => apply({ mode: 'manual', index: parseInt(e.target.value) })} />
-            <span className="set-value">{gains[gain.index]?.toFixed(1)} dB</span>
+            <input
+              type="range"
+              min={0}
+              max={gains.length - 1}
+              value={index}
+              onChange={(e) => slide(parseInt(e.target.value))}
+              onPointerUp={settle}
+              onKeyUp={settle}
+              onBlur={settle}
+            />
+            <span className="set-value">{gains[index]?.toFixed(1)} dB</span>
           </div>
         </Row>
       )}
