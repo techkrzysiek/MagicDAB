@@ -50,6 +50,11 @@ pub struct DeviceStatus {
     pub gains: Vec<f32>,
     /// Estimated RF level in dBm (rough).
     pub rf_level: Option<f32>,
+    /// How far (dB) the level of the samples is below the one the software
+    /// AGC climbs to, at the gain in use; `None` when not known (for a moment
+    /// after a change of the gain too).
+    #[serde(skip)]
+    pub gain_room: Option<f32>,
     pub error: Option<String>,
     /// Raw file playback position in seconds.
     pub position: Option<f64>,
@@ -88,9 +93,15 @@ pub fn convert_u8(buf: &[u8], out: &mut Vec<Complex32>) {
     out.extend(buf.chunks_exact(2).map(|c| Complex32::new(t[c[0] as usize], t[c[1] as usize])));
 }
 
-/// Approximate RF level from the gain and the average sample power of 8 bit samples.
+/// Approximate RF level (dBm) from the gain and the average sample power
+/// (per component, full scale = 1) of 8 bit samples: all that is in the
+/// 2 MHz received, the noise of the tuner too.
+///
+/// Rough: the constant puts a full scale sine at -15 dBm at 0 dB of gain (an
+/// R820T2 is reported to overload above -40 dBm at 25 dB), not measured here,
+/// and the gains of the table are nominal (an R828D: 19.6 dB between its 0
+/// and 16.6 dB). Changes at one gain are exact.
 pub fn estimate_rf_level(gain_db: f32, mean_power: f32) -> f32 {
-    // full scale sine of an RTL2832 ADC corresponds to roughly -10 dBm at 0 dB gain
     let dbfs = 10.0 * mean_power.max(1e-12).log10();
     dbfs - gain_db - 12.0
 }

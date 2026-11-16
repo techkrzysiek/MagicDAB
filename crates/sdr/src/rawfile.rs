@@ -89,6 +89,7 @@ impl InputDevice for RawFile {
             gain_index: None,
             gains: Vec::new(),
             rf_level: None,
+            gain_room: None,
             error: self.error.clone(),
             position: Some(self.position.load(Ordering::Relaxed) as f64 / SAMPLE_RATE as f64),
             duration: Some(total as f64 / SAMPLE_RATE as f64),

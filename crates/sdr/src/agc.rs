@@ -3,12 +3,21 @@
 //! Keeps the ADC input in a range with good dynamic range and very little
 //! clipping by stepping through the tuner gain table.
 
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+/// Power per component (full scale = 1) below which the AGC takes the next
+/// gain step (if the step keeps it below), and above which it steps down.
+pub const CLIMB_BELOW: f32 = 0.05;
+pub const DOWN_ABOVE: f32 = 0.08;
+
 pub struct SoftAgc {
     sum_power: f64,
     clipped: u64,
     samples: u64,
     hold: u32,
     pub mean_power: f32,
+    /// Evaluations made (it wraps): `mean_power` is of the last one.
+    pub windows: u32,
     /// Evaluations since the last step up, the wait before the next one, and
     /// how long that wait is: a step up that makes the ADC clip at once (a
     /// strong transmitter nearby) is tried again later and later (4 s, 8 s,
@@ -35,7 +44,18 @@ impl Default for SoftAgc {
 
 impl SoftAgc {
     pub fn new() -> Self {
-        SoftAgc { sum_power: 0.0, clipped: 0, samples: 0, hold: 0, mean_power: 0.0, since_up: u32::MAX, up_wait: 0, backoff: 0, calm: 0 }
+        SoftAgc {
+            sum_power: 0.0,
+            clipped: 0,
+            samples: 0,
+            hold: 0,
+            mean_power: 0.0,
+            windows: 0,
+            since_up: u32::MAX,
+            up_wait: 0,
+            backoff: 0,
+            calm: 0,
+        }
     }
 
     /// Accumulate raw unsigned 8 bit IQ samples.
@@ -68,6 +88,7 @@ impl SoftAgc {
         let mean = (self.sum_power / self.samples as f64) as f32;
         let clip_ratio = self.clipped as f32 / self.samples as f32;
         self.mean_power = mean;
+        self.windows = self.windows.wrapping_add(1);
         self.sum_power = 0.0;
         self.clipped = 0;
         self.samples = 0;
@@ -77,7 +98,7 @@ impl SoftAgc {
             self.hold -= 1;
             return AgcAction::None;
         }
-        if clip_ratio > 2e-4 || mean > 0.08 {
+        if clip_ratio > 2e-4 || mean > DOWN_ABOVE {
             self.hold = 1;
             self.calm = 0;
             if self.since_up <= 3 {
@@ -92,13 +113,57 @@ impl SoftAgc {
             self.calm = 0;
             self.backoff /= 2;
         }
-        if mean * up_ratio < 0.05 && clip_ratio < 1e-5 && self.up_wait == 0 {
+        if mean * up_ratio < CLIMB_BELOW && clip_ratio < 1e-5 && self.up_wait == 0 {
             self.hold = 1;
             self.since_up = 0;
             AgcAction::Up
         } else {
             AgcAction::None
         }
+    }
+}
+
+/// How far a level is below the one the AGC climbs to (dB): the gain it would
+/// add if nothing but the level limited it.
+pub fn room_db(mean_power: f32) -> f32 {
+    10.0 * (CLIMB_BELOW / mean_power.max(1e-12)).log10()
+}
+
+/// The level of the last evaluation through which the gain stayed the same,
+/// kept with that gain (its table index). An evaluation with a gain change in
+/// it mixes two levels, and a level read next to a gain set since belongs to
+/// another gain: an RF level worked out of such a pair jumps by the step.
+pub struct Level {
+    /// Gain index + 1 (0: nothing yet) above the bits of the power.
+    cell: AtomicU64,
+    /// The gain at the evaluation before.
+    last_gain: AtomicUsize,
+}
+
+impl Default for Level {
+    fn default() -> Self {
+        Level { cell: AtomicU64::new(0), last_gain: AtomicUsize::new(usize::MAX) }
+    }
+}
+
+impl Level {
+    /// An evaluation was made at a gain: `SoftAgc::mean_power` of it.
+    pub fn evaluated(&self, gain_index: usize, mean_power: f32) {
+        if self.last_gain.swap(gain_index, Ordering::Relaxed) == gain_index && mean_power > 0.0 {
+            self.cell.store(((gain_index as u64 + 1) << 32) | mean_power.to_bits() as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// Another frequency: the level so far is not of it, nor is the evaluation running.
+    pub fn restart(&self) {
+        self.last_gain.store(usize::MAX, Ordering::Relaxed);
+        self.cell.store(0, Ordering::Relaxed);
+    }
+
+    /// Gain index and power per component (full scale = 1).
+    pub fn load(&self) -> Option<(usize, f32)> {
+        let v = self.cell.load(Ordering::Relaxed);
+        ((v >> 32) > 0).then(|| ((v >> 32) as usize - 1, f32::from_bits(v as u32)))
     }
 }
 
@@ -153,6 +218,37 @@ mod tests {
         // two minutes: a few tries with growing waits instead of one a second
         assert!(changes <= 12, "{changes} gain changes in two minutes");
         assert!(i <= 7);
+    }
+
+    #[test]
+    fn a_level_is_kept_with_the_gain_it_was_measured_at() {
+        let level = Level::default();
+        assert_eq!(level.load(), None);
+        // the first evaluation may have begun at another gain
+        level.evaluated(4, 0.01);
+        assert_eq!(level.load(), None);
+        level.evaluated(4, 0.02);
+        assert_eq!(level.load(), Some((4, 0.02)));
+        // the gain changed through this one: the level before stays, with its gain
+        level.evaluated(7, 0.03);
+        assert_eq!(level.load(), Some((4, 0.02)));
+        level.evaluated(7, 0.04);
+        assert_eq!(level.load(), Some((7, 0.04)));
+        level.restart();
+        assert_eq!(level.load(), None);
+        level.evaluated(7, 0.04);
+        assert_eq!(level.load(), None);
+        // index 0 is a gain like any other
+        level.evaluated(0, 0.001);
+        level.evaluated(0, 0.001);
+        assert_eq!(level.load(), Some((0, 0.001)));
+    }
+
+    #[test]
+    fn the_room_is_the_gain_the_agc_would_still_add() {
+        assert!(room_db(CLIMB_BELOW).abs() < 0.01);
+        assert!((room_db(CLIMB_BELOW / 100.0) - 20.0).abs() < 0.01);
+        assert!(room_db(DOWN_ABOVE) < 0.0);
     }
 
     #[test]

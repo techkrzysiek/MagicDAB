@@ -17,6 +17,18 @@
 //! gain, and a probe the gain could not get to counts as a worse one: else
 //! the optimiser keeps probing a ceiling that is not the gain, and every
 //! probe up throws the gain into the overload for the AGC to walk it back.
+//!
+//! Two gains are compared by what is decoded where that can be counted: the
+//! bit errors of the FIC before its decoder. The SNR is measured against the
+//! null symbol, so what distorts the signal only while it is there (a tuner
+//! driven too hard by the multiplex itself, echoes longer than the guard
+//! interval) is not in it: a gain may give more SNR and more errors. Without
+//! errors to count the SNR decides.
+//!
+//! A ceiling far below the gain the level allows goes back up, in one step,
+//! although the reception is good: whatever brought it down (a level since
+//! gone, a burst) is not remembered for good, and at 8 bits a signal a few
+//! steps of the ADC high has the ADC's resolution for its noise.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -47,22 +59,99 @@ const POOR_SNR: f32 = 8.0;
 /// demodulator for a moment (at 28.7 dB a probe cost 0.7 s of audio for an
 /// SNR of 33.3 dB nobody hears).
 const GOOD_SNR: f32 = 15.0;
+/// Bit error ratio of the FIC from which two gains are compared by it:
+/// about a hundred errors in the second it is counted over.
+const BER_COUNTED: f32 = 1e-3;
+/// A gain is better by the bit errors with this share of them at most. The
+/// ratio of one second moves by a quarter around its mean at a steady gain
+/// (measured at an SNR of 10.6 dB: 6.0e-2 to 9.2e-2 around 7.4e-2).
+const BER_BETTER: f32 = 0.7;
+/// Bit error ratio from which the reception is not good whatever the SNR:
+/// what an undistorted signal has some 4 dB below `GOOD_SNR`.
+const GOOD_BER: f32 = 1e-2;
+/// Room for more gain (dB, by the level: `magicdab_sdr::agc::room_db`) from
+/// which a ceiling is raised although the reception is good. Measured, a
+/// multiplex of a transmitter nearby at a ceiling of 0 dB learned before:
+/// 3.6 steps of the ADC of signal over 0.5 of noise, an SNR of 17.5 dB with
+/// 17.9 dB of room; 37.4 dB at 16.6 dB of gain.
+const RISE_ROOM_DB: f32 = 10.0;
+/// What a rise leaves of the room (dB): the gains of the table are nominal
+/// (an R828D: 19.6 dB between its 0 and 16.6 dB), and the AGC steps down
+/// 2 dB above the level it climbs to.
+const RISE_MARGIN_DB: f32 = 4.0;
+/// SNR from which the room is left unused (dB): nothing to win there.
+const RISE_BELOW_SNR: f32 = 30.0;
+/// A rise that was no better is not tried on the channel again for this long.
+const RISE_AGAIN: Duration = Duration::from_secs(6 * 3600);
 /// SNR of a sweep level that counts as reception (dB).
 const FOUND_SNR: f32 = 1.0;
 /// A sweep stops going further once a level is this much worse than the best (dB).
 const WORSE_DB: f32 = 3.0;
 
+/// A signal report for the optimiser (about 4 per second).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Report {
+    pub synced: bool,
+    /// Demodulator SNR (dB).
+    pub snr: f32,
+    /// SNR seen in the null symbol, also without synchronisation (dB).
+    pub null_snr: f32,
+    /// Bit error ratio of the FIC before its decoder, over the last second.
+    pub ber: f32,
+    /// Gain the device uses (its table index).
+    pub gain: Option<usize>,
+    /// Room the level leaves for more gain (dB), if known.
+    pub room: Option<f32>,
+}
+
+/// What a gain was measured to give.
+#[derive(Clone, Copy, Debug)]
+struct Quality {
+    /// Demodulator SNR (dB).
+    snr: f32,
+    /// Bit error ratio of the FIC before its decoder.
+    ber: f32,
+}
+
+impl Quality {
+    /// Better than `base` by more than a steady signal differs between two
+    /// measurements: by the bit errors where there are enough to count,
+    /// else by the SNR.
+    fn better_than(&self, base: &Quality) -> bool {
+        if self.ber.max(base.ber) >= BER_COUNTED {
+            self.ber < base.ber * BER_BETTER
+        } else {
+            self.snr > base.snr + ACCEPT_DB
+        }
+    }
+
+    /// Nothing to win by another gain.
+    fn good(&self) -> bool {
+        self.snr >= GOOD_SNR && self.ber < GOOD_BER
+    }
+}
+
+impl std::fmt::Display for Quality {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "SNR {:.1} dB", self.snr)?;
+        if self.ber >= BER_COUNTED {
+            write!(f, ", FIC BER {:.1e}", self.ber)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Phase {
     /// Waiting before measuring the current ceiling.
     Settle(Instant),
-    /// Measuring the SNR at the current ceiling, and the lowest and highest
-    /// gain the device used meanwhile.
-    Base { until: Instant, sum: f32, n: u32, lo: usize, hi: usize },
+    /// Measuring the SNR and the bit errors (`ber`) at the current ceiling,
+    /// and the lowest and highest gain the device used meanwhile.
+    Base { until: Instant, sum: f32, ber: f32, n: u32, lo: usize, hi: usize },
     /// Probe ceiling applied, waiting for the receiver to settle.
-    ProbeSettle { until: Instant, base: f32 },
-    /// Measuring the SNR at the probe ceiling; `off` once the gain was not the probe's.
-    Probe { until: Instant, base: f32, sum: f32, n: u32, off: bool },
+    ProbeSettle { until: Instant, base: Quality },
+    /// Measuring at the probe ceiling; `off` once the gain was not the probe's.
+    Probe { until: Instant, base: Quality, sum: f32, ber: f32, n: u32, off: bool },
     /// Idle until the next probe.
     Wait(Instant),
 }
@@ -110,6 +199,10 @@ pub struct GainSeeker {
     /// Best ceiling per channel in dB (the gain tables of devices differ).
     learned: HashMap<String, f32>,
     pub learned_dirty: bool,
+    /// The probe is a rise to the gain the level allows (`RISE_ROOM_DB`).
+    rising: bool,
+    /// Channels where a rise was no better, and when.
+    no_rise: HashMap<String, Instant>,
 }
 
 impl GainSeeker {
@@ -129,6 +222,8 @@ impl GainSeeker {
             swept: false,
             learned: HashMap::new(),
             learned_dirty: false,
+            rising: false,
+            no_rise: HashMap::new(),
         }
     }
 
@@ -194,6 +289,7 @@ impl GainSeeker {
         self.trouble_since = None;
         self.last_sweep = None;
         self.swept = false;
+        self.rising = false;
         Some(self.ceiling)
     }
 
@@ -209,10 +305,9 @@ impl GainSeeker {
             .min_by(|&a, &b| off(a).total_cmp(&off(b)).then((self.gains[a] - cur).abs().total_cmp(&(self.gains[b] - cur).abs())))
     }
 
-    /// Feed a signal report (about 4 per second): synchronisation, demodulator
-    /// SNR, the SNR seen in the null symbol and the gain the device uses (its
-    /// table index); returns a ceiling to apply.
-    pub fn on_signal(&mut self, synced: bool, snr: f32, null_snr: f32, gain: Option<usize>, now: Instant) -> Option<Ceiling> {
+    /// Feed a signal report; returns a ceiling to apply.
+    pub fn on_signal(&mut self, report: Report, now: Instant) -> Option<Ceiling> {
+        let Report { synced, snr, null_snr, ber, gain, room } = report;
         if self.gains.is_empty() || self.channel.is_none() {
             return None;
         }
@@ -222,13 +317,21 @@ impl GainSeeker {
         if !synced || snr < POOR_SNR {
             let since = *self.trouble_since.get_or_insert(now);
             let again = self.last_sweep.is_none_or(|t| now.duration_since(t) >= SWEEP_AGAIN);
-            if now.duration_since(since) >= SWEEP_AFTER && again && (!synced || !self.swept) {
+            // (a rise is measured to its end: a sweep would start from a gain the device is not at)
+            if now.duration_since(since) >= SWEEP_AFTER && again && (!synced || !self.swept) && !self.rising {
                 return self.start_sweep(now, synced, snr);
             }
         } else {
             self.trouble_since = None;
         }
         if !synced {
+            if self.rising {
+                // the step upsets the demodulator for a moment
+                if matches!(self.phase, Phase::ProbeSettle { until, .. } if now < until) {
+                    return None;
+                }
+                return self.rise_failed(None, now);
+            }
             let probing = matches!(self.phase, Phase::ProbeSettle { .. } | Phase::Probe { .. });
             self.phase = Phase::Settle(now + SETTLE);
             if probing {
@@ -242,14 +345,14 @@ impl GainSeeker {
             Phase::Settle(t) | Phase::Wait(t) => {
                 if now >= t {
                     let g = gain.unwrap_or(self.ceiling);
-                    self.phase = Phase::Base { until: now + MEASURE, sum: 0.0, n: 0, lo: g, hi: g };
+                    self.phase = Phase::Base { until: now + MEASURE, sum: 0.0, ber: 0.0, n: 0, lo: g, hi: g };
                 }
             }
-            Phase::Base { until, sum, n, lo, hi } => {
+            Phase::Base { until, sum, ber: errors, n, lo, hi } => {
                 let g = gain.unwrap_or(self.ceiling);
-                let (sum, n, lo, hi) = (sum + snr, n + 1, lo.min(g), hi.max(g));
+                let (sum, errors, n, lo, hi) = (sum + snr, errors + ber, n + 1, lo.min(g), hi.max(g));
                 if now < until || n < 6 {
-                    self.phase = Phase::Base { until, sum, n, lo, hi };
+                    self.phase = Phase::Base { until, sum, ber: errors, n, lo, hi };
                     return None;
                 }
                 let lowered = hi < self.ceiling;
@@ -263,11 +366,16 @@ impl GainSeeker {
                     self.ceiling = hi;
                     self.learn();
                 }
-                let base = sum / n as f32;
+                let base = Quality { snr: sum / n as f32, ber: errors / n as f32 };
                 if lo != hi {
                     // the AGC moved the gain meanwhile: measure again
-                    self.phase = Phase::Base { until: now + MEASURE, sum: 0.0, n: 0, lo: g, hi: g };
-                } else if base >= GOOD_SNR {
+                    self.phase = Phase::Base { until: now + MEASURE, sum: 0.0, ber: 0.0, n: 0, lo: g, hi: g };
+                } else if base.good() {
+                    if !lowered {
+                        if let Some(c) = self.start_rise(base, room, hi, now) {
+                            return Some(c);
+                        }
+                    }
                     // good reception: nothing to win, a probe would be heard
                     self.learn();
                     self.phase = Phase::Wait(now + MAX_INTERVAL);
@@ -282,27 +390,36 @@ impl GainSeeker {
                 if now >= until {
                     if gain.is_some_and(|g| g != self.probe) {
                         // the AGC could not take the gain there
-                        return self.probe_failed(now);
+                        return if self.rising { self.rise_failed(None, now) } else { self.probe_failed(now) };
                     }
-                    self.phase = Phase::Probe { until: now + MEASURE, base, sum: 0.0, n: 0, off: false };
+                    self.phase = Phase::Probe { until: now + MEASURE, base, sum: 0.0, ber: 0.0, n: 0, off: false };
                 }
             }
-            Phase::Probe { until, base, sum, n, off } => {
-                let (sum, n) = (sum + snr, n + 1);
+            Phase::Probe { until, base, sum, ber: errors, n, off } => {
+                let (sum, errors, n) = (sum + snr, errors + ber, n + 1);
                 let off = off || gain.is_some_and(|g| g != self.probe);
                 if now < until || n < 6 {
-                    self.phase = Phase::Probe { until, base, sum, n, off };
+                    self.phase = Phase::Probe { until, base, sum, ber: errors, n, off };
                     return None;
                 }
-                let s = sum / n as f32;
-                if !off && s > base + ACCEPT_DB {
+                let s = Quality { snr: sum / n as f32, ber: errors / n as f32 };
+                if self.rising {
+                    if off || !s.better_than(&base) {
+                        return self.rise_failed(Some((base, s)), now);
+                    }
                     log::info!(
-                        "gain: {:.1} dB -> {:.1} dB (SNR {:.1} -> {:.1} dB)",
+                        "gain: {:.1} dB -> {:.1} dB, the signal level left room ({base} -> {s})",
                         self.gains[self.ceiling],
-                        self.gains[self.probe],
-                        base,
-                        s
+                        self.gains[self.probe]
                     );
+                    self.rising = false;
+                    self.ceiling = self.probe;
+                    self.learn();
+                    self.phase = Phase::Wait(now + MIN_INTERVAL);
+                    return None;
+                }
+                if !off && s.better_than(&base) {
+                    log::info!("gain: {:.1} dB -> {:.1} dB ({base} -> {s})", self.gains[self.ceiling], self.gains[self.probe]);
                     self.ceiling = self.probe;
                     self.learn();
                     self.fails = 0;
@@ -314,6 +431,43 @@ impl GainSeeker {
             }
         }
         None
+    }
+
+    /// Good reception at a ceiling the gain is at, with much room left by the
+    /// level (`RISE_ROOM_DB`): the ceiling to try instead, most of the room up.
+    fn start_rise(&mut self, base: Quality, room: Option<f32>, gain: usize, now: Instant) -> Option<Ceiling> {
+        let room = room.filter(|&r| r >= RISE_ROOM_DB)?;
+        if base.snr >= RISE_BELOW_SNR || gain != self.ceiling {
+            return None;
+        }
+        let channel = self.channel.as_ref()?;
+        if self.no_rise.get(channel).is_some_and(|&t| now.saturating_duration_since(t) < RISE_AGAIN) {
+            return None;
+        }
+        let most = self.gains[self.ceiling] + room - RISE_MARGIN_DB;
+        let target = (self.ceiling + 1..self.gains.len()).take_while(|&i| self.gains[i] <= most).last()?;
+        self.probe = target;
+        self.rising = true;
+        self.phase = Phase::ProbeSettle { until: now + SETTLE, base };
+        Some(Ceiling { index: target, jump: true })
+    }
+
+    /// The rise was no better (`measured`: before and after), lost the signal
+    /// or the AGC took the gain back: the ceiling stays, and the channel is
+    /// left alone for a long time.
+    fn rise_failed(&mut self, measured: Option<(Quality, Quality)>, now: Instant) -> Option<Ceiling> {
+        match measured {
+            Some((base, s)) => {
+                log::info!("gain: {:.1} dB kept, {:.1} dB was no better ({base} -> {s})", self.gains[self.ceiling], self.gains[self.probe])
+            }
+            None => log::info!("gain: {:.1} dB kept, {:.1} dB did not hold", self.gains[self.ceiling], self.gains[self.probe]),
+        }
+        self.rising = false;
+        if let Some(ch) = &self.channel {
+            self.no_rise.insert(ch.clone(), now);
+        }
+        self.phase = Phase::Wait(now + MAX_INTERVAL);
+        Some(Ceiling { index: self.ceiling, jump: true })
     }
 
     /// The probe was no better, or the gain did not get there: back to the
@@ -336,7 +490,7 @@ impl GainSeeker {
         Some(Ceiling { index: self.ceiling, jump: true })
     }
 
-    fn start_probe(&mut self, base: f32, now: Instant) -> Option<Ceiling> {
+    fn start_probe(&mut self, base: Quality, now: Instant) -> Option<Ceiling> {
         let p = self.step(self.dir).or_else(|| {
             self.dir = -self.dir;
             self.step(self.dir)
@@ -460,6 +614,11 @@ mod tests {
         42.1, 43.4, 43.9, 44.5, 48.0, 49.6,
     ];
 
+    /// A report without bit errors.
+    fn report(synced: bool, snr: f32, null_snr: f32, gain: Option<usize>, room: Option<f32>) -> Report {
+        Report { synced, snr, null_snr, ber: 0.0, gain, room }
+    }
+
     /// The device: its AGC climbs a step every half second up to the ceiling
     /// and `limit` (the most gain the signal level allows), and steps back
     /// down above `limit`; a jump goes straight to the ceiling.
@@ -486,6 +645,11 @@ mod tests {
                 self.gain = gain;
                 self.changes += 1;
             }
+        }
+
+        /// The room the level leaves for more gain (dB), as the device says it.
+        fn room(&self) -> Option<f32> {
+            Some(GAINS[self.limit] - GAINS[self.gain] + 0.5)
         }
 
         /// One report period (0.25 s).
@@ -519,7 +683,7 @@ mod tests {
                 Some(s) => (true, s + jitter, s + jitter),
                 None => (false, 0.0, -10.0 + jitter),
             };
-            if let Some(c) = g.on_signal(synced, snr, null_snr, Some(dev.gain), t0 + Duration::from_millis(250 * k)) {
+            if let Some(c) = g.on_signal(report(synced, snr, null_snr, Some(dev.gain), dev.room()), t0 + Duration::from_millis(250 * k)) {
                 dev.apply(c);
             }
             dev.agc();
@@ -578,7 +742,7 @@ mod tests {
         let t0 = Instant::now();
         let mut changes = 0;
         for k in 0..4 * 25 {
-            if let Some(c) = g.on_signal(false, 0.0, -10.0, Some(ceiling), t0 + Duration::from_millis(250 * k)) {
+            if let Some(c) = g.on_signal(report(false, 0.0, -10.0, Some(ceiling), None), t0 + Duration::from_millis(250 * k)) {
                 ceiling = c.index;
                 changes += 1;
             }
@@ -599,12 +763,181 @@ mod tests {
         let t0 = Instant::now();
         for k in 0..600 * 4 {
             let snr = curve(GAINS[dev.gain]).unwrap();
-            if let Some(c) = g.on_signal(true, snr, snr, Some(dev.gain), t0 + Duration::from_millis(250 * k)) {
+            // (the level allows a few dB more, as with the AGC at its own limit)
+            if let Some(c) = g.on_signal(report(true, snr, snr, Some(dev.gain), Some(3.0)), t0 + Duration::from_millis(250 * k)) {
                 dev.apply(c);
             }
             dev.agc();
         }
         assert_eq!(dev.changes, 0, "the gain was changed {} times", dev.changes);
+    }
+
+    /// A channel with a ceiling learned before, on a device allowing gains up
+    /// to `limit`, for `seconds`: the SNR by the gain, with the reports of the
+    /// first `blind` quarters of a second after a change of the gain without
+    /// synchronisation. Tuned to again at half time.
+    fn run_learned(curve: impl Fn(f32) -> f32, learned: f32, limit: usize, seconds: u64, blind: u32) -> (GainSeeker, Device) {
+        let mut g = GainSeeker::new();
+        g.learn_db("5B", learned);
+        let start = g.retune("5B", &GAINS).unwrap();
+        let mut dev = Device { gain: start, ceiling: start, limit, ticks: 0, changes: 0, over: 0 };
+        let t0 = Instant::now();
+        let (mut changes, mut upset) = (0, 0);
+        for k in 0..seconds * 4 {
+            if k == seconds * 2 {
+                let c = g.retune("5B", &GAINS).unwrap();
+                dev.apply(Ceiling { index: c, jump: true });
+            }
+            if dev.changes != changes {
+                changes = dev.changes;
+                upset = blind;
+            }
+            let snr = curve(GAINS[dev.gain]);
+            let synced = upset == 0;
+            upset = upset.saturating_sub(1);
+            let seen = if synced { (true, snr, snr) } else { (false, 0.0, -10.0) };
+            if let Some(c) = g.on_signal(report(seen.0, seen.1, seen.2, Some(dev.gain), dev.room()), t0 + Duration::from_millis(250 * k)) {
+                dev.apply(c);
+            }
+            dev.agc();
+        }
+        (g, dev)
+    }
+
+    #[test]
+    fn a_ceiling_far_below_what_the_level_allows_goes_back_up() {
+        // measured: 0 dB learned for a multiplex whose level allows 16.6 dB
+        // (index 10), 17.5 dB of SNR there for the 8 bits, 37 dB with the gain
+        let curve = |db: f32| (17.5 + db * 1.2).min(37.0);
+        let (g, dev) = run_learned(curve, 0.0, 10, 120, 0);
+        assert!((8.0..=16.6).contains(&GAINS[g.ceiling]), "ceiling {:.1} dB", GAINS[g.ceiling]);
+        assert_eq!(dev.gain, g.ceiling);
+        assert_eq!(dev.over, 0, "the gain went above what the level allows");
+        assert_eq!(dev.changes, 1, "one step up, kept after tuning again");
+        assert_eq!(g.learned.get("5B"), Some(&GAINS[g.ceiling]));
+    }
+
+    #[test]
+    fn a_rise_waits_for_the_demodulator_upset_by_the_step() {
+        let curve = |db: f32| (17.5 + db * 1.2).min(37.0);
+        let (g, dev) = run_learned(curve, 0.0, 10, 120, 3);
+        assert!(GAINS[g.ceiling] >= 8.0, "ceiling {:.1} dB", GAINS[g.ceiling]);
+        assert_eq!(dev.changes, 1);
+    }
+
+    #[test]
+    fn a_rise_that_is_no_better_is_not_tried_again() {
+        // the SNR is the signal's own: more gain wins nothing
+        let (g, dev) = run_learned(|_| 20.0, 0.0, 10, 1200, 0);
+        assert_eq!(GAINS[g.ceiling], 0.0);
+        assert_eq!(dev.gain, 0);
+        // there and back, once: not again after 4 minutes, nor after tuning again
+        assert_eq!(dev.changes, 2, "{} gain changes", dev.changes);
+    }
+
+    #[test]
+    fn a_rise_that_loses_the_signal_goes_back() {
+        // more gain overloads the tuner: nothing received above 5 dB
+        let mut g = GainSeeker::new();
+        g.learn_db("5B", 0.0);
+        let start = g.retune("5B", &GAINS).unwrap();
+        let mut dev = Device { gain: start, ceiling: start, limit: 10, ticks: 0, changes: 0, over: 0 };
+        let t0 = Instant::now();
+        for k in 0..60 * 4 {
+            let seen = if GAINS[dev.gain] > 5.0 { (false, 0.0, -10.0) } else { (true, 20.0, 20.0) };
+            if let Some(c) = g.on_signal(report(seen.0, seen.1, seen.2, Some(dev.gain), dev.room()), t0 + Duration::from_millis(250 * k)) {
+                dev.apply(c);
+            }
+            dev.agc();
+        }
+        assert_eq!(dev.gain, 0);
+        assert_eq!(GAINS[g.ceiling], 0.0);
+        assert_eq!(dev.changes, 2, "{} gain changes", dev.changes);
+    }
+
+    /// A channel on a device allowing gains up to `limit`, from a ceiling
+    /// learned before (else the default): the SNR and the bit error ratio of
+    /// the FIC by the gain. With the gain changes of the last five minutes.
+    fn run_quality(quality: impl Fn(f32) -> (f32, f32), learned: Option<f32>, limit: usize, seconds: u64) -> (GainSeeker, Device, u32) {
+        let mut g = GainSeeker::new();
+        if let Some(db) = learned {
+            g.learn_db("11B", db);
+        }
+        let start = g.retune("11B", &GAINS).unwrap();
+        let mut dev = Device { gain: start, ceiling: start, limit, ticks: 0, changes: 0, over: 0 };
+        let t0 = Instant::now();
+        let mut before = 0;
+        for k in 0..seconds * 4 {
+            if k == seconds.saturating_sub(300) * 4 {
+                before = dev.changes;
+            }
+            let (snr, ber) = quality(GAINS[dev.gain]);
+            let r = Report { synced: true, snr, null_snr: snr, ber, gain: Some(dev.gain), room: dev.room() };
+            if let Some(c) = g.on_signal(r, t0 + Duration::from_millis(250 * k)) {
+                dev.apply(c);
+            }
+            dev.agc();
+        }
+        let late = dev.changes - before;
+        (g, dev, late)
+    }
+
+    #[test]
+    fn a_gain_is_better_by_the_bit_errors_where_they_can_be_counted() {
+        let q = |snr: f32, ber: f32| Quality { snr, ber };
+        // no errors to count: the SNR
+        assert!(q(12.6, 0.0).better_than(&q(12.0, 2e-4)));
+        assert!(!q(12.3, 0.0).better_than(&q(12.0, 0.0)));
+        // errors to count: they decide, whatever the SNR
+        assert!(q(10.0, 3e-2).better_than(&q(11.0, 6e-2)));
+        assert!(!q(14.0, 6e-2).better_than(&q(10.0, 6e-2)));
+        assert!(!q(30.0, 5e-3).better_than(&q(17.0, 0.0)));
+        assert!(q(17.0, 0.0).better_than(&q(30.0, 5e-3)));
+        // not by what a steady signal differs between two measurements
+        assert!(!q(10.0, 5e-2).better_than(&q(10.0, 6e-2)));
+        assert!(q(20.0, 5e-3).good() && !q(20.0, 2e-2).good() && !q(14.0, 0.0).good());
+    }
+
+    #[test]
+    fn bit_errors_decide_between_gains_of_the_same_snr() {
+        // a tuner driven too hard by what it receives: the SNR (against the
+        // null symbol) is the same at every gain, the errors come with the gain
+        let (g, _, _) = run_quality(|db| (12.0, 2e-3 * 10f32.powf((db - 20.0) / 10.0)), None, GAINS.len() - 1, 600);
+        assert!(GAINS[g.ceiling] <= 20.7, "ceiling {:.1} dB", GAINS[g.ceiling]);
+    }
+
+    #[test]
+    fn a_good_snr_with_many_bit_errors_is_not_left_alone() {
+        let (g, _, late) = run_quality(|db| (22.0, 3e-2 * 10f32.powf((db - 40.2) / 10.0)), None, GAINS.len() - 1, 900);
+        assert!(GAINS[g.ceiling] < 34.0, "ceiling {:.1} dB", GAINS[g.ceiling]);
+        // (and once the errors are few it is)
+        assert_eq!(late, 0, "{late} gain changes in the last five minutes");
+    }
+
+    #[test]
+    fn a_rise_that_brings_bit_errors_goes_back() {
+        // more SNR with the gain, and errors that were not there
+        let quality = |db: f32| ((17.5 + db * 1.2).min(37.0), if db > 5.0 { 5e-3 } else { 0.0 });
+        let (g, dev, _) = run_quality(quality, Some(0.0), 10, 600);
+        assert_eq!(GAINS[g.ceiling], 0.0);
+        assert_eq!(dev.gain, 0);
+        assert_eq!(dev.changes, 2, "{} gain changes", dev.changes);
+    }
+
+    #[test]
+    fn a_few_bit_errors_at_a_good_snr_are_left_alone() {
+        let (_, dev, _) = run_quality(|_| (20.0, 5e-3), Some(25.4), 14, 600);
+        assert_eq!(dev.changes, 0);
+    }
+
+    #[test]
+    fn room_is_left_unused_where_nothing_is_to_win() {
+        // an SNR nobody hears the difference of
+        let (_, dev) = run_learned(|_| 31.0, 0.0, 10, 600, 0);
+        assert_eq!(dev.changes, 0);
+        // little room: the gain is about where the AGC would have it
+        let (_, dev) = run_learned(|_| 20.0, 8.7, 10, 600, 0);
+        assert_eq!(dev.changes, 0);
     }
 
     #[test]

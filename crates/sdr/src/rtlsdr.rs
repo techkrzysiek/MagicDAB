@@ -1,10 +1,10 @@
 //! RTL-SDR input via librtlsdr loaded at runtime.
 
-use crate::agc::{default_gain_index, next_index, SoftAgc};
+use crate::agc::{default_gain_index, next_index, room_db, Level, SoftAgc};
 use crate::{convert_u8, DeviceStatus, GainMode, InputDevice, SampleCallback, SAMPLE_RATE};
 use libloading::{Library, Symbol};
 use std::ffi::{c_char, c_int, c_void, CStr};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread::JoinHandle;
@@ -215,7 +215,7 @@ struct Shared {
     /// Copy of the USB buffer: librtlsdr's zero-copy buffers can be uncached
     /// memory (Raspberry Pi), where every single byte read is slow.
     raw: Mutex<Vec<u8>>,
-    mean_power_bits: AtomicU32,
+    level: Level,
 }
 
 impl Shared {
@@ -330,8 +330,11 @@ unsafe extern "C" fn read_cb(buf: *mut u8, len: u32, ctx: *mut c_void) {
     };
     let mut agc = sh.agc.lock().unwrap();
     agc.feed(data);
+    let windows = agc.windows;
     let action = agc.evaluate(up_ratio);
-    sh.mean_power_bits.store(agc.mean_power.to_bits(), Ordering::Relaxed);
+    if agc.windows != windows {
+        sh.level.evaluated(i, agc.mean_power);
+    }
     drop(agc);
     if sh.software_agc.load(Ordering::Relaxed) {
         let ceiling = sh.gain_ceiling.load(Ordering::Relaxed);
@@ -355,15 +358,19 @@ fn gain_thread(sh: Arc<Shared>) {
 
 impl InputDevice for RtlSdr {
     fn status(&self) -> DeviceStatus {
-        let (gains, gi, _mean) = match &self.shared {
+        let (gains, gi, level) = match &self.shared {
             Some(sh) => (
                 sh.gains.iter().map(|&g| g as f32 / 10.0).collect::<Vec<_>>(),
                 Some(sh.gain_index.load(Ordering::Relaxed)),
-                f32::from_bits(sh.mean_power_bits.load(Ordering::Relaxed)),
+                sh.level.load(),
             ),
-            None => (Vec::new(), None, 0.0),
+            None => (Vec::new(), None, None),
         };
         let gain_db = gi.and_then(|i| gains.get(i).copied());
+        // (the gain the tuner's own AGC uses is not known)
+        let level = level.filter(|_| !matches!(self.mode, GainMode::Hardware));
+        let rf_level = level.and_then(|(i, power)| gains.get(i).map(|&g| crate::estimate_rf_level(g, power)));
+        let gain_room = level.filter(|&(i, _)| Some(i) == gi).map(|(_, power)| room_db(power));
         DeviceStatus {
             kind: "rtlsdr".into(),
             name: self.name.clone(),
@@ -372,8 +379,8 @@ impl InputDevice for RtlSdr {
             gain_db: if matches!(self.mode, GainMode::Hardware) { None } else { gain_db },
             gain_index: gi,
             gains,
-            // no calibrated RF level estimate for this driver
-            rf_level: None,
+            rf_level,
+            gain_room,
             error: self.error.clone(),
             warning: self.warning.clone(),
             position: None,
@@ -462,7 +469,7 @@ impl InputDevice for RtlSdr {
             software_agc: AtomicBool::new(true),
             samples: Mutex::new(Vec::new()),
             raw: Mutex::new(Vec::new()),
-            mean_power_bits: AtomicU32::new(0),
+            level: Level::default(),
         });
         self.shared = Some(shared.clone());
         self.frequency = frequency;
@@ -499,6 +506,7 @@ impl InputDevice for RtlSdr {
         if r < 0 {
             return Err(format!("set_center_freq failed ({r})"));
         }
+        sh.level.restart();
         self.frequency = frequency;
         Ok(())
     }

@@ -14,8 +14,16 @@ impl Radio {
                     return;
                 }
                 if self.scan.is_none() && self.gain_seek_active() && self.device_running {
-                    let gain = self.device.status().gain_index;
-                    if let Some(c) = self.gain_seek.on_signal(s.synced, s.snr, s.null_snr, gain, Instant::now()) {
+                    let dev = self.device.status();
+                    let report = crate::gainseek::Report {
+                        synced: s.synced,
+                        snr: s.snr,
+                        null_snr: s.null_snr,
+                        ber: s.fic_ber,
+                        gain: dev.gain_index,
+                        room: dev.gain_room,
+                    };
+                    if let Some(c) = self.gain_seek.on_signal(report, Instant::now()) {
                         self.device.set_gain_ceiling(Some(c.index), c.jump);
                     }
                 }

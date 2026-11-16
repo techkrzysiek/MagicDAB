@@ -1,6 +1,6 @@
 //! rtl_tcp client.
 
-use crate::agc::{default_gain_index, next_index, SoftAgc};
+use crate::agc::{default_gain_index, next_index, room_db, Level, SoftAgc};
 use crate::{convert_u8, DeviceStatus, GainMode, InputDevice, SampleCallback, SAMPLE_RATE};
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
@@ -22,7 +22,7 @@ struct Shared {
     /// Highest gain index the software AGC may use.
     gain_ceiling: AtomicUsize,
     software_agc: AtomicBool,
-    mean_power_bits: AtomicU32,
+    level: Level,
     connected: AtomicBool,
     stalls: AtomicU32,
     last_stall_ms: AtomicU32,
@@ -139,15 +139,16 @@ fn connect(host: &str, port: u16) -> Result<(TcpStream, TcpStream, Vec<u8>), Str
 impl InputDevice for RtlTcp {
     fn status(&self) -> DeviceStatus {
         let gains: Vec<f32> = R820T_GAINS.iter().map(|&g| g as f32 / 10.0).collect();
-        let (gi, _mean, connected) = match &self.shared {
-            Some(sh) => (
-                Some(sh.gain_index.load(Ordering::Relaxed)),
-                f32::from_bits(sh.mean_power_bits.load(Ordering::Relaxed)),
-                sh.connected.load(Ordering::Relaxed),
-            ),
-            None => (None, 0.0, false),
+        let (gi, level, connected) = match &self.shared {
+            Some(sh) => (Some(sh.gain_index.load(Ordering::Relaxed)), sh.level.load(), sh.connected.load(Ordering::Relaxed)),
+            None => (None, None, false),
         };
         let gain_db = gi.and_then(|i| gains.get(i).copied());
+        // (the gain the tuner's own AGC uses is not known)
+        let level = level.filter(|_| connected && !matches!(self.mode, GainMode::Hardware));
+        // (the gains are those of an R820T, whatever tuner the server has)
+        let rf_level = level.and_then(|(i, power)| gains.get(i).map(|&g| crate::estimate_rf_level(g, power)));
+        let gain_room = level.filter(|&(i, _)| Some(i) == gi).map(|(_, power)| room_db(power));
         DeviceStatus {
             kind: "rtltcp".into(),
             // not the server address: every listener sees the status, and rtl_tcp has no password
@@ -157,8 +158,8 @@ impl InputDevice for RtlTcp {
             gain_db: if matches!(self.mode, GainMode::Hardware) { None } else { gain_db },
             gain_index: gi,
             gains,
-            // no calibrated RF level estimate for this driver
-            rf_level: None,
+            rf_level,
+            gain_room,
             error: self.error.clone().or_else(|| self.shared.as_ref().and_then(|sh| sh.error.lock().ok().and_then(|e| e.clone()))),
             position: None,
             duration: None,
@@ -187,7 +188,7 @@ impl InputDevice for RtlTcp {
             gain_index: AtomicUsize::new(start_index.min(ceiling)),
             gain_ceiling: AtomicUsize::new(ceiling),
             software_agc: AtomicBool::new(true),
-            mean_power_bits: AtomicU32::new(0),
+            level: Level::default(),
             connected: AtomicBool::new(false),
             stalls: AtomicU32::new(0),
             last_stall_ms: AtomicU32::new(0),
@@ -280,8 +281,11 @@ impl InputDevice for RtlTcp {
                             (Some(&a), Some(&b)) => 10f32.powf((b - a) as f32 / 100.0),
                             _ => 1.0,
                         };
+                        let windows = agc.windows;
                         let action = agc.evaluate(up_ratio);
-                        sh.mean_power_bits.store(agc.mean_power.to_bits(), Ordering::Relaxed);
+                        if agc.windows != windows {
+                            sh.level.evaluated(i, agc.mean_power);
+                        }
                         if sh.software_agc.load(Ordering::Relaxed) {
                             let ceiling = sh.gain_ceiling.load(Ordering::Relaxed);
                             if let Some(n) = next_index(action, i, ceiling, R820T_GAINS.len()) {
@@ -300,6 +304,7 @@ impl InputDevice for RtlTcp {
     fn tune(&mut self, frequency: u32) -> Result<(), String> {
         let Some(sh) = &self.shared else { return Err("not connected".into()) };
         sh.command(0x01, frequency);
+        sh.level.restart();
         self.frequency = frequency;
         Ok(())
     }
