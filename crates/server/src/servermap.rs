@@ -283,6 +283,7 @@ impl Snapshot {
                 DeviceConfig::None => "none",
                 DeviceConfig::Dtr100 => "dtr100",
                 DeviceConfig::HackRf { .. } => "hackrf",
+                DeviceConfig::Soapy { .. } => "soapy",
             },
             locked: s.tuner_locked,
             listeners: p.listeners,

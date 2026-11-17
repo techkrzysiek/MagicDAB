@@ -253,6 +253,8 @@ impl Radio {
             "type": "settings",
             "settings": s,
             "rtlsdrDevices": magicdab_sdr::list_rtlsdr(),
+            // (SoapySDR receivers: their arguments and names; none without libSoapySDR)
+            "soapyDevices": magicdab_sdr::list_soapy().into_iter().map(|(args, label)| json!({"args": args, "label": label})).collect::<Vec<_>>(),
             // (false: the interface shows no FM settings, Android)
             "fmAvailable": crate::fmradio::AVAILABLE,
             "fmPorts": magicdab_fm::tuner::list_ports(),

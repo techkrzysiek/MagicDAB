@@ -133,7 +133,7 @@ fn user_data_dir() -> Option<PathBuf> {
 
 fn usage() -> ! {
     eprintln!(
-        "MagicDAB {}\n\nusage: magicdab [options]\n\n  --listen ADDR       listen address (default 0.0.0.0:3222; 8080 for an installation from before 0.3.23)\n  --data-dir DIR      settings, service list, logs (default ./data)\n  --web-root DIR      web UI files (default ./web/dist)\n  --rtlsdr [INDEX]    use RTL-SDR device\n  --rtltcp HOST:PORT  use rtl_tcp server\n  --dtr100            use a DTR-100 / C100 USB DAB dongle (16c0:05dc)\n  --hackrf [SERIAL]   use a HackRF One (receive only, amplifier off)\n  --lna N --vga N     its gains after --hackrf: LNA 0-40 (steps of 8, default 16), VGA 0-62 (steps of 2, default 30)\n  --file PATH         play a raw IQ recording (.uff/.raw)\n  --channel CH        stay on one channel (default for rtl_tcp: 5A, recordings: their own)\n  --service SID       stay on one station (hex SId), e.g. for its stream at /stream/SID\n  --no-browser        do not open the web interface on start (Windows)\n  --hidden            start in the tray (Windows application)\n  --verbose           debug logging",
+        "MagicDAB {}\n\nusage: magicdab [options]\n\n  --listen ADDR       listen address (default 0.0.0.0:3222; 8080 for an installation from before 0.3.23)\n  --data-dir DIR      settings, service list, logs (default ./data)\n  --web-root DIR      web UI files (default ./web/dist)\n  --rtlsdr [INDEX]    use RTL-SDR device\n  --rtltcp HOST:PORT  use rtl_tcp server\n  --dtr100            use a DTR-100 / C100 USB DAB dongle (16c0:05dc)\n  --hackrf [SERIAL]   use a HackRF One (receive only, amplifier off)\n  --lna N --vga N     its gains after --hackrf: LNA 0-40 (steps of 8, default 16), VGA 0-62 (steps of 2, default 30)\n  --soapy [ARGS]      use a SoapySDR receiver (libSoapySDR 0.8), e.g. --soapy driver=sdrplay; the first one found without ARGS\n  --file PATH         play a raw IQ recording (.uff/.raw)\n  --channel CH        stay on one channel (default for rtl_tcp: 5A, recordings: their own)\n  --service SID       stay on one station (hex SId), e.g. for its stream at /stream/SID\n  --no-browser        do not open the web interface on start (Windows)\n  --hidden            start in the tray (Windows application)\n  --verbose           debug logging",
         radio::VERSION
     );
     std::process::exit(1)
@@ -210,6 +210,14 @@ async fn main() {
                     i += 1;
                 }
                 device = Some(magicdab_sdr::DeviceConfig::HackRf { serial: serial.unwrap_or_default(), lna: 16, vga: 30 });
+            }
+            "--soapy" => {
+                // (its SoapySDR arguments after it, unless the next is an option)
+                let args_s = args.get(i + 1).filter(|s| !s.starts_with("--")).cloned();
+                if args_s.is_some() {
+                    i += 1;
+                }
+                device = Some(magicdab_sdr::DeviceConfig::Soapy { args: args_s.unwrap_or_default(), bias_tee: false });
             }
             "--lna" | "--vga" => {
                 let v: u32 = next(i).parse().unwrap_or_else(|_| usage());

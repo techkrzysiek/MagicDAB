@@ -74,6 +74,20 @@ impl SoftAgc {
         self.samples += buf.len() as u64;
     }
 
+    /// Accumulate complex float samples (full scale 1, SoapySDR's CF32): the
+    /// same power per component as `feed`, at the ADC limits above 0.98.
+    pub fn feed_cf32(&mut self, buf: &[num_complex::Complex32]) {
+        let mut acc = 0f64;
+        let mut clip = 0u64;
+        for s in buf {
+            acc += (s.re * s.re + s.im * s.im) as f64;
+            clip += (s.re.abs() > 0.98) as u64 + (s.im.abs() > 0.98) as u64;
+        }
+        self.sum_power += acc;
+        self.clipped += clip;
+        self.samples += 2 * buf.len() as u64;
+    }
+
     /// Evaluate about every 2^20 samples (0.25 s); returns the gain step to take.
     /// `up_ratio` is the power ratio of the next gain step up (1.0 if there is none).
     ///
@@ -242,6 +256,19 @@ mod tests {
         level.evaluated(0, 0.001);
         level.evaluated(0, 0.001);
         assert_eq!(level.load(), Some((0, 0.001)));
+    }
+
+    #[test]
+    fn float_samples_measure_as_the_bytes_do() {
+        // the same level once as bytes, once as floats: the same power
+        let (mut a, mut b) = (SoftAgc::new(), SoftAgc::new());
+        let bytes = vec![127 + 20u8; 1 << 20];
+        a.feed(&bytes);
+        let v = 20.0 / 127.0;
+        b.feed_cf32(&vec![num_complex::Complex32::new(v, v); 1 << 19]);
+        a.evaluate(1.0);
+        b.evaluate(1.0);
+        assert!((a.mean_power - b.mean_power).abs() < 1e-4, "{} {}", a.mean_power, b.mean_power);
     }
 
     #[test]

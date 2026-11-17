@@ -185,7 +185,7 @@ impl Radio {
     /// Whether the SNR based gain optimiser drives the software AGC ceiling.
     pub(super) fn gain_seek_active(&self) -> bool {
         matches!(self.settings.gain, GainMode::Software)
-            && matches!(self.settings.device, DeviceConfig::RtlSdr { .. } | DeviceConfig::RtlTcp { .. })
+            && matches!(self.settings.device, DeviceConfig::RtlSdr { .. } | DeviceConfig::RtlTcp { .. } | DeviceConfig::Soapy { .. })
     }
 
     /// Apply the learned (or default) gain ceiling of the current channel.

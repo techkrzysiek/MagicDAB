@@ -467,6 +467,7 @@ function Receiver() {
   const t = useT()
   const s = useStore((st) => st.settings?.settings)
   const devices: string[] = useStore((st) => st.settings?.rtlsdrDevices ?? EMPTY)
+  const soapyDevices: { args: string; label: string }[] = useStore((st) => st.settings?.soapyDevices ?? EMPTY)
   const state = useStore((st) => st.state)
   const [dev, setDev] = useField<any>('device', s?.device ?? { type: 'none' })
   const [ppm, setPpm] = useField('ppm', s?.ppm ?? 0)
@@ -527,6 +528,7 @@ function Receiver() {
               else if (type === 'rtlTcp') setDev({ type, host: '127.0.0.1', port: 1234 })
               else if (type === 'rawFile') setDev({ type, path: '', looping: true })
               else if (type === 'hackrf') setDev({ type, serial: '', lna: 16, vga: 30 })
+              else if (type === 'soapy') setDev({ type, args: soapyDevices[0]?.args ?? 'driver=sdrplay', bias_tee: false })
               else setDev({ type })
             }}
           >
@@ -534,6 +536,7 @@ function Receiver() {
             <option value="rtlTcp">rtl_tcp</option>
             <option value="dtr100">DTR-100 (USB DAB)</option>
             <option value="hackrf">HackRF One</option>
+            <option value="soapy">SoapySDR (SDRplay…)</option>
             <option value="rawFile">{t('set_raw_file')}</option>
             <option value="none">{t('no_tuner')}</option>
           </select>
@@ -579,6 +582,28 @@ function Receiver() {
                   ))}
                 </select>
               </div>
+            </Row>
+          </>
+        )}
+        {dev.type === 'soapy' && (
+          <>
+            <Row label={t('set_soapy_args')} hint={t('set_soapy_hint')}>
+              <div className="set-inline">
+                <input type="text" value={dev.args ?? ''} placeholder="driver=sdrplay" onChange={(e) => setDev({ ...dev, args: e.target.value.trim() })} />
+                {soapyDevices.length > 0 && (
+                  <select value="" onChange={(e) => e.target.value && setDev({ ...dev, args: e.target.value })}>
+                    <option value="">{t('set_soapy_found')}</option>
+                    {soapyDevices.map((d) => (
+                      <option key={d.args} value={d.args}>
+                        {d.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </Row>
+            <Row label="Bias-T" hint={t('set_bias_hint')}>
+              <Toggle checked={!!dev.bias_tee} onChange={(v) => setDev({ ...dev, bias_tee: v })} />
             </Row>
           </>
         )}

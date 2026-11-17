@@ -48,6 +48,7 @@ listeners in the browser, each on the station of their choice.
 | RTL-SDR USB sticks (RTL2832U with R820T / R828D) | e.g. RTL-SDR Blog V3 and V4, with bias-T; the packages bring librtlsdr 2.0.3 (osmocom), the Windows one also Zadig |
 | rtl_tcp | an RTL-SDR on another computer, over the network |
 | HackRF One | receive only, the amplifier always off, fixed LNA and VGA gains (`--hackrf`); Linux and Docker (libhackrf) |
+| SoapySDR receivers, e.g. SDRplay RSP | any receiver with a SoapySDR 0.8 module that does 2.048 MS/s (`--soapy driver=sdrplay`); SoapySDR and the module are installed separately, see [docs/soapysdr.md](docs/soapysdr.md). Not tested by us on every model |
 | DTR-100 / wRadio C100 USB DAB+ dongle | the dongle demodulates by itself: no spectrum, TII, DX scan or gain control |
 | ETI / EDI streams | `eti+tcp://host:port`, `edi+tcp://host:port`, mapped to channels |
 | IQ recordings | `.uff`, raw u8 / s16 at 2.048 MS/s (`.raw`, `.iq`, `.cu8`, `.s16`, `.cs16`, `.bin`), played as channels |

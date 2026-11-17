@@ -15,6 +15,7 @@ pub mod hackrf;
 pub mod rawfile;
 pub mod rtlsdr;
 pub mod rtltcp;
+pub mod soapysdr;
 
 use num_complex::Complex32;
 use serde::{Deserialize, Serialize};
@@ -142,6 +143,15 @@ pub enum DeviceConfig {
     /// DTR-100 / C100 USB DAB dongle (16c0:05dc): demodulates by itself, one
     /// sub-channel at a time; no samples (the server drives it, see `dtr100`).
     Dtr100,
+    /// A receiver of SoapySDR (soapysdr.rs), e.g. an SDRplay RSP: `args` as
+    /// SoapySDR takes them ("driver=sdrplay"), empty for the first one found.
+    #[serde(rename = "soapy")]
+    Soapy {
+        #[serde(default)]
+        args: String,
+        #[serde(default)]
+        bias_tee: bool,
+    },
 }
 
 fn default_true() -> bool {
@@ -185,6 +195,7 @@ pub fn open(config: &DeviceConfig) -> Box<dyn InputDevice> {
         DeviceConfig::None => Box::new(NoDevice),
         DeviceConfig::Dtr100 => Box::new(HardwareReceiver),
         DeviceConfig::HackRf { serial, lna, vga } => Box::new(hackrf::HackRf::new(serial.clone(), *lna, *vga)),
+        DeviceConfig::Soapy { args, bias_tee } => Box::new(soapysdr::SoapySdr::new(args.clone(), *bias_tee)),
     }
 }
 
@@ -226,6 +237,11 @@ impl InputDevice for NoDevice {
 /// Enumerate RTL-SDR devices (empty when librtlsdr is not available).
 pub fn list_rtlsdr() -> Vec<String> {
     rtlsdr::list_devices()
+}
+
+/// Receivers SoapySDR finds: (arguments, name); empty without libSoapySDR.
+pub fn list_soapy() -> Vec<(String, String)> {
+    soapysdr::list_devices()
 }
 
 #[cfg(test)]
