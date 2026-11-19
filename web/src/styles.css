@@ -2014,7 +2014,7 @@ table.table {
 .tii-details {
   position: absolute;
   right: 10px;
-  bottom: 24px;
+  bottom: calc(var(--tii-attr-h, 18px) + 6px);
   background: var(--bg-light);
   box-shadow: var(--shadow);
   border-radius: 4px;
@@ -2028,7 +2028,7 @@ table.table {
 .tii-plot {
   position: absolute;
   left: 50px;
-  bottom: 24px;
+  bottom: calc(var(--tii-attr-h, 18px) + 6px);
   width: 420px;
   height: 140px;
   z-index: 500;
@@ -2603,6 +2603,10 @@ table.table {
   .tii-table {
     left: 10px;
     min-width: 0;
+  }
+  /* (the panel spans the width: zoom and layers below it) */
+  .tii-view .leaflet-top.leaflet-left {
+    top: calc(var(--tii-table-h, 0px) + 10px);
   }
   .tii-plot {
     display: none;

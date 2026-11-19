@@ -14,6 +14,14 @@ function cssColor(name: string, fallback: string) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
   return v || fallback
 }
+// An element's height kept in a CSS variable on another (the map's overlays
+// placed around Leaflet's own controls); returns the cleanup.
+function trackHeight(el: HTMLElement | null, on: HTMLElement | null, name: string) {
+  if (!el || !on || typeof ResizeObserver === 'undefined') return undefined
+  const ro = new ResizeObserver(() => on.style.setProperty(name, `${el.offsetHeight}px`))
+  ro.observe(el)
+  return () => ro.disconnect()
+}
 function txSnr(snr: number | null, level: number | null) {
   return snr === null || level === null ? null : snr + level
 }
@@ -76,6 +84,8 @@ export default function TiiView() {
   const map = useRef<L.Map | null>(null)
   const layer = useRef<L.LayerGroup | null>(null)
   const unheard = useRef<L.LayerGroup | null>(null)
+  const viewDiv = useRef<HTMLDivElement>(null)
+  const tableDiv = useRef<HTMLDivElement>(null)
   const fitted = useRef<string>('')
   const [selected, setSelected] = useState<string | null>(null)
   const [seen, setSeen] = useState<Record<string, TiiCode>>({})
@@ -122,6 +132,10 @@ export default function TiiView() {
     })
     return sorted
   }, [seen, tii, sortKey])
+
+  // the panel's height for the map controls: on a phone the panel spans the
+  // map's width and the zoom and layer buttons go below it
+  useEffect(() => trackHeight(tableDiv.current, viewDiv.current, '--tii-table-h'), [])
 
   // map setup
   useEffect(() => {
@@ -176,7 +190,10 @@ export default function TiiView() {
     unheard.current = off
     map.current = m
     setTimeout(() => m.invalidateSize(), 50)
+    // the boxes at the bottom stay above the attribution (two lines on a phone)
+    const untrack = trackHeight(m.attributionControl.getContainer() ?? null, viewDiv.current, '--tii-attr-h')
     return () => {
+      untrack?.()
       m.remove()
       map.current = null
     }
@@ -246,10 +263,10 @@ export default function TiiView() {
   return (
     <>
       <ViewHeader />
-      <div className="tii-view">
+      <div className="tii-view" ref={viewDiv}>
         <div className="tii-map" ref={mapDiv} />
         {(noDb || !hello?.location) && <div className="tii-msg">{noDb ? t('tii_no_db') : t('tii_no_location')}</div>}
-        <div className="tii-table">
+        <div className="tii-table" ref={tableDiv}>
           <div className="table-wrap">
             <table className="table">
               <thead>
