@@ -34,6 +34,8 @@ struct Shared {
     mode: Mutex<GainMode>,
     /// Why the connection failed (made on the reading thread).
     error: Mutex<Option<String>>,
+    /// The tuner chip from the server's header (librtlsdr's number, 0: not known).
+    tuner: AtomicU32,
 }
 
 impl Shared {
@@ -119,8 +121,8 @@ impl RtlTcp {
 }
 
 /// Connect and read the dongle info header: the stream, a second handle for
-/// reading, and samples that came instead of the header.
-fn connect(host: &str, port: u16) -> Result<(TcpStream, TcpStream, Vec<u8>), String> {
+/// reading, samples that came instead of the header and the tuner chip from it.
+fn connect(host: &str, port: u16) -> Result<(TcpStream, TcpStream, Vec<u8>, u32), String> {
     let addr = (host, port)
         .to_socket_addrs()
         .map_err(|e| format!("rtl_tcp {host}: {e}"))?
@@ -131,9 +133,13 @@ fn connect(host: &str, port: u16) -> Result<(TcpStream, TcpStream, Vec<u8>), Str
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
     stream.read_exact(&mut header).map_err(|e| format!("rtl_tcp header: {e}"))?;
     // some servers/proxies omit the 12 byte dongle info header and start with samples
-    let leading: Vec<u8> = if &header[..4] == b"RTL0" { Vec::new() } else { header.to_vec() };
+    let (leading, tuner) = if &header[..4] == b"RTL0" {
+        (Vec::new(), u32::from_be_bytes([header[4], header[5], header[6], header[7]]))
+    } else {
+        (header.to_vec(), 0)
+    };
     let reader = stream.try_clone().map_err(|e| e.to_string())?;
-    Ok((stream, reader, leading))
+    Ok((stream, reader, leading, tuner))
 }
 
 impl InputDevice for RtlTcp {
@@ -167,6 +173,8 @@ impl InputDevice for RtlTcp {
             last_stall_ms: self.shared.as_ref().map(|sh| sh.last_stall_ms.load(Ordering::Relaxed)).filter(|&v| v > 0),
             stream_rate: self.shared.as_ref().map(|sh| sh.rate.load(Ordering::Relaxed) as f32 / 1000.0).filter(|&v| v > 0.0),
             warning: None,
+            model: None,
+            tuner: self.shared.as_ref().and_then(|sh| crate::rtl_tuner_name(sh.tuner.load(Ordering::Relaxed) as i64)),
         }
     }
 
@@ -197,6 +205,7 @@ impl InputDevice for RtlTcp {
             ppm: AtomicI32::new(self.ppm),
             mode: Mutex::new(self.mode.clone()),
             error: Mutex::new(None),
+            tuner: AtomicU32::new(0),
         });
         self.shared = Some(shared.clone());
         self.frequency = frequency;
@@ -209,7 +218,8 @@ impl InputDevice for RtlTcp {
                     let (reader, leading) = match now.map_or_else(|| connect(&host, port), Ok) {
                         // (stopped while connecting)
                         Ok(_) if sh.stop.load(Ordering::Relaxed) => return,
-                        Ok((stream, reader, leading)) => {
+                        Ok((stream, reader, leading, tuner)) => {
+                            sh.tuner.store(tuner, Ordering::Relaxed);
                             sh.connected(stream);
                             (reader, leading)
                         }
@@ -409,6 +419,8 @@ mod tests {
         assert_eq!(cmd[5], 0x01);
         assert_eq!(u32::from_be_bytes(cmd[6..10].try_into().unwrap()), 229_072_000);
         assert!(samples.load(Ordering::Relaxed) >= 2048);
+        // (the chip from the header: 5 is an R820T)
+        assert_eq!(tcp.status().tuner.as_deref(), Some("R820T"));
         tcp.stop();
     }
 

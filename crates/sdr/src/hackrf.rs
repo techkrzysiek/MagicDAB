@@ -240,6 +240,8 @@ impl InputDevice for HackRf {
             frequency: self.frequency,
             gain_db: self.dev.as_ref().map(|_| (self.lna + self.vga) as f32),
             error: self.error.clone(),
+            // (without the serial number of the name)
+            model: Some("HackRF One".into()),
             ..Default::default()
         }
     }

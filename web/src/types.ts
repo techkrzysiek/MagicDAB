@@ -90,6 +90,10 @@ export interface DeviceStatus {
   streamRate?: number | null
   /** the device works but will hear nothing (magicdab-sdr DeviceStatus::warning) */
   warning?: 'v4_library' | null
+  /** maker and model without the serial number (absent: `name` says it) */
+  model?: string
+  /** the tuner chip, when the device says it (R820T, R828D, ...) */
+  tuner?: string
 }
 
 export interface ScanState {

@@ -3,6 +3,7 @@ import { useStore } from '../store'
 import { useT } from '../i18n'
 import { ViewHeader } from '../components/common'
 import { Kv, useRates } from './InfoView'
+import type { RadioState } from '../types'
 
 const GRID = '#2e3046'
 const TEXT = '#c3c6dc'
@@ -110,6 +111,37 @@ function useCanvas(draw: (g: CanvasRenderingContext2D, w: number, h: number, dpr
   return ref
 }
 
+/** What receives here, for the listeners too (no hosts or file paths: the
+ *  server sends only the kind and a name without them). */
+function receiverRows(t: (k: string) => string, state: RadioState | null): [string, React.ReactNode][] {
+  const dev = state?.device
+  if (!dev) return []
+  if (dev.kind === 'none') return [[t('rx_input'), t('rx_stream_input')]]
+  const input: Record<string, string> = {
+    rtlsdr: 'USB',
+    hackrf: 'USB',
+    dtr100: 'USB',
+    soapy: 'SoapySDR',
+    rtltcp: t('rx_network'),
+    rawfile: t('rx_iq_file'),
+    etifile: t('rx_eti_file'),
+  }
+  const sdr = ['rtlsdr', 'hackrf', 'soapy', 'rtltcp', 'rawfile'].includes(dev.kind)
+  const gain = state?.gain?.mode as string | undefined
+  const rows: [string, React.ReactNode][] = [
+    // (rtl_tcp does not say the stick, only its chip)
+    [t('rx_model'), dev.model ?? (dev.kind === 'rtltcp' ? null : dev.name)],
+    [t('rx_chip'), dev.tuner],
+    [t('rx_input'), input[dev.kind]],
+    [t('sample_rate'), sdr ? '2.048 MS/s' : null],
+    // (a recording plays at the gain it was recorded with)
+    [t('gain_mode'), sdr && dev.kind !== 'rawfile' && gain ? t('gain_' + gain) : null],
+    [t('rx_stream_rate'), dev.streamRate ? `${dev.streamRate.toFixed(0)} kS/s` : null],
+    [t('rx_stream_breaks'), dev.kind === 'rtltcp' ? String(dev.stalls ?? 0) : null],
+  ]
+  return rows.filter(([, v]) => v !== null && v !== undefined && v !== '')
+}
+
 export default function SignalView() {
   const t = useT()
   const spectrum = useStore((s) => s.spectrum)
@@ -125,6 +157,7 @@ export default function SignalView() {
   const cons = useRef<Float32Array[]>([])
   const data = useStore((s) => (s.selected ? s.services[s.selected.sid] : undefined))
   const rates = useRates(data?.stats)
+  const receiver = receiverRows(t, state)
 
   // smooth the spectra a little
   if (spectrum && (!avg.current || avg.current.length !== spectrum.spectrum.length)) {
@@ -545,6 +578,7 @@ export default function SignalView() {
                 </small>
               ) : null}
             </div>
+            {receiver.length > 0 && <Kv title={t('receiver')} rows={receiver} />}
           </div>
         </div>
       </div>

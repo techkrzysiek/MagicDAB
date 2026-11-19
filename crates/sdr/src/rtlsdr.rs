@@ -34,6 +34,7 @@ struct Api {
     open_fd: Option<unsafe extern "C" fn(*mut Dev, c_int) -> c_int>,
     get_usb_strings: Option<unsafe extern "C" fn(Dev, *mut c_char, *mut c_char, *mut c_char) -> c_int>,
     get_xtal_freq: Option<unsafe extern "C" fn(Dev, *mut u32, *mut u32) -> c_int>,
+    get_tuner_type: Option<unsafe extern "C" fn(Dev) -> c_int>,
     /// The file it was loaded from (for the log).
     name: String,
 }
@@ -101,6 +102,7 @@ fn load_api() -> Result<Api, String> {
                 let get_usb_strings = lib.get(b"rtlsdr_get_usb_strings\0").ok().map(|s: Symbol<Strings>| *s);
                 let get_xtal_freq =
                     lib.get(b"rtlsdr_get_xtal_freq\0").ok().map(|s: Symbol<unsafe extern "C" fn(Dev, *mut u32, *mut u32) -> c_int>| *s);
+                let get_tuner_type = lib.get(b"rtlsdr_get_tuner_type\0").ok().map(|s: Symbol<unsafe extern "C" fn(Dev) -> c_int>| *s);
                 let api = Api {
                     get_device_count: sym!(b"rtlsdr_get_device_count\0"),
                     get_device_name: sym!(b"rtlsdr_get_device_name\0"),
@@ -121,6 +123,7 @@ fn load_api() -> Result<Api, String> {
                     open_fd,
                     get_usb_strings,
                     get_xtal_freq,
+                    get_tuner_type,
                     name: name.to_string_lossy().into_owned(),
                     _lib: lib,
                 };
@@ -171,6 +174,29 @@ pub fn list_devices() -> Vec<String> {
 /// MHz), so it tunes 1.8 times too high on the wrong input and hears nothing.
 fn v4_unknown_to_library(manufacturer: &str, product: &str, tuner_xtal: u32) -> bool {
     manufacturer == "RTLSDRBlog" && product == "Blog V4" && tuner_xtal < 20_000_000
+}
+
+/// Maker and model the open stick reports; the plain sticks say only
+/// "Realtek RTL2838UHIDIR", a name nobody knows them by.
+fn stick_model(api: &Api, dev: Dev) -> Option<String> {
+    let strings = api.get_usb_strings?;
+    let mut m = [0 as c_char; 256];
+    let mut p = [0 as c_char; 256];
+    let mut s = [0 as c_char; 256];
+    if unsafe { strings(dev, m.as_mut_ptr(), p.as_mut_ptr(), s.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let (m, p) = unsafe { (CStr::from_ptr(m.as_ptr()).to_string_lossy(), CStr::from_ptr(p.as_ptr()).to_string_lossy()) };
+    model_of(m.trim(), p.trim())
+}
+
+fn model_of(maker: &str, product: &str) -> Option<String> {
+    if product.is_empty() || product.starts_with("RTL283") {
+        return Some("RTL-SDR".into());
+    }
+    // (the RTL-SDR Blog sticks: "RTLSDRBlog" "Blog V4")
+    let maker = if maker == "RTLSDRBlog" { "RTL-SDR" } else { maker };
+    Some(format!("{maker} {product}").trim().to_string())
 }
 
 /// The tuner crystal of an RTL-SDR Blog V4 the library does not know.
@@ -247,6 +273,9 @@ pub struct RtlSdr {
     /// The stick will hear nothing (DeviceStatus::warning).
     warning: Option<String>,
     name: String,
+    /// Maker and model from the stick, and its tuner chip (DeviceStatus).
+    model: Option<String>,
+    tuner: Option<String>,
     /// Android: the device opened by the app (open while librtlsdr uses it).
     usb_fd: Option<crate::android_usb::UsbFd>,
 }
@@ -266,6 +295,8 @@ impl RtlSdr {
             error: None,
             warning: None,
             name: String::new(),
+            model: None,
+            tuner: None,
             usb_fd: None,
         }
     }
@@ -383,6 +414,8 @@ impl InputDevice for RtlSdr {
             gain_room,
             error: self.error.clone(),
             warning: self.warning.clone(),
+            model: self.model.clone(),
+            tuner: self.tuner.clone(),
             position: None,
             duration: None,
             ..Default::default()
@@ -392,6 +425,7 @@ impl InputDevice for RtlSdr {
     fn start(&mut self, frequency: u32, callback: SampleCallback) -> Result<(), String> {
         self.stop();
         self.warning = None;
+        (self.model, self.tuner) = (None, None);
         let api = api().inspect_err(|e| {
             self.error = Some(e.clone());
         })?;
@@ -425,6 +459,8 @@ impl InputDevice for RtlSdr {
             return Err(e);
         }
         self.name = list_devices().get(self.index as usize).cloned().unwrap_or_else(|| "RTL-SDR".into());
+        self.model = stick_model(api, dev);
+        self.tuner = api.get_tuner_type.and_then(|f| crate::rtl_tuner_name(unsafe { f(dev) } as i64));
         self.warning = v4_wrong_crystal(api, dev).map(|xtal| {
             log::warn!(
                 "RTL-SDR Blog V4 with a librtlsdr that does not know it ({}: tuner crystal {} MHz instead of 28.8): it tunes 1.8 times too high \
@@ -563,7 +599,15 @@ impl Drop for RtlSdr {
 
 #[cfg(test)]
 mod tests {
-    use super::v4_unknown_to_library;
+    use super::{model_of, v4_unknown_to_library};
+
+    #[test]
+    fn the_model_of_a_stick_is_short() {
+        assert_eq!(model_of("RTLSDRBlog", "Blog V4").as_deref(), Some("RTL-SDR Blog V4"));
+        assert_eq!(model_of("Realtek", "RTL2838UHIDIR").as_deref(), Some("RTL-SDR"));
+        assert_eq!(model_of("", "").as_deref(), Some("RTL-SDR"));
+        assert_eq!(model_of("NooElec", "NESDR SMArt v5").as_deref(), Some("NooElec NESDR SMArt v5"));
+    }
 
     #[test]
     fn a_v4_tuned_with_a_16_mhz_crystal_is_reported() {

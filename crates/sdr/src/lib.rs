@@ -69,6 +69,28 @@ pub struct DeviceStatus {
     /// The device works but will hear nothing, as a kind for the interface
     /// ("v4_library": an RTL-SDR Blog V4 with a librtlsdr that does not know it).
     pub warning: Option<String>,
+    /// The receiver as the interface names it: maker and model, without the
+    /// serial number or a host (`None`: `name` says it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The tuner chip, when the device says it (RTL-SDR: R820T, R828D, ...).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tuner: Option<String>,
+}
+
+/// The tuner chip of an RTL-SDR by librtlsdr's number (`rtlsdr_get_tuner_type`,
+/// the same number in rtl_tcp's header).
+pub(crate) fn rtl_tuner_name(t: i64) -> Option<String> {
+    let name = match t {
+        1 => "E4000",
+        2 => "FC0012",
+        3 => "FC0013",
+        4 => "FC2580",
+        5 => "R820T",
+        6 => "R828D",
+        _ => return None,
+    };
+    Some(name.into())
 }
 
 pub trait InputDevice: Send {
