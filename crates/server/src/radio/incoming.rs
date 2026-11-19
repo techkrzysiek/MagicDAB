@@ -290,12 +290,14 @@ impl Radio {
                 }
             }
             "dxScan" => {
-                if self.fixed_channel.is_some() && msg["action"].as_str() == Some("start") {
-                    self.notice(client, "warning", "channel_fixed");
+                // (minutes on every channel, the listeners' station gone: not
+                // for any listener even with the tuner free)
+                if !self.hub.may_tune(client) {
+                    self.notice(client, "warning", "dx_scan_restricted");
                     return;
                 }
-                if !can_tune(&self.hub, &self.settings, client) {
-                    self.notice(client, "warning", "tuner_locked");
+                if self.fixed_channel.is_some() && msg["action"].as_str() == Some("start") {
+                    self.notice(client, "warning", "channel_fixed");
                     return;
                 }
                 match msg["action"].as_str() {

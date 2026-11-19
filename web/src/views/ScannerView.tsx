@@ -16,6 +16,9 @@ export default function ScannerView() {
   const scan = useStore((s) => s.state?.scan)
   const fixed = useStore(fixedChannelOf)
   const admin = useStore((s) => s.admin)
+  // (the admin and listeners with the tuning password: a DX scan takes the
+  // tuner for minutes, server radio/incoming.rs)
+  const dxAllowed = useStore((s) => s.admin || s.tuner)
   const current = useStore((s) => s.ensemble)
   const total = list.reduce((a, e) => a + e.services.length, 0)
   const [tab, setTab] = useState<'band' | 'dx' | 'changes' | 'recordings'>('band')
@@ -37,9 +40,11 @@ export default function ScannerView() {
         <button className={'tab' + (tab === 'band' ? ' active' : '')} onClick={() => setTab('band')}>
           {t('band_tab')}
         </button>
-        <button className={'tab' + (tab === 'dx' ? ' active' : '')} onClick={() => setTab('dx')}>
-          {t('dx_scanner')}
-        </button>
+        {dxAllowed && (
+          <button className={'tab' + (tab === 'dx' ? ' active' : '')} onClick={() => setTab('dx')}>
+            {t('dx_scanner')}
+          </button>
+        )}
         <button className={'tab' + (tab === 'changes' ? ' active' : '')} onClick={() => setTab('changes')}>
           {t('changes')} ({nChanges})
         </button>
@@ -58,7 +63,7 @@ export default function ScannerView() {
         <div className="view-body">
           <ChangesView />
         </div>
-      ) : tab === 'dx' ? (
+      ) : tab === 'dx' && dxAllowed ? (
         <div className="view-body">
           <DxScanner />
         </div>
