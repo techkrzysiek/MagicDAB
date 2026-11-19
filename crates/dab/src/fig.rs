@@ -1191,6 +1191,29 @@ mod tests {
         v
     }
 
+    /// Linking changed on the multiplex as ODR-DabMux sends it (FIG0_6.cpp):
+    /// the old set (LSN 123, FM) replaced by an international one whose FM
+    /// part starts the database (C/N 0, key first) and whose DAB part goes on
+    /// with it (C/N 1).
+    #[test]
+    fn changed_linking_is_taken_without_a_restart() {
+        let mut p = FigParser::new();
+        let old = vec![0x08, 0x06, 0xE1, 0x23, 0x22, 0x50, 0x01, 0x50, 0x01];
+        for _ in 0..3 {
+            p.parse_fib(&fib(&[fig0_0(), old.clone()]));
+        }
+        assert_eq!(p.ensemble.linkage.len(), 1);
+        let fm = vec![0x0A, 0x06, 0xF1, 0x23, 0x22, 0xE0, 0x50, 0x01, 0xE0, 0x50, 0x01];
+        let dab = vec![0x07, 0x86, 0xF1, 0x23, 0x01, 0xE1, 0x50, 0x02];
+        p.parse_fib(&fib(&[fig0_0(), fm, dab]));
+        let new = p.ensemble.linkage.iter().find(|l| l.international).expect("the new set");
+        assert_eq!(new.key_sid, Some(0x5001));
+        let ids: Vec<(u8, Option<u8>, u32)> = new.ids.iter().map(|i| (i.kind, i.ecc, i.id)).collect();
+        assert_eq!(ids, vec![(1, Some(0xE0), 0x5001), (0, Some(0xE1), 0x5002)]);
+        // (the old set is no longer sent but stays: nothing ages it out)
+        assert!(p.ensemble.linkage.iter().any(|l| !l.international));
+    }
+
     #[test]
     fn service_moved_to_another_subchannel() {
         let mut p = FigParser::new();
