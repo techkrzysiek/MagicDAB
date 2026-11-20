@@ -101,6 +101,8 @@ pub trait InputDevice: Send {
     fn stop(&mut self);
     fn set_gain_mode(&mut self, mode: GainMode);
     fn set_ppm(&mut self, _ppm: i32) {}
+    /// The tuner's filter (DeviceConfig::RtlSdr::bandwidth), on the running device.
+    fn set_bandwidth(&mut self, _hz: u32) {}
     /// Upper limit (gain table index) of the software AGC; `None` restores the
     /// default. A lower limit applies at once; up to a higher one the AGC climbs
     /// as far as the signal level allows, or with `jump` the gain goes straight there.
@@ -139,6 +141,11 @@ pub enum DeviceConfig {
         ppm: i32,
         #[serde(default)]
         bias_tee: bool,
+        /// The tuner's filter in Hz (`rtlsdr_set_tuner_bandwidth`), 0: as
+        /// librtlsdr sets it for the sample rate (about 2 MHz on an R82xx).
+        /// Narrower keeps a strong multiplex in the next block out of the gain.
+        #[serde(default)]
+        bandwidth: u32,
     },
     RtlTcp {
         host: String,
@@ -191,7 +198,7 @@ fn default_vga() -> u32 {
 impl Default for DeviceConfig {
     fn default() -> Self {
         // (Android too: the app opens the stick and hands it over, android_usb.rs)
-        DeviceConfig::RtlSdr { index: 0, ppm: 0, bias_tee: false }
+        DeviceConfig::RtlSdr { index: 0, ppm: 0, bias_tee: false, bandwidth: 0 }
     }
 }
 
@@ -211,7 +218,7 @@ pub fn local_host(host: &str) -> bool {
 
 pub fn open(config: &DeviceConfig) -> Box<dyn InputDevice> {
     match config {
-        DeviceConfig::RtlSdr { index, ppm, bias_tee } => Box::new(rtlsdr::RtlSdr::new(*index, *ppm, *bias_tee)),
+        DeviceConfig::RtlSdr { index, ppm, bias_tee, bandwidth } => Box::new(rtlsdr::RtlSdr::new(*index, *ppm, *bias_tee, *bandwidth)),
         DeviceConfig::RtlTcp { host, port } => Box::new(rtltcp::RtlTcp::new(host.clone(), *port)),
         DeviceConfig::RawFile { path, looping } => Box::new(rawfile::RawFile::new(path.clone(), *looping)),
         DeviceConfig::None => Box::new(NoDevice),
@@ -279,6 +286,6 @@ mod tests {
         for h in ["rtl-tcp.example.org", "192.168.1.10", "localhost.example.org", "127.0.0.1.example.org", ""] {
             assert!(!tcp(h).local_rtltcp(), "{h}");
         }
-        assert!(!DeviceConfig::RtlSdr { index: 0, ppm: 0, bias_tee: false }.local_rtltcp());
+        assert!(!DeviceConfig::default().local_rtltcp());
     }
 }

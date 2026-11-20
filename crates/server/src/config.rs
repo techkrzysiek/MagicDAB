@@ -411,7 +411,7 @@ impl Settings {
         }
         let before = serde_json::to_value(&*self).ok();
         if !matches!(self.device, DeviceConfig::RtlSdr { .. }) {
-            self.device = DeviceConfig::RtlSdr { index: 0, ppm: 0, bias_tee: false };
+            self.device = DeviceConfig::default();
         }
         self.tunnel.enabled = false;
         self.server_map.enabled = false;

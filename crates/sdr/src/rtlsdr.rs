@@ -35,6 +35,7 @@ struct Api {
     get_usb_strings: Option<unsafe extern "C" fn(Dev, *mut c_char, *mut c_char, *mut c_char) -> c_int>,
     get_xtal_freq: Option<unsafe extern "C" fn(Dev, *mut u32, *mut u32) -> c_int>,
     get_tuner_type: Option<unsafe extern "C" fn(Dev) -> c_int>,
+    set_tuner_bandwidth: Option<unsafe extern "C" fn(Dev, u32) -> c_int>,
     /// The file it was loaded from (for the log).
     name: String,
 }
@@ -103,6 +104,8 @@ fn load_api() -> Result<Api, String> {
                 let get_xtal_freq =
                     lib.get(b"rtlsdr_get_xtal_freq\0").ok().map(|s: Symbol<unsafe extern "C" fn(Dev, *mut u32, *mut u32) -> c_int>| *s);
                 let get_tuner_type = lib.get(b"rtlsdr_get_tuner_type\0").ok().map(|s: Symbol<unsafe extern "C" fn(Dev) -> c_int>| *s);
+                let set_tuner_bandwidth =
+                    lib.get(b"rtlsdr_set_tuner_bandwidth\0").ok().map(|s: Symbol<unsafe extern "C" fn(Dev, u32) -> c_int>| *s);
                 let api = Api {
                     get_device_count: sym!(b"rtlsdr_get_device_count\0"),
                     get_device_name: sym!(b"rtlsdr_get_device_name\0"),
@@ -124,6 +127,7 @@ fn load_api() -> Result<Api, String> {
                     get_usb_strings,
                     get_xtal_freq,
                     get_tuner_type,
+                    set_tuner_bandwidth,
                     name: name.to_string_lossy().into_owned(),
                     _lib: lib,
                 };
@@ -262,6 +266,8 @@ pub struct RtlSdr {
     index: u32,
     ppm: i32,
     bias_tee: bool,
+    /// The tuner's filter in Hz, 0: librtlsdr's (DeviceConfig::RtlSdr).
+    bandwidth: u32,
     shared: Option<Arc<Shared>>,
     thread: Option<JoinHandle<()>>,
     gain_thread: Option<JoinHandle<()>>,
@@ -281,11 +287,12 @@ pub struct RtlSdr {
 }
 
 impl RtlSdr {
-    pub fn new(index: u32, ppm: i32, bias_tee: bool) -> Self {
+    pub fn new(index: u32, ppm: i32, bias_tee: bool, bandwidth: u32) -> Self {
         RtlSdr {
             index,
             ppm,
             bias_tee,
+            bandwidth,
             shared: None,
             thread: None,
             gain_thread: None,
@@ -487,6 +494,11 @@ impl InputDevice for RtlSdr {
                 bt(dev, self.bias_tee as c_int);
             }
             (api.set_center_freq)(dev, frequency);
+            // (after the frequency: librtlsdr moves the IF with the filter and
+            // tunes again to the frequency it has)
+            if self.bandwidth > 0 {
+                set_bandwidth(api, dev, self.bandwidth);
+            }
             (api.reset_buffer)(dev);
         }
         let start_index = default_gain_index(&gains);
@@ -588,6 +600,33 @@ impl InputDevice for RtlSdr {
             let _g = sh.ctrl.lock().unwrap();
             unsafe { (api.set_freq_correction)(sh.dev.0, ppm) };
         }
+    }
+
+    fn set_bandwidth(&mut self, hz: u32) {
+        self.bandwidth = hz;
+        if let (Some(sh), Ok(api)) = (&self.shared, api()) {
+            let _g = sh.ctrl.lock().unwrap();
+            // (0 = the filter librtlsdr takes for the sample rate)
+            set_bandwidth(api, sh.dev.0, hz);
+        }
+    }
+}
+
+/// The tuner's filter: on an R820T/R828D 1.536 MHz takes its 1.55 MHz
+/// low-pass, the IF moving to 1.525 MHz; 0 the default, 2.05 MHz at 2.048 MS/s.
+fn set_bandwidth(api: &Api, dev: Dev, hz: u32) {
+    let Some(f) = api.set_tuner_bandwidth else {
+        log::warn!("RTL-SDR: {} has no rtlsdr_set_tuner_bandwidth, the tuner keeps its filter", api.name);
+        return;
+    };
+    let r = unsafe { f(dev, hz) };
+    if r != 0 {
+        log::warn!("rtlsdr_set_tuner_bandwidth({hz}) failed ({r})");
+    } else {
+        log::info!(
+            "RTL-SDR: tuner filter {}",
+            if hz == 0 { "as for the sample rate".to_string() } else { format!("{:.3} MHz", hz as f64 / 1e6) }
+        );
     }
 }
 

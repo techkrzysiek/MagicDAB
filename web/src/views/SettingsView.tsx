@@ -556,6 +556,13 @@ function Receiver() {
             <Row label="Bias-T" hint={t('set_bias_hint')}>
               <Toggle checked={!!dev.bias_tee} onChange={(v) => setDev({ ...dev, bias_tee: v })} />
             </Row>
+            <Row label={t('set_rtl_filter')} hint={t('set_rtl_filter_hint')}>
+              <select value={dev.bandwidth ?? 0} onChange={(e) => setDev({ ...dev, bandwidth: parseInt(e.target.value) })}>
+                <option value={0}>{t('set_rtl_filter_wide')}</option>
+                <option value={1600000}>1.6 MHz</option>
+                <option value={1550000}>1.55 MHz</option>
+              </select>
+            </Row>
           </>
         )}
         {dev.type === 'dtr100' && <div className="hint">{t('set_dtr100_hint')}</div>}

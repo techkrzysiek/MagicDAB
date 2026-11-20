@@ -61,9 +61,20 @@ impl Radio {
                     self.notice(client, "error", "recording_refused");
                 }
                 Ok(d) => {
+                    // (only the tuner's filter: on the open stick, no break)
+                    let filter_only = match (&self.settings.device, &d) {
+                        (
+                            DeviceConfig::RtlSdr { index: a, ppm: p, bias_tee: b, .. },
+                            DeviceConfig::RtlSdr { index, ppm, bias_tee, bandwidth },
+                        ) if (a, p, b) == (index, ppm, bias_tee) => Some(*bandwidth),
+                        _ => None,
+                    };
                     if d != self.settings.device {
                         self.settings.device = d;
-                        device_changed = true;
+                        match filter_only {
+                            Some(hz) => self.device.set_bandwidth(hz),
+                            None => device_changed = true,
+                        }
                     }
                 }
                 Err(e) => self.notice(client, "error", &format!("device: {e}")),
