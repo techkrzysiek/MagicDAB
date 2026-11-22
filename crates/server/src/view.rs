@@ -199,6 +199,9 @@ pub fn service(ens: &Ensemble, labels: &LongLabels, s: &Service) -> Value {
         "pty": s.pty,
         "ptyName": s.pty.map(tables::pty_name),
         "ptyDynamic": s.pty_dynamic,
+        // (the programme item's own, when it differs from the service's)
+        "ptyNow": s.pty_now.filter(|p| Some(*p) != s.pty),
+        "ptyNowName": s.pty_now.filter(|p| Some(*p) != s.pty).map(tables::pty_name),
         "language": s.language.or_else(|| p.and_then(|c| c.language)).map(tables::language_name),
         "isAudio": s.is_audio(),
         "isData": s.is_data || !s.is_audio(),

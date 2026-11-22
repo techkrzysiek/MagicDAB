@@ -104,6 +104,10 @@ export interface ScanState {
   channel: string | null
   found: number
   dx: { mode: string; cycle: number; cycles: number } | null
+  /** What keeps the scan on this channel, and for how long still (seconds when sent). */
+  wait?: { reason: 'dxRecording' | 'newMux'; seconds: number } | null
+  /** Started by the admin or with the tuning password: only they may stop it. */
+  privileged?: boolean
 }
 
 export interface RadioState {
@@ -264,6 +268,9 @@ export interface Service {
   pty: number | null
   ptyName: string | null
   ptyDynamic: boolean
+  /** The dynamic programme type of the item on air, when it differs (FIG 0/17). */
+  ptyNow?: number | null
+  ptyNowName?: string | null
   language: string | null
   isAudio: boolean
   isData: boolean
@@ -547,6 +554,8 @@ export interface Slide {
   categoryTitle: string | null
   clickThroughUrl: string | null
   received: number
+  /** Sent from the server's cache: received before (`received`), not live. */
+  cached?: boolean
 }
 
 export interface Transmitter {
@@ -741,3 +750,84 @@ export interface Stats {
 
 /** [unix time, CPU of the computer %, CPU of MagicDAB (% of one processor), bytes/s out] */
 export type StatsPoint = [number, number | null, number | null, number]
+
+/** A Journaline object (server: crates/dab/src/journaline.rs). */
+export interface JmlObject {
+  id: number
+  kind: 'menu' | 'plainText' | 'titleOnly' | 'list'
+  revision: number
+  staticFlag: boolean
+  title: string
+  items: ({ type: 'link'; target: number; text: string } | { type: 'text'; text: string } | { type: 'row'; cells: string[] })[]
+  hotLinks?: { kind: string; target?: number | null; address: string; label: string }[]
+  expires?: number
+  timeoutMinutes?: number
+}
+
+/** A name with its code from the TPEG tables. */
+export interface TpegCode {
+  code: number
+  name: string
+}
+
+/** A TPEG traffic message (server: crates/dab/src/tpeg.rs). */
+export interface TrafficEvent {
+  key: string
+  sid: string
+  id: number
+  version: number
+  application: string
+  expires: number | null
+  generated: number | null
+  priority?: number | null
+  effect?: TpegCode | null
+  causes: {
+    code: number
+    name: string
+    subCode: number | null
+    subName: string | null
+    warning?: TpegCode
+    unverified?: boolean
+    lengthAffected?: number
+    laneRestriction?: TpegCode
+    lanes?: number
+    text?: string[]
+    offset?: number
+    linkedMessage?: number
+  }[]
+  warning?: TpegCode | null
+  advice?: { code: number | null; name: string | null; subCode: number | null; subName: string | null; text?: string[] }[]
+  tendency?: TpegCode | null
+  averageSpeed?: number | null
+  expectedSpeed?: number | null
+  speedLimit?: number | null
+  restrictions?: { vehicle: TpegCode | null; conditions: { code: number; name: string; value: number | null }[] }[]
+  diversionRoutes?: number
+  speedLimits?: { value: number; wet?: number; length?: number; mph: boolean }[]
+  location?: {
+    method: string
+    kind?: string
+    points: [number, number][]
+    point?: [number, number] | null
+    shape?: [number, number][]
+    tmc?: {
+      location: number
+      country: number
+      table: number
+      positive: boolean
+      bothDirections: boolean
+      extent: number
+      distance?: number
+      length?: number
+    } | null
+    radius?: number
+    sideOfRoad?: number
+    orientation?: number
+    text?: string[]
+  } | null
+  start?: number | null
+  stop?: number | null
+  delay?: number | null
+  lengthAffected?: number | null
+  text?: string | null
+}

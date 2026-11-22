@@ -590,6 +590,200 @@ input[type='range'] {
   gap: 10px;
 }
 
+.scan-wait {
+  color: var(--sig-mid);
+  font-weight: 600;
+}
+
+/* an announcement on air for the station playing (FIG 0/19) */
+.ann-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--sig-mid) 16%, var(--bg-light));
+  border: 1px solid color-mix(in srgb, var(--sig-mid) 55%, transparent);
+  color: var(--text);
+}
+
+.ann-banner.alarm {
+  background: color-mix(in srgb, var(--sig-low) 16%, var(--bg-light));
+  border-color: color-mix(in srgb, var(--sig-low) 60%, transparent);
+}
+
+.ann-banner svg {
+  color: var(--sig-mid);
+  flex-shrink: 0;
+}
+
+.ann-banner.alarm svg {
+  color: var(--sig-low);
+}
+
+.ann-txt {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.ann-txt span {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+/* (on air now: a slow pulse) */
+.ann-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sig-mid);
+  flex-shrink: 0;
+  animation: ann-pulse 1.6s ease-in-out infinite;
+}
+
+.ann-banner.alarm .ann-dot {
+  background: var(--sig-low);
+}
+
+@keyframes ann-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.dls-line.ann-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--sig-mid);
+  font-weight: 600;
+}
+
+/* Journaline of the station: a button in the panel, the pages in a dialog */
+.jml-open {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--divider-soft);
+  border-radius: 12px;
+  background: var(--bg-light);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.jml-open:hover {
+  background: var(--list-hover);
+}
+
+.jml-open > span {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.jml-open > svg:first-child,
+.jml-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.jml-open .hint {
+  font-size: 12.5px;
+}
+
+.app-badge.link {
+  cursor: pointer;
+}
+
+.app-badge.link:hover {
+  text-decoration: underline;
+}
+
+.card.jml-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.logo.jml-logo {
+  background: var(--highlight);
+  color: var(--accent);
+}
+
+.modal.jml-modal {
+  max-width: 640px;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.jml-body {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.jml-title {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.jml-page p {
+  margin: 0 0 8px;
+  line-height: 1.45;
+}
+
+.jml-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 8px;
+  padding: 8px 10px;
+  border: none;
+  border-bottom: 1px solid var(--divider-soft);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.jml-link:hover {
+  background: var(--list-hover);
+}
+
+.jml-link svg {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.jml-row {
+  display: flex;
+  gap: 12px;
+  padding: 3px 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.jml-row span:first-child {
+  flex: 1;
+}
+
 .sp-secondary {
   margin: -4px 0 6px;
 }
@@ -653,6 +847,90 @@ input[type='range'] {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* a badge with a card of details on hover or focus (the bitrate: NowDetails) */
+.tip-anchor {
+  position: relative;
+  cursor: help;
+  outline: none;
+}
+
+.tip-anchor:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent-soft);
+  border-radius: 999px;
+}
+
+/* (the row of badges: one card for all of them, under the row) */
+.badges.tip-anchor {
+  align-self: flex-start;
+}
+
+.tip-pop {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: -6px;
+  z-index: 60;
+  width: min(410px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--bg-light);
+  color: var(--text);
+  border: 1px solid var(--divider-soft);
+  border-radius: 14px;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.28), var(--shadow);
+  /* (not the badge's letters) */
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: normal;
+  cursor: default;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: opacity 0.14s ease, transform 0.14s ease, visibility 0s linear 0.14s;
+  pointer-events: none;
+}
+
+/* the little arrow to the badge */
+.tip-pop::before {
+  content: '';
+  position: absolute;
+  top: -7px;
+  left: 22px;
+  width: 12px;
+  height: 12px;
+  background: var(--bg-light);
+  border-left: 1px solid var(--divider-soft);
+  border-top: 1px solid var(--divider-soft);
+  transform: rotate(45deg);
+}
+
+.tip-anchor:hover .tip-pop,
+.tip-anchor:focus-within .tip-pop {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition-delay: 0s;
+  pointer-events: auto;
+}
+
+.tip-pop .card-title {
+  margin-bottom: -4px;
+}
+
+/* the three numbers in one row, each as wide as its label (a narrow screen:
+   a label in two lines) */
+.tip-pop .metric {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tip-pop .metric span {
+  white-space: normal;
 }
 
 .badge {
@@ -1995,6 +2273,155 @@ table.table {
 }
 
 /* ---------------------------------------------------------------- tii */
+
+/* the data services in one view: SPI and the traffic messages, as tabs */
+.data-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.data-tabs {
+  padding-top: 8px;
+}
+
+/* the traffic tab where the multiplex has no TPEG */
+.data-tabs .tab.off {
+  opacity: 0.45;
+}
+
+.data-empty {
+  padding: 40px 20px;
+  text-align: center;
+}
+
+.data-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.data-body > .spi-view {
+  flex: 1;
+  height: auto;
+}
+
+/* TPEG traffic messages: the list beside the map (under it on a phone) */
+.traffic-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.traffic-list {
+  width: 380px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-right: 1px solid var(--divider-soft);
+}
+
+.traffic-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.traffic-map {
+  flex: 1;
+  min-height: 0;
+}
+
+.traffic-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 10px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.traffic-item:hover {
+  background: var(--list-hover);
+}
+
+.traffic-item.selected {
+  background: var(--highlight);
+}
+
+.traffic-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+
+.traffic-txt {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.traffic-txt span {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+/* everything a selected message says */
+.tr-details {
+  display: grid !important;
+  grid-template-columns: auto 1fr;
+  gap: 3px 10px;
+  margin-top: 8px;
+  color: var(--text) !important;
+  font-size: 12.5px;
+}
+
+.tr-row {
+  display: contents !important;
+}
+
+.tr-row .k {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.tr-lines {
+  display: flex !important;
+  flex-direction: column;
+  color: var(--text) !important;
+}
+
+.traffic-warn {
+  color: var(--sig-mid);
+  flex-shrink: 0;
+}
+
+@media (max-width: 760px) {
+  .traffic-body {
+    flex-direction: column-reverse;
+  }
+
+  .traffic-list {
+    width: auto;
+    max-height: 45%;
+    border-right: none;
+    border-top: 1px solid var(--divider-soft);
+  }
+}
 
 .tii-view {
   position: relative;

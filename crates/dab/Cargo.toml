@@ -14,6 +14,8 @@ serde.workspace = true
 serde_json.workspace = true
 crossbeam-channel.workspace = true
 parking_lot.workspace = true
+# Journaline content sections may be deflate compressed
+flate2 = "1"
 magicdab-codecs = { path = "../codecs" }
 
 [target.'cfg(unix)'.dependencies]

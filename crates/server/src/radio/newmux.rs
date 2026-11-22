@@ -59,11 +59,21 @@ impl Radio {
             recording: self.dxrec_file(&ev.channel),
             discord,
         });
+        // (a band scan waits for the report: the pages say so, with the time left)
+        if self.scan.is_some() {
+            self.broadcast_state();
+        }
     }
 
     /// The band scan stays on a new multiplex for its report (radio/scan.rs).
     pub(super) fn newmux_holds_scan(&self) -> bool {
         self.newmux.as_ref().is_some_and(|p| self.channel.as_deref() == Some(p.channel.as_str()))
+    }
+
+    /// Seconds the report of a new multiplex still holds the band scan.
+    pub(super) fn newmux_remaining(&self) -> Option<u64> {
+        let p = self.newmux.as_ref().filter(|p| self.channel.as_deref() == Some(p.channel.as_str()))?;
+        Some(WINDOW.saturating_sub(p.started.elapsed()).as_secs())
     }
 
     /// From the tick: a sample a second; the report at the end of the

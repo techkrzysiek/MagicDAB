@@ -227,6 +227,8 @@ impl Radio {
         }
         self.audio.clear();
         self.services.clear();
+        self.journaline.clear();
+        self.tpeg.clear();
         self.dyn_labels.clear();
         self.gallery.clear();
         self.spi.clear_session();

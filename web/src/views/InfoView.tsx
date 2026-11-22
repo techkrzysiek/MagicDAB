@@ -1,38 +1,18 @@
 import { ChannelRow } from './ServiceView'
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
 import { ViewHeader, CacheTag, Logo } from '../components/common'
-import { audioCoding, downloadText, fmMhz, formatDuration, hex, mhz } from '../util'
+import { Metric, NowDetails } from '../components/NowDetails'
+import { JournalineList, journalineSources, openJournaline } from '../components/Journaline'
+import { downloadText, fmMhz, formatDuration, hex, mhz } from '../util'
 import { send, downloadFile } from '../ws'
-import type { AudioStats, Ensemble, Service, Subchannel } from '../types'
+import type { Ensemble, Service, Subchannel } from '../types'
 
 const SUBCH_COLORS = ['#7c5cff', '#22b3a6', '#f5a524', '#ef5d8a', '#4a9df8', '#9bc53d', '#c06cdb', '#f08a4b']
 /** Capacity units of a multiplex (DAB transmission mode I). */
 const CUS = 864
 
-export function useRates(stats?: AudioStats) {
-  const prev = useRef<{ s: AudioStats; t: number } | null>(null)
-  const [rates, setRates] = useState({ audio: 0, pad: 0, auErrRate: 0, rsBer: 0 })
-  useEffect(() => {
-    if (!stats) return
-    const now = Date.now()
-    const p = prev.current
-    if (p && stats.frames > p.s.frames) {
-      // 10 frames of 96 ms between two statistics messages
-      const dt = ((stats.frames - p.s.frames) * 0.024) || 1
-      const audio = ((stats.audioBytes - p.s.audioBytes) * 8) / dt / 1000
-      const pad = ((stats.padBytes - p.s.padBytes) * 8) / dt / 1000
-      const au = stats.auOk + stats.auErrors - (p.s.auOk + p.s.auErrors)
-      const auErr = stats.auErrors - p.s.auErrors
-      const cw = stats.rsCodewords - p.s.rsCodewords
-      const bits = stats.rsCorrectedBits - p.s.rsCorrectedBits
-      setRates({ audio, pad, auErrRate: au > 0 ? auErr / au : 0, rsBer: cw > 0 ? bits / (cw * 120 * 8) : 0 })
-    }
-    prev.current = { s: stats, t: now }
-  }, [stats])
-  return rates
-}
 
 export function Kv({ rows, title }: { rows: [string, React.ReactNode][]; title?: string }) {
   return (
@@ -79,14 +59,6 @@ function utcOffset(lto: number) {
   return `UTC${lto < 0 ? '−' : '+'}${Math.floor(m / 60)}${m % 60 ? ':' + String(m % 60).padStart(2, '0') : ''}`
 }
 
-function Metric({ label, value, tone }: { label: string; value: React.ReactNode; tone?: string }) {
-  return (
-    <div className="metric" style={tone ? { borderColor: tone } : undefined}>
-      <span>{label}</span>
-      <b>{value}</b>
-    </div>
-  )
-}
 
 function snrTone(snr: number) {
   return snr >= 15 ? 'var(--sig-good)' : snr >= 10 ? 'var(--sig-mid)' : snr >= 6 ? 'var(--sig-low)' : 'var(--sig-none)'
@@ -136,68 +108,17 @@ function EnsembleHead({ ens }: { ens: Ensemble }) {
   )
 }
 
-/** The station being listened to: what its bitrate carries and how well it arrives. */
+/** The station being listened to (NowDetails). */
 function NowCard({ svc }: { svc?: Service }) {
-  const t = useT()
-  const data = useStore((s) => (svc ? s.services[svc.sid] : undefined))
-  const rates = useRates(data?.stats)
-  const st = data?.stats
-  const fmt = data?.format
-  if (!svc) {
-    return (
-      <div className="card ens-now">
-        <div className="card-title">{t('ens_now')}</div>
-        <div className="hint">{t('click_to_play')}</div>
-      </div>
-    )
-  }
-  const total = svc.bitrate ?? 0
-  const audio = Math.max(0, rates.audio - rates.pad)
-  const pad = rates.pad
-  const overhead = rates.audio ? Math.max(0, total - rates.audio) : 0
-  const width = (kbps: number) => `${total ? Math.min(100, (kbps / total) * 100) : 0}%`
   return (
     <div className="card ens-now">
-      <div className="card-title">{t('ens_now')}</div>
-      <div className="now-svc">
-        <Logo label={svc.label} sid={svc.sid} small />
-        <div>
-          <b>{svc.label}</b>
-          <div className="hint" title={fmt?.sampleRate ? audioCoding(fmt) : undefined}>
-            {svc.codec ?? t('data')}{fmt?.sampleRate ? `, ${fmt.sampleRate / 1000} kHz` : ''}, {total} kbps, {svc.protection ?? ''}
-          </div>
-        </div>
-      </div>
-      <div className="rate-bar" title={t('ens_rate_hint')}>
-        <i className="audio" style={{ width: width(audio) }} />
-        <i className="pad" style={{ width: width(pad) }} />
-        <i className="over" style={{ width: width(overhead) }} />
-      </div>
-      <div className="rate-legend">
-        <span>
-          <i className="audio" />
-          {t('audio')} {audio.toFixed(1)} kbps
-        </span>
-        <span>
-          <i className="pad" />
-          PAD {pad.toFixed(1)} kbps
-        </span>
-        <span>
-          <i className="over" />
-          {t('ens_overhead')} {overhead.toFixed(1)} kbps
-        </span>
-      </div>
-      <div className="metrics">
-        <Metric label={t('rs_ber')} value={rates.rsBer.toExponential(1)} />
-        <Metric label={t('rs_uncorrectable')} value={st?.rsUncorrectable ?? 0} tone={st?.rsUncorrectable ? 'var(--sig-low)' : undefined} />
-        <Metric label={t('ens_audio_errors')} value={`${st?.auErrors ?? 0}, ${rates.auErrRate.toExponential(1)}`} tone={st?.auErrors ? 'var(--sig-low)' : undefined} />
-      </div>
+      <NowDetails svc={svc} />
     </div>
   )
 }
 
 /** The 864 capacity units with the sub-channels where they lie. */
-function CuMap({ ens, sel, color, onPick }: { ens: Ensemble; sel: number | null; color: (id: number) => string; onPick: (id: number) => void }) {
+function CuMap({ ens, sel, color, onPick }: { ens: Ensemble; sel: Set<number>; color: (id: number) => string; onPick: (id: number) => void }) {
   const t = useT()
   return (
     <div className="card cu-map">
@@ -211,7 +132,7 @@ function CuMap({ ens, sel, color, onPick }: { ens: Ensemble; sel: number | null;
         {(ens.subchannels ?? []).map((x) => (
           <button
             key={x.id}
-            className={'cu-seg' + (x.audio ? '' : ' data') + (x.id === sel ? ' sel' : '')}
+            className={'cu-seg' + (x.audio ? '' : ' data') + (sel.has(x.id) ? ' sel' : '')}
             style={{ left: `${(x.start / CUS) * 100}%`, width: `${(x.size / CUS) * 100}%`, background: color(x.id) }}
             title={`${t('subchannel')} ${x.id}: ${x.services.join(', ')}, CU ${x.start}-${x.start + x.size - 1}, ${x.bitrate} kbps, ${x.protection}`}
             onClick={() => onPick(x.id)}
@@ -236,7 +157,7 @@ function ServiceDetails({ s, ens, sub }: { s: Service; ens: Ensemble; sub: (id: 
   const t = useT()
   const facts: [string, string][] = [
     ['ECC', hex(s.ecc ?? ens.ecc ?? 0, 2) + (s.countryName ? ` ${s.countryName}` : '')],
-    [t('pty'), s.ptyName ? s.ptyName + (s.ptyDynamic ? ` (${t('ens_dynamic')})` : '') : ''],
+    [t('pty'), s.ptyName ? s.ptyName + (s.ptyDynamic ? ` (${t('ens_dynamic')})` : '') + (s.ptyNowName ? `, ${t('pty_now').replace('{s}', s.ptyNowName)}` : '') : ''],
     [t('language'), s.language ?? ''],
     [t('announcements'), s.asu.join(', ')],
     [t('ens_long_label'), s.long ?? ''],
@@ -307,7 +228,7 @@ function ServiceDetails({ s, ens, sub }: { s: Service; ens: Ensemble; sub: (id: 
 }
 
 /** The services in the order of their sub-channels; a click opens the details. */
-function ServiceTable({ ens, playing, sel, color, onPick }: { ens: Ensemble; playing?: number; sel: number | null; color: (id: number) => string; onPick: (id: number) => void }) {
+function ServiceTable({ ens, playing, sel, color, onPick }: { ens: Ensemble; playing?: number; sel?: number; color: (id: number) => string; onPick: (id: number) => void }) {
   const t = useT()
   const [open, setOpen] = useState<number | null>(null)
   const sub = (id: number | null) => ens.subchannels?.find((x) => x.id === id)
@@ -340,7 +261,7 @@ function ServiceTable({ ens, playing, sel, color, onPick }: { ens: Ensemble; pla
               return (
                 <Fragment key={s.sid}>
                   <tr
-                    className={[s.sid === playing ? 'playing' : '', sc && sc.id === sel ? 'sel' : '', isOpen ? 'open' : ''].join(' ')}
+                    className={[s.sid === playing ? 'playing' : '', s.sid === sel ? 'sel' : '', isOpen ? 'open' : ''].join(' ')}
                     onClick={() => {
                       setOpen(isOpen ? null : s.sid)
                       if (sc) onPick(sc.id)
@@ -372,11 +293,26 @@ function ServiceTable({ ens, playing, sel, color, onPick }: { ens: Ensemble; pla
                     <td>{s.isAudio ? (s.codec ?? t('audio')) : t('data')}</td>
                     <td>{s.ptyName ?? ''}</td>
                     <td>
-                      {apps.map((a) => (
-                        <span key={a} className="app-badge">
-                          {a}
-                        </span>
-                      ))}
+                      {apps.map((a) => {
+                        // (Journaline opens in its dialog)
+                        const jml = a === 'Journaline' ? journalineSources(s)[0] : undefined
+                        return (
+                          <span
+                            key={a}
+                            className={'app-badge' + (jml ? ' link' : '')}
+                            onClick={
+                              jml
+                                ? (e) => {
+                                    e.stopPropagation()
+                                    openJournaline(s.sid, jml.scids, jml.label)
+                                  }
+                                : undefined
+                            }
+                          >
+                            {a}
+                          </span>
+                        )
+                      })}
                     </td>
                   </tr>
                   {isOpen && (
@@ -481,6 +417,14 @@ export default function InfoView() {
     if (admin) send({ type: 'rawRecord', action: 'list' })
   }, [admin])
   const subchId = selSubch ?? svc?.subchannel ?? null
+  // the service picked (its row) and every sub-channel of its components: a
+  // secondary one, its Journaline (picked in the map: the service it belongs to)
+  const selSvc =
+    (ens.services ?? []).find((s) => s.subchannel === subchId) ?? (ens.services ?? []).find((s) => s.components.some((c) => c.subch === subchId))
+  const sels = new Set<number>([
+    ...(subchId != null ? [subchId] : []),
+    ...(selSvc?.components.map((c) => c.subch).filter((x): x is number => x != null) ?? []),
+  ])
   const order = (ens.subchannels ?? []).map((x) => x.id)
   const color = (id: number) => SUBCH_COLORS[Math.max(0, order.indexOf(id)) % SUBCH_COLORS.length]
 
@@ -496,8 +440,9 @@ export default function InfoView() {
               <EnsembleHead ens={ens} />
               <NowCard svc={svc} />
             </div>
-            <CuMap ens={ens} sel={subchId} color={color} onPick={setSelSubch} />
-            <ServiceTable ens={ens} playing={svc?.sid} sel={subchId} color={color} onPick={setSelSubch} />
+            <CuMap ens={ens} sel={sels} color={color} onPick={setSelSubch} />
+            <ServiceTable ens={ens} playing={svc?.sid} sel={selSvc?.sid} color={color} onPick={setSelSubch} />
+            <JournalineList />
             <NetworkInfo ens={ens} />
           </>
         ) : (

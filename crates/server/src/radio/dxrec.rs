@@ -204,6 +204,10 @@ impl Radio {
             tii,
             last_signal: None,
         });
+        // (a band scan waits for it: the pages say so, with the time left)
+        if self.scan.is_some() {
+            self.broadcast_state();
+        }
         // (the receiver computes the spectrum for it)
         self.update_decoding();
         self.dxrec_broadcast(false);
@@ -278,6 +282,12 @@ impl Radio {
     /// of a new multiplex (radio/newmux.rs).
     pub(super) fn holds_scan(&self) -> bool {
         self.dxrec.active.as_ref().is_some_and(|a| self.channel.as_deref() == Some(a.channel.as_str())) || self.newmux_holds_scan()
+    }
+
+    /// Seconds the recording that holds the band scan still takes.
+    pub(super) fn dxrec_remaining(&self) -> Option<u64> {
+        let a = self.dxrec.active.as_ref().filter(|a| self.channel.as_deref() == Some(a.channel.as_str()))?;
+        Some(a.limit.saturating_sub(a.writer.frames) * 60 / store::FRAMES_PER_MINUTE)
     }
 
     /// The file being recorded on `channel`.

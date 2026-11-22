@@ -89,8 +89,13 @@ pub struct Service {
     pub is_data: bool,
     pub label: Option<Label>,
     pub ecc: Option<u8>,
+    /// The programme type (FIG 0/17): the static one of the service; the
+    /// dynamic one only while no static one was received (`pty_dynamic`).
     pub pty: Option<u8>,
     pub pty_dynamic: bool,
+    /// The dynamic programme type of the programme item on air now, while
+    /// it is signalled (a service may send both: "Culture", now "Jazz Music").
+    pub pty_now: Option<u8>,
     pub language: Option<u8>,
     pub ca_id: u8,
     pub components: Vec<Component>,

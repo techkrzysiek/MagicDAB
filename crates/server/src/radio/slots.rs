@@ -243,6 +243,12 @@ pub struct Slot {
     side: Option<Receiver<Side>>,
     side_signal: Option<Value>,
     tii: Option<Value>,
+    /// The ensemble of a stream changed (first, last time): into the service
+    /// list once it is stable, as the main receiver's (slots_service_list).
+    list_dirty: Option<(Instant, Instant)>,
+    /// Journaline and TPEG of its multiplex, as the main receiver keeps them (radio/rx.rs).
+    pub(super) journaline: HashMap<(u32, u8), std::collections::BTreeMap<u16, magicdab_dab::journaline::JmlObject>>,
+    pub(super) tpeg: std::collections::BTreeMap<String, magicdab_dab::tpeg::TrafficEvent>,
 }
 
 impl Slot {
@@ -661,6 +667,9 @@ impl Radio {
             data_progress: DataProgress::new(),
             pending_clears: HashMap::new(),
             opened: Instant::now(),
+            list_dirty: None,
+            journaline: HashMap::new(),
+            tpeg: std::collections::BTreeMap::new(),
             side: None,
             side_signal: None,
             tii: None,
@@ -699,6 +708,9 @@ impl Radio {
             data_progress: DataProgress::new(),
             pending_clears: HashMap::new(),
             opened: Instant::now(),
+            list_dirty: None,
+            journaline: HashMap::new(),
+            tpeg: std::collections::BTreeMap::new(),
             side,
             side_signal: None,
             tii: None,
@@ -762,6 +774,28 @@ impl Radio {
             .collect();
         for (id, why) in stale {
             self.close_slot(id, why, false);
+        }
+    }
+
+    /// The ensembles of the streams in side slots, stable for 5 s (or every
+    /// 30 s while changing), into the service list: their stations are under
+    /// All stations like those of the main receiver.
+    pub(super) fn slots_service_list(&mut self) {
+        let mut due = Vec::new();
+        for e in self.slots.iter_mut() {
+            let Some((first, last)) = e.slot.list_dirty else { continue };
+            if last.elapsed() > Duration::from_secs(5) || first.elapsed() > Duration::from_secs(30) {
+                e.slot.list_dirty = None;
+                due.push((e.channel.clone(), e.slot.frequency, e.slot.ensemble.clone(), e.slot.signal.snr));
+            }
+        }
+        let mut changed = false;
+        for (channel, frequency, ens, snr) in due {
+            changed |= self.service_list.update(&channel, frequency, &ens, snr);
+        }
+        if changed {
+            self.service_list.save(&self.data_dir);
+            self.hub.broadcast_all(text(&self.service_list_json()));
         }
     }
 
@@ -939,12 +973,47 @@ impl Radio {
                 s.signal = sig;
                 self.hub.broadcast(text(&s.signal_json()), |c| c.slot == id);
             }
+            RxEvent::Journaline { sid, scids, objects, removed } => {
+                let kept = s.journaline.entry((sid, scids)).or_default();
+                for o in &objects {
+                    kept.insert(o.id, o.clone());
+                }
+                for i in &removed {
+                    kept.remove(i);
+                }
+                let m = json!({"type": "journaline", "sid": sid, "scids": scids, "objects": objects, "removed": removed});
+                self.hub.broadcast(text(&m), |c| c.slot == id && c.subs.journaline);
+            }
+            RxEvent::Tpeg { events, removed, .. } => {
+                for e in &events {
+                    s.tpeg.insert(e.key.clone(), e.clone());
+                }
+                let removed: Vec<String> = removed.iter().map(|k| k.to_string()).collect();
+                for k in &removed {
+                    s.tpeg.remove(k);
+                }
+                let m = json!({"type": "tpeg", "events": events, "removed": removed});
+                self.hub.broadcast(text(&m), |c| c.slot == id && c.subs.traffic);
+            }
             RxEvent::Ensemble(ens, labels) => {
                 let identified = s.ensemble.eid.is_none() && ens.eid.is_some();
+                // another multiplex on this channel (a stream that switched): the
+                // texts and slides of the old one go (as for the main receiver, rx.rs)
+                if matches!((s.ensemble.eid, ens.eid), (Some(a), Some(b)) if a != b) {
+                    s.services.clear();
+                    s.journaline.clear();
+                    s.tpeg.clear();
+                    self.hub.broadcast(text(&dls_lines_json(&s.services)), |c| c.slot == id);
+                }
                 s.ensemble = ens;
                 s.labels = labels;
                 s.ensemble_msg = None;
                 s.ensemble_changed = Instant::now();
+                // (the stations of a stream go to the list of all stations too)
+                if *kind == Kind::Stream && s.ensemble.eid.is_some() {
+                    let now = Instant::now();
+                    s.list_dirty = Some((s.list_dirty.map_or(now, |d| d.0), now));
+                }
                 let m = s.ensemble_message(channel, &self.fig_cache);
                 self.hub.broadcast(m, |c| c.slot == id);
                 // a recording played back: its first station plays until the
@@ -965,7 +1034,7 @@ impl Radio {
                         let live = s.services.iter().any(|(k, st)| k.sid == sid && st.slide.is_some());
                         let cached = s.ensemble.eid.and_then(|eid| self.slide_cache.get(&slide_key(channel, eid, sid)));
                         if let (false, Some((h, data))) = (live, cached) {
-                            self.hub.send(c, binary(BIN_IMAGE, h, data));
+                            self.hub.send(c, binary(BIN_IMAGE, &super::slides::cached_slide_header(h), data));
                         }
                     }
                 }

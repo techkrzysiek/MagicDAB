@@ -1,10 +1,7 @@
 import type { ApkProgressState } from './components/ApkProgress'
 import { useCallback } from 'react'
 import { create } from 'zustand'
-import type {
-  AudioFormat, AudioStats, ChangeEvent, DxResult, Dls, Ensemble, EnsembleEntry, Hello, LogLine, LogoVariant, RadioState, ServiceText, Signal,
-  Slide, SpiDoc, SpiIssue, TiiState, DataProgress, FmState, LinkingState, LinkInfo, Listener, Stats, StatsPoint, DxRecState,
-} from './types'
+import type { AudioFormat, AudioStats, ChangeEvent, DxResult, Dls, Ensemble, EnsembleEntry, Hello, LogLine, LogoVariant, RadioState, ServiceText, Signal, Slide, SpiDoc, SpiIssue, TiiState, DataProgress, FmState, LinkingState, LinkInfo, Listener, Stats, StatsPoint, DxRecState, JmlObject, TrafficEvent } from './types'
 import { androidApp } from './desktop'
 
 export interface GallerySlide {
@@ -216,6 +213,12 @@ export interface Store {
   useRadioDns: boolean
   /** "Now playing" line of every service (util.ts: dlsKey). */
   dlsAll: Record<string, string>
+  /** Journaline objects by "SId:SCIdS" and object ID (while watched). */
+  journaline: Record<string, Record<number, JmlObject>>
+  /** The Journaline shown in the dialog (components/Journaline.tsx). */
+  journalineOpen: { sid: number; scids: number; label: string } | null
+  /** TPEG traffic messages by key (while the traffic view is open). */
+  tpeg: Record<string, TrafficEvent>
   changeLog: ChangeEvent[]
   epgIndex: Record<string, number>
   epg: Record<number, { start: number; duration: number; name: string; description: string | null; genres: string[] }[]>
@@ -336,6 +339,9 @@ export const useStore = create<Store>((set, get) => ({
   rawRecord: null,
   dxrec: null,
   dlsAll: {},
+  journaline: {},
+  journalineOpen: null,
+  tpeg: {},
   changeLog: [],
   epgIndex: {},
   epg: {},

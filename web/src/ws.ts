@@ -1,6 +1,6 @@
 // WebSocket connection to the MagicDAB server.
 import { useStore, save, sessionGet, sessionSet } from './store'
-import type { LogoVariant, Stats, StatsPoint } from './types'
+import type { JmlObject, LogoVariant, Stats, StatsPoint, TrafficEvent } from './types'
 import { desktopToken } from './desktop'
 import { dlsKey } from './util'
 import { restartChat } from './chat'
@@ -172,6 +172,11 @@ function handleText(m: any) {
         }
         st.set({ services: {} })
       }
+      // Journaline and traffic messages too: the new multiplex's, asked for again
+      if (m.channel !== st.ensemble.channel || (m.eid != null && m.eid !== st.ensemble.eid)) {
+        st.set({ journaline: {}, tpeg: {} })
+        if (subs.journaline || subs.traffic) setTimeout(resubscribe, 3000)
+      }
       st.set({ ensemble: m })
       break
     case 'serviceList':
@@ -257,6 +262,22 @@ function handleText(m: any) {
       // (the report of a new multiplex onto its event)
       const e = m.event
       st.set({ changeLog: st.changeLog.map((x) => (x.time === e.time && x.channel === e.channel && x.eid === e.eid ? e : x)) })
+      break
+    }
+    case 'journaline': {
+      // (all: what the server knows of that component, replacing the rest)
+      const key = `${m.sid}:${m.scids}`
+      const objs: Record<number, JmlObject> = m.all ? {} : { ...(st.journaline[key] ?? {}) }
+      for (const o of (m.objects ?? []) as JmlObject[]) objs[o.id] = o
+      for (const id of (m.removed ?? []) as number[]) delete objs[id]
+      st.set({ journaline: { ...st.journaline, [key]: objs } })
+      break
+    }
+    case 'tpeg': {
+      const events: Record<string, TrafficEvent> = m.all ? {} : { ...st.tpeg }
+      for (const e of (m.events ?? []) as TrafficEvent[]) events[e.key] = e
+      for (const k of (m.removed ?? []) as string[]) delete events[k]
+      st.set({ tpeg: events })
       break
     }
     case 'dlsAll':
@@ -425,6 +446,7 @@ function handleBinary(buf: ArrayBuffer) {
       categoryTitle: header.categoryTitle ?? null,
       clickThroughUrl: header.clickThroughUrl ?? null,
       received: header.received,
+      cached: !!header.cached,
     }
     st.setService(header.sid, vis ? { visSlide: slide } : { slide })
     if (old) setTimeout(() => URL.revokeObjectURL(old), 1000)
@@ -653,7 +675,7 @@ setInterval(() => {
 
 // current subscriptions derived from the visible view
 // (the program's sound output: its buffer and loudness while the page is seen)
-let subs = { spectrum: false, tiiPairs: false, log: false, linking: false, serverStats: false, speaker: !document.hidden }
+let subs = { spectrum: false, tiiPairs: false, log: false, linking: false, serverStats: false, speaker: !document.hidden, journaline: false, traffic: false }
 document.addEventListener('visibilitychange', () => {
   if (subs.speaker === document.hidden) setSubscriptions({ speaker: !document.hidden })
 })

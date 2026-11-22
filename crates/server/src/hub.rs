@@ -42,6 +42,10 @@ pub struct Subscriptions {
     pub stats: bool,
     /// The buffer and loudness of the program's own sound output.
     pub speaker: bool,
+    /// Journaline objects of the multiplex (radio/rx.rs).
+    pub journaline: bool,
+    /// TPEG traffic messages of the multiplex (radio/rx.rs).
+    pub traffic: bool,
 }
 
 pub struct Client {

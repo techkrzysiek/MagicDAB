@@ -9,6 +9,7 @@ import { useState } from 'react'
 import DxScanner from './DxScanner'
 import ChangesView from './ChangesView'
 import DxRecordings from './DxRecordings'
+import { ScanStatus, useMayStopScan } from '../components/ScanStatus'
 
 export default function ScannerView() {
   const t = useT()
@@ -19,6 +20,7 @@ export default function ScannerView() {
   // (the admin and listeners with the tuning password: a DX scan takes the
   // tuner for minutes, server radio/incoming.rs)
   const dxAllowed = useStore((s) => s.admin || s.tuner)
+  const mayStop = useMayStopScan(scan)
   const current = useStore((s) => s.ensemble)
   const total = list.reduce((a, e) => a + e.services.length, 0)
   const [tab, setTab] = useState<'band' | 'dx' | 'changes' | 'recordings'>('band')
@@ -73,12 +75,12 @@ export default function ScannerView() {
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
           {scan && !scan.dx ? (
             <>
-              <button className="btn danger" onClick={stopScan}>
-                {t('stop_scan')}
-              </button>
-              <span>
-                {t('scan_running')}: {scan.channel} ({scan.index + 1}/{scan.total}), {t('found')}: {scan.found}
-              </span>
+              {mayStop && (
+                <button className="btn danger" onClick={stopScan}>
+                  {t('stop_scan')}
+                </button>
+              )}
+              <ScanStatus scan={scan} />
             </>
           ) : (
             <button className="btn primary" onClick={startScan} disabled={!!fixed} title={fixed ? t('channel_fixed') : undefined}>

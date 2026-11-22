@@ -9,6 +9,28 @@ impl Radio {
             RxEvent::Retuned => {
                 self.awaiting_retune = false;
             }
+            RxEvent::Journaline { sid, scids, objects, removed } => {
+                let kept = self.journaline.entry((sid, scids)).or_default();
+                for o in &objects {
+                    kept.insert(o.id, o.clone());
+                }
+                for id in &removed {
+                    kept.remove(id);
+                }
+                let m = json!({"type": "journaline", "sid": sid, "scids": scids, "objects": objects, "removed": removed});
+                self.hub.broadcast(text(&m), |c| c.subs.journaline && c.on_main());
+            }
+            RxEvent::Tpeg { events, removed, .. } => {
+                for e in &events {
+                    self.tpeg.insert(e.key.clone(), e.clone());
+                }
+                let removed: Vec<String> = removed.iter().map(|k| k.to_string()).collect();
+                for k in &removed {
+                    self.tpeg.remove(k);
+                }
+                let m = json!({"type": "tpeg", "events": events, "removed": removed});
+                self.hub.broadcast(text(&m), |c| c.subs.traffic && c.on_main());
+            }
             RxEvent::Signal(s) => {
                 if self.awaiting_retune {
                     return;
@@ -46,7 +68,23 @@ impl Radio {
                     return;
                 }
                 let identified = self.ensemble.eid.is_none() && e.eid.is_some();
-                if let (true, Some(ch), Some(eid)) = (identified, self.channel.as_deref(), e.eid) {
+                // another multiplex on the same channel without a retune (an ETI/EDI
+                // stream that now carries another one): what the stations of the old
+                // one sent (texts, slides, formats) goes, also from the lists of the pages
+                let replaced = matches!((self.ensemble.eid, e.eid), (Some(a), Some(b)) if a != b);
+                if replaced {
+                    log::info!(
+                        "{}: another multiplex ({:04X} -> {:04X}), the texts and slides of the old one dropped",
+                        self.channel.as_deref().unwrap_or("?"),
+                        self.ensemble.eid.unwrap_or(0),
+                        e.eid.unwrap_or(0)
+                    );
+                    self.services.clear();
+                    self.journaline.clear();
+                    self.tpeg.clear();
+                    self.hub.broadcast_main(text(&dls_lines_json(&self.services)));
+                }
+                if let (true, Some(ch), Some(eid)) = (identified || replaced, self.channel.as_deref(), e.eid) {
                     self.dyn_labels.set_mux(format!("{ch}_{eid:04X}"));
                 }
                 for (sid, main) in self.dyn_labels.observe(&self.ensemble, &e, Instant::now()) {

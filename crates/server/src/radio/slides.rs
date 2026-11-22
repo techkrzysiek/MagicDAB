@@ -33,10 +33,18 @@ impl Radio {
             let Some(sid) = self.hub.session(id).and_then(|s| s.3) else { continue };
             let live = self.services.iter().any(|(k, st)| k.sid == sid && st.slide.is_some());
             if let (false, Some((h, data))) = (live, self.slide_key(sid).and_then(|k| self.slide_cache.get(&k))) {
-                self.hub.send(id, binary(BIN_IMAGE, h, data));
+                self.hub.send(id, binary(BIN_IMAGE, &cached_slide_header(h), data));
             }
         }
     }
+}
+
+/// The header of a slide sent from the cache: marked, so the page says it is
+/// one received before (at `received`), not live.
+pub(super) fn cached_slide_header(h: &Value) -> Value {
+    let mut h = h.clone();
+    h["cached"] = json!(true);
+    h
 }
 
 /// Key of the last slide of a service on a multiplex ("5B_3EB7_00003656").

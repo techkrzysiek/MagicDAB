@@ -11,9 +11,13 @@ import { setVolume, toggleMute, toggleAudio, logout, stopScan, tuningLocked } fr
 import { setSubscriptions, send, reconnectAfterKick } from './ws'
 import { SignalBars, Logo, useDismiss, Markdown, MagicDabLogo } from './components/common'
 import { signalLevel, dlsKey, playingService } from './util'
+import { useAnnouncementReturn } from './announcements'
+import { ScanStatus, useMayStopScan } from './components/ScanStatus'
+import { JournalineDialog } from './components/Journaline'
 import ServiceView from './views/ServiceView'
 import InfoView from './views/InfoView'
 import TiiView from './views/TiiView'
+import DataView from './views/DataView'
 import SignalView from './views/SignalView'
 import ScannerView from './views/ScannerView'
 import SettingsView from './views/SettingsView'
@@ -29,7 +33,6 @@ import GuideView from './views/GuideView'
 import SlidesView from './views/SlidesView'
 import { DesktopClose } from './components/DesktopClose'
 import StationsView from './views/StationsView'
-import SpiView from './views/SpiView'
 import LinkingView from './views/LinkingView'
 import { ChatPopup } from './components/ChatPopup'
 import { TuneDialog } from './components/TuneDialog'
@@ -467,18 +470,19 @@ function Notices() {
 function ScanBanner() {
   const t = useT()
   const scan = useStore((s) => s.state?.scan)
+  const mayStop = useMayStopScan(scan)
   if (!scan) return null
   return (
     <div className="scan-banner">
-      <span>
-        {t('scan_running')} {scan.channel} ({scan.index + 1}/{scan.total}), {t('found')}: {scan.found}
-      </span>
+      <ScanStatus scan={scan} />
       <div className="progress">
         <div style={{ width: `${((scan.index + 1) / scan.total) * 100}%` }} />
       </div>
-      <button className="btn" onClick={stopScan}>
-        {t('stop_scan')}
-      </button>
+      {mayStop && (
+        <button className="btn" onClick={stopScan}>
+          {t('stop_scan')}
+        </button>
+      )}
     </div>
   )
 }
@@ -562,6 +566,8 @@ function UpdateBanner() {
 
 export default function App() {
   useThemeEffect()
+  // (back to the station after an announcement listened to)
+  useAnnouncementReturn()
   const t = useT()
   const view = useStore((s) => s.view)
   const chatOpen = useStore((s) => s.chatOpen)
@@ -637,7 +643,7 @@ export default function App() {
         {view === 'service' && <ServiceView />}
         {view === 'stations' && <StationsView />}
         {view === 'linking' && admin && <LinkingView />}
-        {view === 'spi' && <SpiView />}
+        {view === 'spi' && <DataView />}
         {view === 'info' && <InfoView />}
         {view === 'tii' && <TiiView />}
         {view === 'signal' && <SignalView />}
@@ -653,6 +659,7 @@ export default function App() {
       <MiniPlayer />
       <Notices />
       <LogoDialog />
+      <JournalineDialog />
       {chatOpen && <ChatPopup />}
       <DesktopClose />
       <AppClose />

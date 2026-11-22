@@ -150,6 +150,11 @@ pub enum ServiceEvent {
         app_type: u8,
         object: MotObject,
     },
+    /// Journaline objects from X-PAD (journaline.rs): new or changed, IDs gone.
+    Journaline {
+        objects: Vec<crate::journaline::JmlObject>,
+        removed: Vec<u16>,
+    },
 }
 
 enum Kind {
@@ -162,6 +167,8 @@ pub struct AudioDecoder {
     pad: PadDecoder,
     dls: DlsDecoder,
     mot: Vec<(u8, MotDecoder)>,
+    /// Journaline by X-PAD AppTy.
+    journaline: Vec<(u8, crate::journaline::JournalineDecoder)>,
     resampler: Option<(u32, Resampler)>,
     pcm: Vec<f32>,
     stereo: Vec<f32>,
@@ -191,6 +198,7 @@ impl AudioDecoder {
             pad: PadDecoder::new(),
             dls: DlsDecoder::new(),
             mot: Vec::new(),
+            journaline: Vec::new(),
             resampler: None,
             pcm: Vec::new(),
             stereo: Vec::new(),
@@ -205,6 +213,16 @@ impl AudioDecoder {
         // MOT slideshow is almost always carried with X-PAD AppTy 12
         d.register_xpad_app(12);
         d
+    }
+
+    /// Journaline in X-PAD AppTy `app_type` (its data groups are not MOT).
+    pub fn register_journaline_app(&mut self, app_type: u8, extended_header_len: u8) {
+        if !self.journaline.iter().any(|(a, _)| *a == app_type) {
+            self.pad.register_app(app_type);
+            let mut d = crate::journaline::JournalineDecoder::new();
+            d.set_extended_header_len(extended_header_len);
+            self.journaline.push((app_type, d));
+        }
     }
 
     pub fn register_xpad_app(&mut self, app_type: u8) {
@@ -295,7 +313,14 @@ impl AudioDecoder {
                             dg.map(|d| (d.dg_type, d.segment, d.last, d.transport_id, d.data.len()))
                         );
                     }
-                    if let Some((_, mot)) = self.mot.iter_mut().find(|(a, _)| *a == app_type) {
+                    if let Some((_, jml)) = self.journaline.iter_mut().find(|(a, _)| *a == app_type) {
+                        let ids = jml.push(&data);
+                        if !ids.is_empty() {
+                            let objects = ids.iter().filter_map(|id| jml.object(*id).cloned()).collect();
+                            let removed = ids.iter().copied().filter(|id| jml.object(*id).is_none()).collect();
+                            out.push(ServiceEvent::Journaline { objects, removed });
+                        }
+                    } else if let Some((_, mot)) = self.mot.iter_mut().find(|(a, _)| *a == app_type) {
                         let mut objs = Vec::new();
                         mot.process(&data, &mut objs);
                         for object in objs {

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ArrowLeftRight, ChevronLeft, ChevronRight, Globe, ImageOff, Link2, ListTree, Loader2, Lock, Music2 } from 'lucide-react'
+import { ArrowLeftRight, ChevronLeft, ChevronRight, Globe, ImageOff, Link2, ListTree, Loader2, Lock, Megaphone, Music2 } from 'lucide-react'
 import { useStore, useChannelAllowed } from '../store'
 import type { SlideProgress } from '../store'
 import { useT } from '../i18n'
@@ -10,9 +10,13 @@ import { startRecording, stopRecording } from '../audio/recorder'
 import { player } from '../audio/player'
 import { pageCodec } from '../audio/speaker'
 import { useEffect, useRef } from 'react'
-import { audioCoding, fullSid, hex, mhz, fmMhz, ageShort, componentLabel, dlsKey, findService, playingService, secondaries } from '../util'
+import { audioCoding, fullSid, hex, mhz, fmMhz, ageShort, whenShort, componentLabel, dlsKey, findService, playingService, secondaries, ANNOUNCEMENT_TYPES, announcementsFor, announcementSource } from '../util'
+import type { Announcement } from '../util'
+import { announcementBack, goBack, listenToAnnouncement } from '../announcements'
 import type { Service, Linking, LinkInfo } from '../types'
 import { StationBrowser } from './StationsView'
+import { NowDetails } from '../components/NowDetails'
+import { JournalineCard } from '../components/Journaline'
 import { useSlideLogoUrl } from '../components/logo'
 
 const EMPTY: string[] = []
@@ -396,18 +400,24 @@ function ServicePanel({ svc }: { svc?: Service }) {
         {!svc.scids && <FavStar sid={svc.sid} />}
       </div>
       {!!svc.scids && <div className="hint sp-secondary">{t('secondary_in').replace('{s}', parentLabel ?? '')}</div>}
+      <AnnouncementBanner svc={svc} />
       <div className="pty-line">
         <Flag code={svc.country} />
         {/* (one item: the flex gap would stand before the comma) */}
         {(ptyShown || svc.language) && (
           <span>
             {ptyShown ? svc.ptyName : null}
+            {svc.ptyNowName && <span className="hint">{ptyShown ? ', ' : ''}{t('pty_now').replace('{s}', svc.ptyNowName)}</span>}
             {svc.language && <span className="hint">{ptyShown ? ', ' : ''}{svc.language}</span>}
           </span>
         )}
         {svc.cachedFields?.some((f) => f === 'pty' || f === 'language') && <CacheTag time={cacheTime} />}
       </div>
-      <div className="badges">
+      {/* what the station sends and how it arrives: on hover over any of the badges (a tap on a phone) */}
+      <div className="badges tip-anchor" tabIndex={0}>
+        <span className="tip-pop" role="tooltip">
+          <NowDetails svc={svc} />
+        </span>
         {svc.bitrate ? <span className="badge">{svc.bitrate} kbps</span> : null}
         {stereo && <span className="badge">{stereo}</span>}
         <span className="badge" title={coding}>{codecLabel(fmt?.codec ?? svc.codec, fmt?.sbr, fmt?.ps)}</span>
@@ -451,6 +461,12 @@ function ServicePanel({ svc }: { svc?: Service }) {
             RadioVIS
           </span>
         )}
+        {/* (the last slide received before, from the server's cache: not live) */}
+        {!showVis && slide?.cached && (
+          <span className="vis-badge" title={t('slide_cached_hint')}>
+            {t('slide_cached')}, {whenShort(slide.received)}
+          </span>
+        )}
         {vis && data?.slide && (
           <div className="slide-source" title={t('slide_source')}>
             <button className={showVis ? '' : 'on'} onClick={() => setPreferVis(false)}>
@@ -476,6 +492,7 @@ function ServicePanel({ svc }: { svc?: Service }) {
           <span>{data.visText}</span>
         </div>
       )}
+      <JournalineCard svc={svc} />
       {!dls?.text && !(useRadioDns && data?.visText) && <div className="dls empty" />}
       {mobile ? (
         (fields.some(([, v]) => v) || hasLinking) && (
@@ -594,6 +611,8 @@ function ServiceList() {
   const allowed = useChannelAllowed()
   const services = (ensemble.services ?? []).filter((s) => s.isAudio)
   const rows = services.length + services.reduce((n, s) => n + secondaries(s).length, 0)
+  // sub-channels with an announcement on air now (FIG 0/19)
+  const annSubchs = new Set((ensemble.announcements ?? []).map((a) => a.subch))
   const listRef = useRef<HTMLUListElement>(null)
 
   const favRows = useMemo(() => {
@@ -654,7 +673,13 @@ function ServiceList() {
                 <div className="lbl">{s.label || s.sidHex}</div>
                 <div className="sid" title={dlsAll[s.sid] ?? ''}>
                   {fullSid(s)}
-                  {dlsAll[s.sid] ? <span className="dls-line">{dlsAll[s.sid]}</span> : null}
+                  {annSubchs.has(s.components.find((c) => c.primary)?.subch ?? -1) ? (
+                    <span className="dls-line ann-mark">
+                      <Megaphone size={12} /> {t('ann_now')}
+                    </span>
+                  ) : dlsAll[s.sid] ? (
+                    <span className="dls-line">{dlsAll[s.sid]}</span>
+                  ) : null}
                 </div>
               </div>
               <FavStar sid={s.sid} />
@@ -728,6 +753,47 @@ export default function ServiceView() {
         )}
         <StationBrowser panel />
       </div>
+    </div>
+  )
+}
+
+/** The name of an announcement for the page ("Traffic announcement"). */
+function announcementName(t: (k: never) => string, a: Announcement) {
+  const i = ANNOUNCEMENT_TYPES.indexOf(a.types.find((x) => x !== 'Alarm') ?? a.types[0])
+  return i >= 0 ? t(`ann_${i}` as never) : a.types.join(', ')
+}
+
+/** An announcement on air (FIG 0/19) that concerns the station playing: what it
+ *  is and where; a tap to listen, and back to the station when it ends. */
+function AnnouncementBanner({ svc }: { svc: Service }) {
+  const t = useT()
+  const ensemble = useStore((s) => s.ensemble)
+  useStore((s) => s.selected)
+  const back = announcementBack()
+  // (listening to one: the station left is the one it concerns)
+  const concerns = back ? findService(ensemble, back.sid) ?? svc : svc
+  const anns = announcementsFor(ensemble, concerns)
+  if (!anns.length) return null
+  const a = anns[0]
+  const source = announcementSource(ensemble, a)
+  const here = source?.sid === svc.sid && !svc.scids
+  return (
+    <div className={'ann-banner' + (a.types.includes('Alarm') ? ' alarm' : '')} role="status">
+      <span className="ann-dot" />
+      <Megaphone size={18} />
+      <div className="ann-txt">
+        <b>{announcementName(t as never, a)}</b>
+        <span>{here ? t('ann_here') : t('ann_in').replace('{s}', source?.label ?? `${t('subchannel')} ${a.subch}`)}</span>
+      </div>
+      {back && here ? (
+        <button className="btn" onClick={goBack}>
+          {t('ann_back').replace('{s}', back.label)}
+        </button>
+      ) : !here && source ? (
+        <button className="btn primary" onClick={() => listenToAnnouncement(source.sid, a.cluster, { sid: svc.sid, scids: svc.scids ?? 0, label: svc.label })}>
+          {t('ann_listen')}
+        </button>
+      ) : null}
     </div>
   )
 }

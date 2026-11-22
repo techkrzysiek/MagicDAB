@@ -142,7 +142,7 @@ export default function TiiView() {
     if (!mapDiv.current || map.current) return
     const loc = hello?.location
     const m = L.map(mapDiv.current, { zoomControl: true, attributionControl: true }).setView(loc ? [loc.lat, loc.lon] : [50.0, 19.0], loc ? 8 : 6)
-    // topographic by default (hills and valleys explain a path), the plain map to choose
+    // the plain map by default (the topographic one is busy), the topographic to choose
     const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 18,
       attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
@@ -152,18 +152,18 @@ export default function TiiView() {
       attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | © <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)',
     })
     const base: Record<string, L.TileLayer> = { [t('tii_map_topo')]: topo, [t('tii_map_plain')]: osm }
-    let chosen = 'topo'
+    let chosen = 'plain'
     try {
-      chosen = localStorage.getItem('magicdab-tii-map') || 'topo'
+      chosen = localStorage.getItem('magicdab-tii-map') || 'plain'
     } catch {
       // (no stored choice)
     }
     ;(chosen === 'plain' ? osm : topo).addTo(m)
-    // the transmitters not heard now, shown unless hidden
+    // the transmitters not heard now: hidden until the listener shows them
     const off = L.layerGroup()
-    let hide = false
+    let hide = true
     try {
-      hide = localStorage.getItem('magicdab-tii-unheard') === 'hide'
+      hide = localStorage.getItem('magicdab-tii-unheard') !== 'show'
     } catch {
       // (no stored choice)
     }

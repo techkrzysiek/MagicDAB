@@ -96,6 +96,13 @@ pub struct FigParser {
     gone: HashSet<u32>,
     /// Another EId seen once (taken over when seen again).
     pending_eid: Option<u16>,
+    /// When the switching of an announcement (FIG 0/19, by cluster) was last
+    /// seen: one no longer signalled ends even without the closing asw 0.
+    ann_seen: HashMap<u8, u64>,
+    /// Services with a static programme type (FIG 0/17), and when the dynamic
+    /// one of each was last seen.
+    pty_static: HashSet<u32>,
+    pty_now_seen: HashMap<u32, u64>,
 }
 
 fn u16be(d: &[u8], i: usize) -> u16 {
@@ -128,6 +135,24 @@ impl FigParser {
     /// no longer transmitted (e.g. a service taken off the multiplex).
     fn expire(&mut self) {
         let now = self.fibs;
+        // a dynamic programme type no longer signalled: the item is over
+        let stale: Vec<u32> = self.pty_now_seen.iter().filter(|(_, &at)| now.saturating_sub(at) > AGE_UNKNOWN).map(|(&s, _)| s).collect();
+        for sid in stale {
+            self.pty_now_seen.remove(&sid);
+            if let Some(s) = self.ensemble.services.get_mut(&sid) {
+                if s.pty_now.take().is_some() {
+                    self.revision += 1;
+                }
+            }
+        }
+        // an announcement no longer switched (its FIG 0/19 repeats every second or so)
+        let stale: Vec<u8> = self.ann_seen.iter().filter(|(_, &at)| now.saturating_sub(at) > MIN_AGE).map(|(&c, _)| c).collect();
+        for c in stale {
+            self.ann_seen.remove(&c);
+            if self.ensemble.announcements.remove(&c).is_some() {
+                self.revision += 1;
+            }
+        }
         let seen = &self.svc_seen;
         let gone: Vec<u32> = self.ensemble.services.keys().copied().filter(|sid| seen.get(sid).is_some_and(|s| s.expired(now))).collect();
         for sid in gone {
@@ -745,10 +770,25 @@ impl FigParser {
             if cc_flag {
                 i += 1;
             }
-            if let Some(s) = self.ensemble.services.get_mut(&sid) {
-                if s.pty != Some(pty) || s.pty_dynamic != sd {
+            let Some(s) = self.ensemble.services.get_mut(&sid) else { continue };
+            // the static and the dynamic one apart: a service sending both would
+            // otherwise flip between them ("Culture", "Jazz Music", "Culture"...)
+            if sd {
+                self.pty_now_seen.insert(sid, self.fibs);
+                if s.pty_now != Some(pty) {
+                    s.pty_now = Some(pty);
+                    self.revision += 1;
+                }
+                if !self.pty_static.contains(&sid) && (s.pty != Some(pty) || !s.pty_dynamic) {
                     s.pty = Some(pty);
-                    s.pty_dynamic = sd;
+                    s.pty_dynamic = true;
+                    self.revision += 1;
+                }
+            } else {
+                self.pty_static.insert(sid);
+                if s.pty != Some(pty) || s.pty_dynamic {
+                    s.pty = Some(pty);
+                    s.pty_dynamic = false;
                     self.revision += 1;
                 }
             }
@@ -796,12 +836,16 @@ impl FigParser {
             let a = AnnouncementSwitch { cluster, asw, new_flag, subch_id, region };
             let anns = &mut self.ensemble.announcements;
             if asw == 0 {
+                self.ann_seen.remove(&cluster);
                 if anns.remove(&cluster).is_some() {
                     self.revision += 1;
                 }
-            } else if anns.get(&cluster) != Some(&a) {
-                anns.insert(cluster, a);
-                self.revision += 1;
+            } else {
+                self.ann_seen.insert(cluster, self.fibs);
+                if anns.get(&cluster) != Some(&a) {
+                    anns.insert(cluster, a);
+                    self.revision += 1;
+                }
             }
         }
     }
@@ -1353,5 +1397,51 @@ mod tests {
         assert!(p.ensemble.services.contains_key(&0x3333));
         p.parse_fib(&label);
         assert_eq!(p.ensemble.services[&0x3333].label.as_ref().map(|l| l.text.trim()), Some("Gone"));
+    }
+
+    #[test]
+    fn an_announcement_ends_when_no_longer_switched() {
+        let mut p = FigParser::new();
+        // FIG 0/19: cluster 1, road traffic flash (asw bit 1), sub-channel 5
+        let on = vec![0x05, 19, 0x01, 0x00, 0x02, 0x05];
+        p.parse_fib(&fib(&[fig0_0(), on.clone()]));
+        assert_eq!(p.ensemble.announcements.get(&1).map(|a| (a.asw, a.subch_id)), Some((2, 5)));
+        // still switched: stays
+        for _ in 0..600 {
+            p.parse_fib(&fib(&[fig0_0()]));
+        }
+        p.parse_fib(&fib(&[fig0_0(), on]));
+        for _ in 0..600 {
+            p.parse_fib(&fib(&[fig0_0()]));
+        }
+        assert!(p.ensemble.announcements.contains_key(&1));
+        // no FIG 0/19 any more (and no closing asw 0): over after about 10 s of FIC
+        for _ in 0..1400 {
+            p.parse_fib(&fib(&[fig0_0()]));
+        }
+        assert!(p.ensemble.announcements.is_empty());
+    }
+
+    #[test]
+    fn static_and_dynamic_programme_types_kept_apart() {
+        let mut p = FigParser::new();
+        for _ in 0..2 {
+            p.parse_fib(&fib(&[fig0_0(), fig0_2(0x1111, 1), fig0_2(0x2222, 2)]));
+        }
+        // FIG 0/17: 0x1111 static 7, then dynamic 21; 0x2222 dynamic 3 only
+        let fig17 = |sid: u16, dynamic: bool, pty: u8| vec![0x05, 0x11, (sid >> 8) as u8, sid as u8, if dynamic { 0x80 } else { 0 }, pty];
+        for _ in 0..3 {
+            p.parse_fib(&fib(&[fig17(0x1111, false, 7), fig17(0x1111, true, 21), fig17(0x2222, true, 3)]));
+        }
+        let s = &p.ensemble.services[&0x1111];
+        assert_eq!((s.pty, s.pty_dynamic, s.pty_now), (Some(7), false, Some(21)));
+        let s = &p.ensemble.services[&0x2222];
+        assert_eq!((s.pty, s.pty_dynamic, s.pty_now), (Some(3), true, Some(3)));
+        // the item's PTY no longer sent: gone after a while, the static one stays
+        for _ in 0..(AGE_UNKNOWN + 200) {
+            p.parse_fib(&fib(&[fig0_0(), fig0_2(0x1111, 1), fig0_2(0x2222, 2), fig17(0x1111, false, 7)]));
+        }
+        let s = &p.ensemble.services[&0x1111];
+        assert_eq!((s.pty, s.pty_now), (Some(7), None));
     }
 }

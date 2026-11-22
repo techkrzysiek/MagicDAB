@@ -73,6 +73,37 @@ export function findService(ens: Ensemble, sid: number | undefined | null) {
   return ens.services?.find((s) => s.sid === sid)
 }
 
+/** The announcement types of FIG 0/18 and 0/19 as the server names them (asw bits 0..10). */
+export const ANNOUNCEMENT_TYPES = [
+  'Alarm',
+  'Road Traffic flash',
+  'Transport flash',
+  'Warning/Service',
+  'News flash',
+  'Area weather flash',
+  'Event announcement',
+  'Special event',
+  'Programme Information',
+  'Sport report',
+  'Financial report',
+]
+
+export type Announcement = NonNullable<Ensemble['announcements']>[number]
+
+/** Announcements on air now that concern `svc`: its cluster (or the alarm
+ *  cluster 0xFF of all services) and a type it supports (FIG 0/18). */
+export function announcementsFor(ens: Ensemble, svc: Service | undefined): Announcement[] {
+  if (!svc) return []
+  return (ens.announcements ?? []).filter(
+    (a) => (a.cluster === 0xff || svc.clusters.includes(a.cluster)) && a.types.some((t) => t === 'Alarm' || svc.asu.includes(t)),
+  )
+}
+
+/** The service whose audio is the announcement's sub-channel (its primary component). */
+export function announcementSource(ens: Ensemble, a: Announcement): Service | undefined {
+  return ens.services?.find((s) => s.components.some((c) => c.primary && c.tmid === 0 && c.subch === a.subch))
+}
+
 /** Audio components of a service besides its primary one (SCIdS 1, 2...):
  *  programmes of their own, on their own sub-channel, under its SId. */
 export function secondaries(svc: Service): Component[] {

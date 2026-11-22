@@ -11,12 +11,14 @@ use crate::ensemble::{DabTime, Ensemble};
 use crate::etirec::EtiRecorder;
 use crate::fic::FicDecoder;
 use crate::fig::FigParser;
+use crate::journaline::{JmlObject, JournalineDecoder, UaParams};
 use crate::mot::MotDecoder;
 use crate::mot::MotObject;
 use crate::msc::SubchannelDecoder;
 use crate::ofdm::{Frame, FrameSink, MscSymbols, OfdmDemodulator, SampleSource};
 use crate::packet::PacketDecoder;
 use crate::tii::{TiiCode, TiiDecoder, TiiMode};
+use crate::tpeg::{EventKey, TpegDecoder, TrafficEvent};
 use crossbeam_channel::{Receiver, Sender};
 use num_complex::Complex32;
 use parking_lot::{Condvar, Mutex};
@@ -172,6 +174,22 @@ pub enum RxEvent {
         key: ServiceKey,
         data: Vec<u8>,
         aac: bool,
+    },
+    /// Journaline objects (journaline.rs) of a component of a service (its
+    /// SCIdS; 0 for the X-PAD of its audio): the new or changed ones, and the
+    /// IDs gone.
+    Journaline {
+        sid: u32,
+        scids: u8,
+        objects: Vec<JmlObject>,
+        removed: Vec<u16>,
+    },
+    /// TPEG traffic messages (tpeg.rs) of a data service: the new or changed
+    /// ones, and the keys gone (cancelled or expired).
+    Tpeg {
+        sid: u32,
+        events: Vec<TrafficEvent>,
+        removed: Vec<EventKey>,
     },
     /// MOT object of a packet mode data component (SPI, slideshow ...).
     DataObject {
@@ -367,6 +385,85 @@ struct PacketChannel {
     packets: PacketDecoder,
     /// packet address -> (MOT decoder, SId, SCId, UA type)
     components: HashMap<u16, (MotDecoder, u32, u16, u16)>,
+    /// packet address -> (Journaline decoder, SId, SCIdS)
+    journaline: HashMap<u16, (JournalineDecoder, u32, u8)>,
+    /// packet address -> (TPEG decoder, SId, MSC data groups used)
+    tpeg: HashMap<u16, (TpegDecoder, u32, bool)>,
+    last_expire: Instant,
+}
+
+/// The new or changed Journaline objects of `ids` (the decoder's answer), and the ones gone.
+fn journaline_event(dec: &JournalineDecoder, sid: u32, scids: u8, ids: &[u16]) -> RxEvent {
+    let objects = ids.iter().filter_map(|id| dec.object(*id).cloned()).collect();
+    let removed = ids.iter().copied().filter(|id| dec.object(*id).is_none()).collect();
+    RxEvent::Journaline { sid, scids, objects, removed }
+}
+
+impl PacketChannel {
+    fn new(subch_id: u8, sc: &crate::ensemble::Subchannel) -> Self {
+        PacketChannel {
+            subch_id,
+            subch: SubchannelDecoder::new(sc),
+            packets: PacketDecoder::new(),
+            components: HashMap::new(),
+            journaline: HashMap::new(),
+            tpeg: HashMap::new(),
+            last_expire: Instant::now(),
+        }
+    }
+
+    /// One logical frame of the sub-channel: its packets to the decoders of
+    /// their addresses (MOT, Journaline, TPEG), what they give out as events.
+    fn feed(&mut self, data: &[u8], events: &Sender<RxEvent>) {
+        let PacketChannel { packets, components, journaline, tpeg, .. } = self;
+        let dbg = std::env::var("PKTDEBUG").is_ok();
+        packets.push(data, |addr, dg| {
+            if dbg {
+                let p = crate::mot::parse_data_group(&dg);
+                eprintln!("PKT addr {} dg {} bytes parsed {:?}", addr, dg.len(), p.map(|d| (d.dg_type, d.segment, d.last, d.transport_id)));
+            }
+            if let Some((mot, sid, scid, ua)) = components.get_mut(&addr) {
+                let mut objs = Vec::new();
+                mot.process(&dg, &mut objs);
+                for object in objs {
+                    let _ = events.send(RxEvent::DataObject { sid: *sid, scid: *scid, ua_type: *ua, object });
+                }
+            } else if let Some((dec, sid, scids)) = journaline.get_mut(&addr) {
+                let ids = dec.push(&dg);
+                if !ids.is_empty() {
+                    let _ = events.send(journaline_event(dec, *sid, *scids, &ids));
+                }
+            } else if let Some((dec, _, groups)) = tpeg.get_mut(&addr) {
+                if *groups {
+                    dec.push_data_group(&dg);
+                } else {
+                    dec.push(&dg);
+                }
+            }
+        });
+        for (addr, &(jumps, dir)) in &self.packets.ci_jumps {
+            if let Some((mot, ..)) = self.components.get_mut(addr) {
+                mot.packet_continuity(jumps, dir);
+            }
+        }
+        // the messages that changed, and now and then the expired ones
+        let expire = self.last_expire.elapsed() > Duration::from_secs(10);
+        if expire {
+            self.last_expire = Instant::now();
+        }
+        for (dec, sid, _) in self.tpeg.values_mut() {
+            if expire {
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                dec.expire(now);
+            }
+            let keys = dec.take_changed();
+            if !keys.is_empty() {
+                let events_now: Vec<TrafficEvent> = keys.iter().filter_map(|k| dec.get(k).cloned()).collect();
+                let removed: Vec<EventKey> = keys.iter().copied().filter(|k| dec.get(k).is_none()).collect();
+                let _ = events.send(RxEvent::Tpeg { sid: *sid, events: events_now, removed });
+            }
+        }
+    }
 }
 
 struct Core {
@@ -481,7 +578,9 @@ impl Core {
                 RxCommand::DataServices(on) => {
                     self.data_services = on;
                     if !on {
+                        // (Journaline and TPEG stay: they come back at once)
                         self.packet_channels.clear();
+                        self.update_data_services();
                     }
                     self.last_revision = self.last_revision.wrapping_add(1);
                 }
@@ -520,7 +619,11 @@ impl Core {
             audio.record = self.recording.contains(&key);
             for ua in &comp.user_apps {
                 if let Some(t) = ua.xpad_app_type {
-                    audio.register_xpad_app(t);
+                    // (Journaline in X-PAD has its own decoder, not MOT)
+                    match UaParams::from_user_app(ua) {
+                        Some(p) => audio.register_journaline_app(t, p.extended_header_len),
+                        None => audio.register_xpad_app(t),
+                    }
                 }
             }
             let entry = ActiveService {
@@ -581,7 +684,11 @@ impl Core {
             audio.pad_only = true;
             for ua in &comp.user_apps {
                 if let Some(t) = ua.xpad_app_type {
-                    audio.register_xpad_app(t);
+                    // (Journaline in X-PAD has its own decoder, not MOT)
+                    match UaParams::from_user_app(ua) {
+                        Some(p) => audio.register_journaline_app(t, p.extended_header_len),
+                        None => audio.register_xpad_app(t),
+                    }
                 }
             }
             self.background.push(ActiveService {
@@ -596,44 +703,70 @@ impl Core {
         }
     }
 
-    /// Packet mode components carrying SPI (UA 0x007) or slideshow (UA 0x002) in a data service.
+    /// Packet mode components: SPI (UA 0x007) and slideshow (UA 0x002) of data
+    /// services while those are wanted; Journaline (UA 0x44A) and TPEG (UA 0x004)
+    /// always (a few kbps each).
     fn update_data_services(&mut self) {
-        if !self.data_services {
-            return;
+        enum Want {
+            Mot(u16, u16),
+            Journaline(u8, u8),
+            Tpeg(bool),
         }
         let ens = &self.figs.ensemble;
-        let mut wanted: Vec<(u8, u16, u32, u16, u16)> = Vec::new();
+        let mut wanted: Vec<(u8, u16, u32, Want)> = Vec::new();
         for s in ens.services.values() {
             for c in &s.components {
                 if c.tmid != 3 {
                     continue;
                 }
-                let (Some(subch), Some(addr), Some(scid)) = (c.subch_id, c.packet_address, c.scid) else { continue };
-                if let Some(ua) = c.user_apps.iter().find(|u| u.ua_type == 0x007 || u.ua_type == 0x002) {
-                    wanted.push((subch, addr, s.sid, scid, ua.ua_type));
+                let (Some(subch), Some(addr)) = (c.subch_id, c.packet_address) else { continue };
+                if let Some(p) = c.user_apps.iter().find_map(UaParams::from_user_app) {
+                    wanted.push((subch, addr, s.sid, Want::Journaline(c.scids.unwrap_or(0), p.extended_header_len)));
+                } else if c.user_apps.iter().any(|u| u.ua_type == 0x004) {
+                    // (DG flag 0: MSC data groups)
+                    wanted.push((subch, addr, s.sid, Want::Tpeg(!c.dg_flag)));
+                } else if let (true, Some(scid), Some(ua)) =
+                    (self.data_services, c.scid, c.user_apps.iter().find(|u| u.ua_type == 0x007 || u.ua_type == 0x002))
+                {
+                    wanted.push((subch, addr, s.sid, Want::Mot(scid, ua.ua_type)));
                 }
             }
         }
         self.packet_channels.retain(|pc| wanted.iter().any(|w| w.0 == pc.subch_id));
-        for (subch_id, addr, sid, scid, ua) in wanted {
+        for pc in self.packet_channels.iter_mut() {
+            let here = |a: &u16| wanted.iter().any(|w| w.0 == pc.subch_id && w.1 == *a);
+            pc.components.retain(|a, _| here(a));
+            pc.journaline.retain(|a, _| here(a));
+            pc.tpeg.retain(|a, _| here(a));
+        }
+        for (subch_id, addr, sid, want) in wanted {
             let Some(sc) = ens.subchannels.get(&subch_id) else { continue };
             let pos = self.packet_channels.iter().position(|p| p.subch_id == subch_id);
             let pc = match pos {
                 Some(p) => &mut self.packet_channels[p],
                 None => {
-                    self.packet_channels.push(PacketChannel {
-                        subch_id,
-                        subch: SubchannelDecoder::new(sc),
-                        packets: PacketDecoder::new(),
-                        components: HashMap::new(),
-                    });
+                    self.packet_channels.push(PacketChannel::new(subch_id, sc));
                     self.packet_channels.last_mut().unwrap()
                 }
             };
             if pc.subch.as_ref().map(|d| d.subch != *sc).unwrap_or(true) {
                 pc.subch = SubchannelDecoder::new(sc);
             }
-            pc.components.entry(addr).or_insert_with(|| (MotDecoder::new(), sid, scid, ua));
+            match want {
+                Want::Mot(scid, ua) => {
+                    pc.components.entry(addr).or_insert_with(|| (MotDecoder::new(), sid, scid, ua));
+                }
+                Want::Journaline(scids, ext) => {
+                    pc.journaline.entry(addr).or_insert_with(|| {
+                        let mut d = JournalineDecoder::new();
+                        d.set_extended_header_len(ext);
+                        (d, sid, scids)
+                    });
+                }
+                Want::Tpeg(groups) => {
+                    pc.tpeg.entry(addr).or_insert_with(|| (TpegDecoder::new(), sid, groups));
+                }
+            }
         }
     }
 }
@@ -724,6 +857,9 @@ impl FrameSink for Core {
                             ServiceEvent::Format(format) => RxEvent::AudioFormat { key, format, bitrate: svc.bitrate },
                             ServiceEvent::Label(label) => RxEvent::Label { key, label },
                             ServiceEvent::XpadObject { app_type, object } => RxEvent::XpadObject { key, app_type, object },
+                            ServiceEvent::Journaline { objects, removed } => {
+                                RxEvent::Journaline { sid: key.sid, scids: key.scids, objects, removed }
+                            }
                         };
                         let _ = self.events.send(e);
                     }
@@ -762,6 +898,9 @@ impl FrameSink for Core {
                         let e = match ev {
                             ServiceEvent::Label(label) => RxEvent::Label { key, label },
                             ServiceEvent::XpadObject { app_type, object } => RxEvent::XpadObject { key, app_type, object },
+                            ServiceEvent::Journaline { objects, removed } => {
+                                RxEvent::Journaline { sid: key.sid, scids: key.scids, objects, removed }
+                            }
                             _ => continue,
                         };
                         let _ = self.events.send(e);
@@ -772,7 +911,7 @@ impl FrameSink for Core {
 
         spent.background = t.elapsed();
 
-        // packet mode data services (SPI, slideshow)
+        // packet mode data services (SPI, slideshow, Journaline, TPEG)
         let t = Instant::now();
         for pc in self.packet_channels.iter_mut() {
             let Some(dec) = pc.subch.as_mut() else { continue };
@@ -781,38 +920,11 @@ impl FrameSink for Core {
             }
             for c in 0..CIFS_PER_FRAME {
                 let cif = &frame.msc[c * CIF_BITS..(c + 1) * CIF_BITS];
-                if let Some(data) = dec.push_cif(cif) {
-                    let data = data.to_vec();
-                    if let Some(rec) = self.eti_rec.as_mut() {
-                        rec.add(c, pc.subch_id, &data);
-                    }
-                    let comps = &mut pc.components;
-                    let events = &self.events;
-                    let dbg = std::env::var("PKTDEBUG").is_ok();
-                    pc.packets.push(&data, |addr, dg| {
-                        if dbg {
-                            let p = crate::mot::parse_data_group(&dg);
-                            eprintln!(
-                                "PKT addr {} dg {} bytes parsed {:?}",
-                                addr,
-                                dg.len(),
-                                p.map(|d| (d.dg_type, d.segment, d.last, d.transport_id))
-                            );
-                        }
-                        if let Some((mot, sid, scid, ua)) = comps.get_mut(&addr) {
-                            let mut objs = Vec::new();
-                            mot.process(&dg, &mut objs);
-                            for object in objs {
-                                let _ = events.send(RxEvent::DataObject { sid: *sid, scid: *scid, ua_type: *ua, object });
-                            }
-                        }
-                    });
-                    for (addr, &(jumps, dir)) in &pc.packets.ci_jumps {
-                        if let Some((mot, ..)) = pc.components.get_mut(addr) {
-                            mot.packet_continuity(jumps, dir);
-                        }
-                    }
+                let Some(data) = pc.subch.as_mut().and_then(|d| d.push_cif(cif)).map(|d| d.to_vec()) else { continue };
+                if let Some(rec) = self.eti_rec.as_mut() {
+                    rec.add(c, pc.subch_id, &data);
                 }
+                pc.feed(&data, &self.events);
             }
         }
 
@@ -938,6 +1050,9 @@ impl Core {
                         ServiceEvent::Format(format) => RxEvent::AudioFormat { key, format, bitrate: svc.bitrate },
                         ServiceEvent::Label(label) => RxEvent::Label { key, label },
                         ServiceEvent::XpadObject { app_type, object } => RxEvent::XpadObject { key, app_type, object },
+                        ServiceEvent::Journaline { objects, removed } => {
+                            RxEvent::Journaline { sid: key.sid, scids: key.scids, objects, removed }
+                        }
                     };
                     let _ = self.events.send(e);
                 }
@@ -963,6 +1078,9 @@ impl Core {
                     let e = match ev {
                         ServiceEvent::Label(label) => RxEvent::Label { key, label },
                         ServiceEvent::XpadObject { app_type, object } => RxEvent::XpadObject { key, app_type, object },
+                        ServiceEvent::Journaline { objects, removed } => {
+                            RxEvent::Journaline { sid: key.sid, scids: key.scids, objects, removed }
+                        }
                         _ => continue,
                     };
                     let _ = self.events.send(e);
@@ -973,22 +1091,7 @@ impl Core {
         let t = Instant::now();
         for pc in self.packet_channels.iter_mut() {
             let Some(data) = stream(pc.subch_id) else { continue };
-            let comps = &mut pc.components;
-            let events = &self.events;
-            pc.packets.push(data, |addr, dg| {
-                if let Some((mot, sid, scid, ua)) = comps.get_mut(&addr) {
-                    let mut objs = Vec::new();
-                    mot.process(&dg, &mut objs);
-                    for object in objs {
-                        let _ = events.send(RxEvent::DataObject { sid: *sid, scid: *scid, ua_type: *ua, object });
-                    }
-                }
-            });
-            for (addr, &(jumps, dir)) in &pc.packets.ci_jumps {
-                if let Some((mot, ..)) = pc.components.get_mut(addr) {
-                    mot.packet_continuity(jumps, dir);
-                }
-            }
+            pc.feed(data, &self.events);
         }
         spent.data = t.elapsed();
         // the ETI recording: the stream's frame as it came

@@ -1642,6 +1642,7 @@ version = "0.3.0"
 dependencies = [
  "crossbeam-channel",
  "env_logger",
+ "flate2",
  "libc",
  "log",
  "magicdab-codecs",

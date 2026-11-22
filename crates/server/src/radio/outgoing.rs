@@ -144,6 +144,11 @@ impl Radio {
                 "channel": s.channels.get(s.index),
                 "found": s.found,
                 "dx": s.dx.as_ref().map(|d| json!({"mode": d.mode, "cycle": d.cycle + 1, "cycles": d.cycles})),
+                // what keeps it on this channel, and for how long still (seconds)
+                "wait": self.dxrec_remaining().map(|t| json!({"reason": "dxRecording", "seconds": t}))
+                    .or_else(|| self.newmux_remaining().map(|t| json!({"reason": "newMux", "seconds": t}))),
+                // (only the admin or the tuning password may stop it)
+                "privileged": s.privileged,
             })),
             "listeners": self.hub.count(),
             "tunerLocked": self.settings.tuner_locked,
@@ -325,7 +330,7 @@ pub(super) fn send_service_state(
 ) {
     if !st.is_some_and(|st| st.slide.is_some()) {
         if let Some((h, data)) = cached {
-            hub.send(client, binary(BIN_IMAGE, h, data));
+            hub.send(client, binary(BIN_IMAGE, &super::slides::cached_slide_header(h), data));
         }
     }
     let Some(st) = st else { return };

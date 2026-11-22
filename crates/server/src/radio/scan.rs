@@ -10,6 +10,12 @@ impl Radio {
 
     /// `only`: the channels a listener may tune to (empty: no limit). False
     /// when no scan was started.
+    /// A scan started by the admin or with the tuning password, and a client
+    /// with neither: it may not stop the scan nor tune away from it.
+    pub(super) fn scan_guarded(&self, client: u64) -> bool {
+        self.scan.as_ref().is_some_and(|s| s.privileged) && !self.hub.may_tune(client)
+    }
+
     pub(super) fn start_scan_with(
         &mut self,
         silent: bool,
@@ -81,6 +87,7 @@ impl Radio {
             started: now(),
             report: Vec::new(),
             found_here: Vec::new(),
+            privileged: false,
         });
         self.update_decoding();
         let first = self.scan.as_ref().unwrap().channels[0].clone();

@@ -231,6 +231,9 @@ struct BandScan {
     started: i64,
     report: Vec<Value>,
     found_here: Vec<Value>,
+    /// Started by the admin or with the tuning password: a listener without
+    /// either may not stop it, nor tune away from it (radio/incoming.rs).
+    privileged: bool,
 }
 
 pub struct Radio {
@@ -283,6 +286,10 @@ pub struct Radio {
     ensemble_changed: Instant,
     awaiting_retune: bool,
     services: HashMap<ServiceKey, ServiceState>,
+    /// Journaline objects of the multiplex, by (SId, SCIdS) and object ID.
+    journaline: HashMap<(u32, u8), std::collections::BTreeMap<u16, magicdab_dab::journaline::JmlObject>>,
+    /// TPEG traffic messages of the multiplex, by their key ("A.B.C/scid/id").
+    tpeg: std::collections::BTreeMap<String, magicdab_dab::tpeg::TrafficEvent>,
     decoding: HashSet<ServiceKey>,
     wants: HashMap<ServiceKey, (bool, bool)>,
     audio: AudioHub,
@@ -520,6 +527,8 @@ impl Radio {
             ensemble_changed: Instant::now(),
             awaiting_retune: false,
             services: HashMap::new(),
+            journaline: HashMap::new(),
+            tpeg: std::collections::BTreeMap::new(),
             decoding: HashSet::new(),
             wants: HashMap::new(),
             audio,
@@ -1251,6 +1260,7 @@ impl Radio {
             self.spi.docs_dirty = false;
             self.hub.broadcast_all(text(&self.spi.docs_json()));
         }
+        self.slots_service_list();
         // remember the received ensemble in the service list once it is stable
         if let Some((first, last)) = self.list_dirty {
             // stable for 5 s, or every 30 s while it keeps changing

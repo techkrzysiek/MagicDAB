@@ -16,6 +16,7 @@ pub mod etirec;
 pub mod fic;
 pub mod fig;
 pub mod genres;
+pub mod journaline;
 pub mod mot;
 pub mod msc;
 pub mod ofdm;
@@ -27,6 +28,7 @@ pub mod rs;
 pub mod spi;
 pub mod tables;
 pub mod tii;
+pub mod tpeg;
 pub mod viterbi;
 
 pub use num_complex::Complex32;

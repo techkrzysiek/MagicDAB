@@ -105,6 +105,10 @@ impl Radio {
                             self.notice(client, "warning", "channel_not_allowed");
                             return;
                         }
+                        if self.scan_guarded(client) {
+                            self.notice(client, "warning", "scan_by_admin");
+                            return;
+                        }
                         if self.scan.is_some() {
                             self.stop_scan();
                         }
@@ -193,7 +197,15 @@ impl Radio {
                 let linking = msg["linking"].as_bool();
                 let stats = msg["serverStats"].as_bool();
                 let speaker = msg["speaker"].as_bool();
+                let journaline = msg["journaline"].as_bool();
+                let traffic = msg["traffic"].as_bool();
                 self.hub.update(client, |c| {
+                    if let Some(v) = journaline {
+                        c.subs.journaline = v;
+                    }
+                    if let Some(v) = traffic {
+                        c.subs.traffic = v;
+                    }
                     if let Some(v) = speaker {
                         c.subs.speaker = v;
                     }
@@ -219,6 +231,22 @@ impl Radio {
                 if log == Some(true) && self.hub.is_admin(client) {
                     let lines = crate::logbuf::recent();
                     self.hub.send(client, text(&json!({"type": "logHistory", "lines": lines})));
+                }
+                // what is known so far, to a page that starts watching (of the
+                // receiver it listens to: the main one or its side slot)
+                let slot = self.hub.slot_of(client);
+                let side = (slot != 0).then(|| self.slots.get(slot)).flatten().map(|e| &e.slot);
+                if journaline == Some(true) {
+                    let kept = side.map_or(&self.journaline, |s| &s.journaline);
+                    for (&(sid, scids), objects) in kept {
+                        let objects: Vec<_> = objects.values().collect();
+                        let m = json!({"type": "journaline", "sid": sid, "scids": scids, "objects": objects, "all": true});
+                        self.hub.send(client, text(&m));
+                    }
+                }
+                if traffic == Some(true) {
+                    let events: Vec<_> = side.map_or(&self.tpeg, |s| &s.tpeg).values().collect();
+                    self.hub.send(client, text(&json!({"type": "tpeg", "events": events, "all": true})));
                 }
                 self.update_decoding();
             }
@@ -250,6 +278,10 @@ impl Radio {
                     self.notice(client, "warning", "channel_not_allowed");
                     return;
                 }
+                if self.scan_guarded(client) {
+                    self.notice(client, "warning", "scan_by_admin");
+                    return;
+                }
                 if self.scan.is_some() {
                     self.stop_scan();
                 }
@@ -274,17 +306,25 @@ impl Radio {
                     return;
                 }
                 if msg["action"].as_str() == Some("stop") {
+                    if self.scan_guarded(client) {
+                        self.notice(client, "warning", "scan_by_admin");
+                        return;
+                    }
                     log::info!("client {client} ({}) stopped the scan", self.client_ip(client));
                     self.stop_scan();
                 } else {
                     log::info!("client {client} ({}) started a band scan", self.client_ip(client));
                     let only = self.only_channels(client);
                     let limited = !only.is_empty();
-                    if self.scan.is_none() && !self.start_scan_with(false, None, None, only) {
-                        if self.device_error.is_some() && !self.device_running {
-                            self.notice(client, "warning", "scan_no_device");
-                        } else if limited {
-                            self.notice(client, "warning", "channel_not_allowed");
+                    if self.scan.is_none() {
+                        if !self.start_scan_with(false, None, None, only) {
+                            if self.device_error.is_some() && !self.device_running {
+                                self.notice(client, "warning", "scan_no_device");
+                            } else if limited {
+                                self.notice(client, "warning", "channel_not_allowed");
+                            }
+                        } else if let Some(s) = self.scan.as_mut() {
+                            s.privileged = self.hub.may_tune(client);
                         }
                     }
                 }
@@ -314,8 +354,13 @@ impl Radio {
                         let dx = DxScan { mode, cycle: 0, cycles, tii: HashMap::new(), snr: 0.0 };
                         let only = self.only_channels(client);
                         let limited = !only.is_empty();
-                        if !self.start_scan_with(false, Some(dx), Some(channels), only) && limited {
-                            self.notice(client, "warning", "channel_not_allowed");
+                        if !self.start_scan_with(false, Some(dx), Some(channels), only) {
+                            if limited {
+                                self.notice(client, "warning", "channel_not_allowed");
+                            }
+                        } else if let Some(s) = self.scan.as_mut() {
+                            // (the DX scanner is the admin's or the tuning password's)
+                            s.privileged = true;
                         }
                     }
                     Some("stop") => self.stop_scan(),
