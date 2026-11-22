@@ -10,7 +10,7 @@ import { useT, weekday } from './i18n'
 import { setVolume, toggleMute, toggleAudio, logout, stopScan, tuningLocked } from './actions'
 import { setSubscriptions, send, reconnectAfterKick } from './ws'
 import { SignalBars, Logo, useDismiss, Markdown, MagicDabLogo } from './components/common'
-import { signalLevel, findService } from './util'
+import { signalLevel, dlsKey, playingService } from './util'
 import ServiceView from './views/ServiceView'
 import InfoView from './views/InfoView'
 import TiiView from './views/TiiView'
@@ -286,8 +286,8 @@ function barsOf(signal: Signal | null | undefined, protection: string | null | u
 function MiniPlayer() {
   const t = useT()
   const set = useStore((s) => s.set)
-  const svc = useStore((s) => findService(s.ensemble, s.selected?.sid))
-  const dls = useStore((s) => (s.selected ? s.services[s.selected.sid]?.dls?.text ?? s.dlsAll[s.selected.sid] : undefined))
+  const svc = useStore((s) => playingService(s.ensemble, s.selected))
+  const dls = useStore((s) => (s.selected ? s.services[s.selected.sid]?.dls?.text ?? s.dlsAll[dlsKey(s.selected.sid, s.selected.scids)] : undefined))
   const signal = useStore((s) => s.signal)
   const audioEnabled = useStore((s) => s.audioEnabled)
   const audioPlaying = useStore((s) => s.audioPlaying)
@@ -296,7 +296,7 @@ function MiniPlayer() {
   return (
     <div className={'miniplayer' + (playback ? ' playback' : '')}>
       <button className="mp-main" onClick={() => set({ view: 'service' })}>
-        {svc ? <Logo label={svc.label} sid={svc.sid} small /> : <span className="mp-logo-empty" />}
+        {svc ? <Logo label={svc.label} sid={svc.sid} plain={!!svc.scids} small /> : <span className="mp-logo-empty" />}
         <span className="mp-txt">
           <span className="mp-name">{svc ? svc.label : t('no_service')}</span>
           <span className="mp-sub">
@@ -404,7 +404,7 @@ function StatusBar() {
   const audioEnabled = useStore((s) => s.audioEnabled)
   const listeners = useStore((s) => s.listeners)
   const admin = useStore((s) => s.admin)
-  const protection = useStore((s) => findService(s.ensemble, s.selected?.sid)?.protection)
+  const protection = useStore((s) => playingService(s.ensemble, s.selected)?.protection)
   const ensLabel = useStore((s) => (s.ensemble.valid ? `${s.ensemble.label}, ${s.ensemble.channel}` : s.state?.channel ?? ''))
   const lvl = barsOf(signal, protection)
   const playback = useStore((s) => !!s.state?.playbackInfo)
@@ -569,7 +569,7 @@ export default function App() {
   const closedBy = useStore((s) => s.closedBy)
   const uiUpdate = useStore((s) => s.uiUpdate)
   const station = useStore((s) => s.hello?.stationName)
-  const svcLabel = useStore((s) => findService(s.ensemble, s.selected?.sid)?.label)
+  const svcLabel = useStore((s) => playingService(s.ensemble, s.selected)?.label)
   // a private server and this browser gave no password (the program's own
   // window logs in with its token)
   const gated = useStore((s) => !!s.hello?.private && !s.admin && !s.tuner && !desktopToken)

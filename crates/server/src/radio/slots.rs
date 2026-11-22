@@ -829,7 +829,7 @@ impl Radio {
         let Some(e) = self.slots.get_mut(id) else { return };
         e.slot.pending_clears.remove(&key);
         let m = text(&dls_json(key, &label));
-        let all = text(&json!({"type": "dlsAll", "sid": key.sid, "text": label.text}));
+        let all = text(&json!({"type": "dlsAll", "sid": key.sid, "scids": key.scids, "text": label.text}));
         e.slot.services.entry(key).or_default().dls = Some(label);
         self.hub.broadcast(m, |c| c.slot == id && c.service == Some(key));
         self.hub.broadcast(all, |c| c.slot == id && c.service != Some(key));

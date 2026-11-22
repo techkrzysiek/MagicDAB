@@ -282,6 +282,8 @@ export interface Service {
   linking: Linking
   /** fields taken from the FIG cache (pty, language, asu, long) */
   cachedFields?: string[]
+  /** Set on the service as one of its secondary components (util.ts: playingService). */
+  scids?: number
 }
 
 export interface Subchannel {
@@ -364,6 +366,18 @@ export interface ServiceEntry {
   ecc: number | null
 }
 
+/** A secondary audio component (SCIdS 1, 2...) as the service list keeps it. */
+export interface SecondaryEntry {
+  sid: number
+  scids: number
+  /** its label (FIG 1/4); empty when it has none */
+  label: string
+  short: string
+  codec: string
+  bitrate: number
+  subch: number | null
+}
+
 export interface EnsembleEntry {
   channel: string
   frequency: number
@@ -372,6 +386,7 @@ export interface EnsembleEntry {
   label: string
   short: string
   services: ServiceEntry[]
+  secondary?: SecondaryEntry[]
   lastSeen: number
   snr: number
   tii: string[]

@@ -4,7 +4,7 @@ import { useStore, type GallerySlide } from '../store'
 import { useT } from '../i18n'
 import { ViewHeader, safeUrl } from '../components/common'
 import { send } from '../ws'
-import { findService } from '../util'
+import { playingService } from '../util'
 
 /**
  * Slides of the station seen during this session: grouped by category when it
@@ -13,7 +13,7 @@ import { findService } from '../util'
 export default function SlidesView() {
   const t = useT()
   const selected = useStore((s) => s.selected)
-  const label = useStore((s) => findService(s.ensemble, s.selected?.sid)?.label)
+  const label = useStore((s) => playingService(s.ensemble, s.selected)?.label)
   const current = useStore((s) => (s.selected ? s.services[s.selected.sid]?.slide?.url : undefined))
   const gallery = useStore((s) => s.gallery)
   const urls = useStore((s) => s.galleryUrls)

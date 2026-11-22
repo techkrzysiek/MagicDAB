@@ -7,7 +7,7 @@
 import { useStore } from '../store'
 import { pickLogo } from '../components/logo'
 import { requestLogo } from '../ws'
-import { findService } from '../util'
+import { dlsKey, playingService } from '../util'
 import { FM_SID } from '../actions'
 import { androidApp, dataUrl, toHost } from '../desktop'
 
@@ -121,13 +121,13 @@ function updateMetadata() {
     show({ title, artist: fm?.rds.rt ?? '', album: 'FM' })
     return
   }
-  const svc = findService(s.ensemble, s.selected?.sid)
+  const svc = playingService(s.ensemble, s.selected)
   if (!svc) return
   const data = s.services[svc.sid]
   // what plays: artist and title of DL Plus when the station tags them, else the DLS
   const tag = (type: number) => data?.dls?.tags.find((t) => t.contentType === type)?.text.trim()
   const [itemTitle, itemArtist] = [tag(1), tag(4)]
-  const dls = itemTitle && itemArtist ? `${itemArtist} - ${itemTitle}` : (data?.dls?.text ?? s.dlsAll[svc.sid] ?? '')
+  const dls = itemTitle && itemArtist ? `${itemArtist} - ${itemTitle}` : (data?.dls?.text ?? s.dlsAll[dlsKey(svc.sid, svc.scids)] ?? '')
   // the picture (the lock screen's background): the station's slide as it is
   // now (often the cover of what plays), else its largest logo
   const slide = [data?.slide, s.useRadioDns ? data?.visSlide : undefined].find((x) => x && /^image\/(jpeg|png)$/.test(x.mime))

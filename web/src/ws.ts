@@ -2,6 +2,7 @@
 import { useStore, save, sessionGet, sessionSet } from './store'
 import type { LogoVariant, Stats, StatsPoint } from './types'
 import { desktopToken } from './desktop'
+import { dlsKey } from './util'
 import { restartChat } from './chat'
 import { player } from './audio/player'
 import { audioCodec, onSpeaker, speakerSettings } from './audio/speaker'
@@ -228,6 +229,7 @@ function handleText(m: any) {
       if (m.reason === 'initial' && cur && known) break
       if (!cur || cur.sid !== m.sid || cur.scids !== m.scids) {
         dropSlide(m.sid)
+        if (cur?.sid === m.sid) dropComponent(m.sid)
         st.set({ selected: { sid: m.sid, scids: m.scids } })
         save('selected', { sid: m.sid, scids: m.scids })
         // (auto: the server's choice, no action of the listener)
@@ -237,7 +239,7 @@ function handleText(m: any) {
     }
     case 'dls':
       st.setService(m.sid, { dls: { text: m.text, tags: m.tags, itemToggle: m.itemToggle, itemRunning: m.itemRunning } })
-      st.set({ dlsAll: { ...st.dlsAll, [m.sid]: m.text } })
+      st.set({ dlsAll: { ...st.dlsAll, [dlsKey(m.sid, m.scids)]: m.text } })
       break
     case 'epgIndex':
       st.set({ epgIndex: m.services ?? {} })
@@ -258,14 +260,12 @@ function handleText(m: any) {
       break
     }
     case 'dlsAll':
-      st.set({ dlsAll: { ...st.dlsAll, [m.sid]: m.text } })
+      st.set({ dlsAll: { ...st.dlsAll, [dlsKey(m.sid, m.scids)]: m.text } })
       break
-    case 'dlsAllBulk': {
-      const lines: Record<number, string> = {}
-      for (const [k, v] of Object.entries(m.lines ?? {})) lines[Number(k)] = v as string
-      st.set({ dlsAll: lines })
+    case 'dlsAllBulk':
+      // ("SId", "SId:SCIdS" for a secondary component)
+      st.set({ dlsAll: { ...(m.lines ?? {}) } })
       break
-    }
     case 'audioFormat':
       st.setService(m.sid, { format: m })
       break
@@ -384,6 +384,11 @@ function toGate() {
 /** Forget the slideshow state kept from an earlier visit of a service: only
  *  the slideshow of the selected service reaches the client, so it may be
  *  outdated. The server answers the selection with the current one. */
+/** Another component of the same service plays: what the last one sent goes. */
+export function dropComponent(sid: number) {
+  useStore.getState().setService(sid, { dls: undefined, format: undefined, stats: undefined })
+}
+
 export function dropSlide(sid: number) {
   const st = useStore.getState()
   const d = st.services[sid]

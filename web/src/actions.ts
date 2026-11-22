@@ -1,5 +1,5 @@
 import { useStore, save, sessionSet, fixedChannelOf } from './store'
-import { dropSlide, send } from './ws'
+import { dropComponent, dropSlide, send } from './ws'
 import { player } from './audio/player'
 import { initMediaSession, mediaStart, mediaStop } from './audio/mediasession'
 import { audioCodec, nativeAudio, speakerSettings } from './audio/speaker'
@@ -114,6 +114,10 @@ export function selectService(sid: number, scids = 0, channel?: string) {
   const cur = s.ensemble.channel
   if (channel && channel !== cur && tuneRefused(s, channel)) return
   if (s.selected?.sid !== sid || (channel && channel !== cur)) dropSlide(sid)
+  else if (s.selected.scids !== scids) {
+    dropSlide(sid)
+    dropComponent(sid)
+  }
   s.set({ selected: { sid, scids } })
   save('selected', { sid, scids })
   player.flush()

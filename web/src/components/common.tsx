@@ -1,7 +1,7 @@
 import { useEffect, type RefObject } from 'react'
 import { Heart } from 'lucide-react'
 import { useStore } from '../store'
-import { initials, serviceColor, whenShort } from '../util'
+import { initials, playingService, serviceColor, whenShort } from '../util'
 import { useT } from '../i18n'
 import type { Service } from '../types'
 import { useLogoUrl } from './logo'
@@ -40,9 +40,25 @@ export function scrollIntoList(el: HTMLElement) {
   else if (r.bottom > b.bottom) box.scrollBy({ top: r.bottom - b.bottom + 8, behavior: 'smooth' })
 }
 
-/** `ecc`: for a station of another multiplex (by default that of the multiplex received now). */
-export function Logo({ label, sid, ecc, small, onClick }: { label: string; sid: number; ecc?: number | null; small?: boolean; onClick?: () => void }) {
-  const url = useLogoUrl(sid, small ? 36 : 40, ecc)
+/** `ecc`: for a station of another multiplex (by default that of the multiplex received now).
+ *  `plain`: the initials only (a secondary component: the logo is its service's). */
+export function Logo({
+  label,
+  sid,
+  ecc,
+  small,
+  plain,
+  onClick,
+}: {
+  label: string
+  sid: number
+  ecc?: number | null
+  small?: boolean
+  plain?: boolean
+  onClick?: () => void
+}) {
+  const logo = useLogoUrl(sid, small ? 36 : 40, ecc)
+  const url = plain ? undefined : logo
   return (
     <div
       className={'logo' + (small ? ' small' : '') + (url ? ' has-img' : '')}
@@ -96,10 +112,10 @@ export function ViewHeader() {
   const ensemble = useStore((s) => s.ensemble)
   const selected = useStore((s) => s.selected)
   const dls = useStore((s) => (s.selected ? s.services[s.selected.sid]?.dls : undefined))
-  const svc: Service | undefined = ensemble.services?.find((x) => x.sid === selected?.sid)
+  const svc: Service | undefined = playingService(ensemble, selected)
   return (
     <div className="view-header">
-      {svc && <Logo label={svc.label} sid={svc.sid} small />}
+      {svc && <Logo label={svc.label} sid={svc.sid} plain={!!svc.scids} small />}
       <div className="titles">
         <div className="title">{svc ? svc.label : t('no_service')}</div>
         <div className="subtitle">{dls?.text ?? ''}</div>

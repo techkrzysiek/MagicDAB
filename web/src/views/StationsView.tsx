@@ -4,8 +4,8 @@ import { useStore, load, save, useChannelAllowed, fixedChannelOf } from '../stor
 import { useT } from '../i18n'
 import { Logo, FavStar, SignalBars, scrollIntoList } from '../components/common'
 import { selectService, tuningLocked } from '../actions'
-import { ageShort, fullSid, hex } from '../util'
-import type { EnsembleEntry } from '../types'
+import { ageShort, componentLabel, dlsKey, fullSid, hex, secondaries } from '../util'
+import type { EnsembleEntry, SecondaryEntry } from '../types'
 
 export type StationMode = 'mux' | 'all' | 'fav'
 
@@ -24,7 +24,13 @@ interface Station {
   ecc: number | null
   label: string
   muxes: MuxRef[]
+  /** a secondary component of the service `parent` (SCIdS 1, 2...) */
+  scids?: number
+  parent?: string
 }
+
+/** Name of a secondary component of the service list: its label, else its service's with its number. */
+const secondaryLabel = (c: SecondaryEntry, parent: string) => c.label.trim() || `${parent} ${c.scids + 1}`
 
 const FRESH = 6 * 3600
 
@@ -146,7 +152,8 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
     memo.scroll[scrollKey] = e.currentTarget.scrollTop
   }
   const current = ensemble.valid ? ensemble.channel : null
-  const isPlaying = (sid: number, channel?: string | null) => selected?.sid === sid && (!channel || channel === current)
+  const isPlaying = (sid: number, channel?: string | null, scids = 0) =>
+    selected?.sid === sid && (selected.scids ?? 0) === scids && (!channel || channel === current)
   const ownMux = (ch: string) => ownMuxes.includes(ch) && allowed(ch)
   const reachable = (ch: string) => ch === current || !locked || admin || ownMux(ch)
   // the station playing comes into sight when it changes (also from elsewhere)
@@ -156,7 +163,7 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
       if (row) scrollIntoList(row)
     })
     return () => cancelAnimationFrame(id)
-  }, [selected?.sid, current, mode, grouped])
+  }, [selected?.sid, selected?.scids, current, mode, grouped])
 
   const stations = useMemo(() => {
     // one multiplex on several channels (same EId and name): its newest
@@ -192,6 +199,27 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
           st.muxes.push({ channel: e.channel, eid: e.eid, label: e.label, snr: e.snr, lastSeen: e.lastSeen })
         }
       }
+      // secondary components: stations of their own in this list
+      for (const c of e.secondary ?? []) {
+        if (latest && latest !== e && !latest.secondary?.some((x) => x.sid === c.sid && x.scids === c.scids)) continue
+        const svc = e.services.find((x) => x.sid === c.sid)
+        if (!svc) continue
+        const ecc = svc.ecc ?? e.ecc ?? null
+        const key = `${ecc ?? ''}:${c.sid}:${c.scids}`
+        const label = secondaryLabel(c, svc.label)
+        let st = map.get(key)
+        if (!st) {
+          st = { key, sid: c.sid, ecc, label, muxes: [], scids: c.scids, parent: svc.label }
+          map.set(key, st)
+        }
+        if (e.lastSeen > (named.get(key) ?? -Infinity)) {
+          Object.assign(st, { label, parent: svc.label })
+          named.set(key, e.lastSeen)
+        }
+        if (!st.muxes.some((m) => m.channel === e.channel && m.eid === e.eid)) {
+          st.muxes.push({ channel: e.channel, eid: e.eid, label: e.label, snr: e.snr, lastSeen: e.lastSeen })
+        }
+      }
     }
     for (const st of map.values()) st.muxes.sort((a, b) => b.lastSeen - a.lastSeen || a.channel.localeCompare(b.channel))
     return [...map.values()].sort((a, b) => a.label.localeCompare(b.label))
@@ -201,16 +229,17 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
   const match = (label: string, sid: number) => !q || label.toLowerCase().includes(q) || hex(sid).toLowerCase().includes(q)
 
   const muxServices = (ensemble.services ?? []).filter((s) => s.isAudio && match(s.label, s.sid))
-  const favStations = stations.filter((s) => favorites.includes(s.sid) && match(s.label, s.sid))
+  const favStations = stations.filter((s) => !s.scids && favorites.includes(s.sid) && match(s.label, s.sid))
   // favourites only received live (not in the service list yet)
   const liveFavs = (ensemble.services ?? []).filter(
-    (s) => s.isAudio && favorites.includes(s.sid) && !stations.some((x) => x.sid === s.sid) && match(s.label, s.sid),
+    (s) => s.isAudio && favorites.includes(s.sid) && !stations.some((x) => x.sid === s.sid && !x.scids) && match(s.label, s.sid),
   )
 
   // the first tap plays the station, another tap on the playing station moves
   // it to the next multiplex carrying it
   const play = (st: Station) => {
-    if (isPlaying(st.sid) && st.muxes.length > 1 && st.muxes.some((m) => m.channel === current)) {
+    const scids = st.scids ?? 0
+    if (isPlaying(st.sid, null, scids) && st.muxes.length > 1 && st.muxes.some((m) => m.channel === current)) {
       // the next multiplex carrying it that this listener may tune to
       const i = st.muxes.findIndex((m) => m.channel === current)
       const next = [...st.muxes.slice(i + 1), ...st.muxes.slice(0, i)].find((m) => reachable(m.channel))
@@ -218,15 +247,15 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
         useStore.getState().notify('warning', 'tuner_locked')
         return
       }
-      selectService(st.sid, 0, next.channel)
+      selectService(st.sid, scids, next.channel)
       return
     }
     const m = bestMux(st.muxes.filter((x) => reachable(x.channel)), current) ?? bestMux(st.muxes, current)
     if (!m) return
-    selectService(st.sid, 0, m.channel)
+    selectService(st.sid, scids, m.channel)
   }
-  const stationOf = (sid: number, ecc: number | null | undefined) =>
-    stations.find((x) => x.sid === sid && (x.ecc === null || ecc == null || x.ecc === ecc))
+  const stationOf = (sid: number, ecc: number | null | undefined, scids = 0) =>
+    stations.find((x) => x.sid === sid && (x.scids ?? 0) === scids && (x.ecc === null || ecc == null || x.ecc === ecc))
 
   const stationRow = (st: Station) => {
     const onCurrent = st.muxes.some((m) => m.channel === current)
@@ -234,10 +263,11 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
     return (
       <li
         key={st.key}
-        className={'st-row' + (isPlaying(st.sid) && onCurrent ? ' selected' : '') + (blocked ? ' blocked' : '')}
+        className={'st-row' + (isPlaying(st.sid, null, st.scids ?? 0) && onCurrent ? ' selected' : '') + (blocked ? ' blocked' : '')}
         onClick={() => play(st)}
+        title={st.scids ? t('secondary_in').replace('{s}', st.parent ?? '') : undefined}
       >
-        <Logo label={st.label} sid={st.sid} ecc={st.ecc} small />
+        <Logo label={st.label} sid={st.sid} ecc={st.ecc} plain={!!st.scids} small />
         <div className="st-txt">
           <div className="st-name">{st.label}</div>
           <div className="st-sub">
@@ -245,7 +275,7 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
           </div>
         </div>
         {blocked && <Lock size={16} className="st-lock" />}
-        <FavStar sid={st.sid} />
+        {!st.scids && <FavStar sid={st.sid} />}
       </li>
     )
   }
@@ -304,7 +334,7 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
               )}
             </li>
           )}
-          {muxServices.map((s) => (
+          {muxServices.flatMap((s) => [
             <li
               key={s.sid}
               className={'st-row' + (isPlaying(s.sid) ? ' selected' : '')}
@@ -326,8 +356,25 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
                 </span>
               )}
               <FavStar sid={s.sid} />
-            </li>
-          ))}
+            </li>,
+            ...secondaries(s).map((c) => {
+              const label = componentLabel(s, c)
+              const line = dlsAll[dlsKey(s.sid, c.scids)]
+              return (
+                <li
+                  key={`${s.sid}:${c.scids}`}
+                  className={'st-row secondary' + (isPlaying(s.sid, null, c.scids ?? 0) ? ' selected' : '')}
+                  onClick={() => selectService(s.sid, c.scids ?? 0)}
+                >
+                  <Logo label={label} sid={s.sid} plain small />
+                  <div className="st-txt">
+                    <div className="st-name">{label}</div>
+                    <div className="st-sub">{line ? <span className="st-dls">{line}</span> : <span className="hint">{t('secondary_in').replace('{s}', s.label)}</span>}</div>
+                  </div>
+                </li>
+              )
+            }),
+          ])}
         </ul>
       )}
 
@@ -387,6 +434,28 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
                         </li>
                       )
                     })}
+                    {/* (secondary components: after the stations, as their own) */}
+                    {(e.secondary ?? [])
+                      .map((c) => ({ c, parent: e.services.find((x) => x.sid === c.sid) }))
+                      .filter(({ c, parent }) => parent && match(secondaryLabel(c, parent.label), c.sid))
+                      .map(({ c, parent }) => {
+                        const label = secondaryLabel(c, parent?.label ?? '')
+                        const blocked = locked && !isCur && !admin && !ownMux(e.channel)
+                        return (
+                          <li
+                            key={`${c.sid}:${c.scids}`}
+                            className={'st-row secondary' + (isPlaying(c.sid, e.channel, c.scids) && isCur ? ' selected' : '') + (blocked ? ' blocked' : '')}
+                            onClick={() => selectService(c.sid, c.scids, e.channel)}
+                          >
+                            <Logo label={label} sid={c.sid} ecc={parent?.ecc ?? e.ecc} plain small />
+                            <div className="st-txt">
+                              <div className="st-name">{label}</div>
+                              <div className="st-sub hint">{t('secondary_in').replace('{s}', parent?.label ?? '')}</div>
+                            </div>
+                            {blocked && <Lock size={16} className="st-lock" />}
+                          </li>
+                        )
+                      })}
                   </ul>
                 )}
               </li>

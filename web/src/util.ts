@@ -1,4 +1,4 @@
-import type { AudioFormat, Ensemble, Service } from './types'
+import type { AudioFormat, Component, Ensemble, Service } from './types'
 import { saveInApp } from './desktop'
 
 export function mhz(khz: number) {
@@ -71,6 +71,60 @@ export function signalLevel(synced: boolean, signal: boolean, snr: number, prote
 export function findService(ens: Ensemble, sid: number | undefined | null) {
   if (sid === undefined || sid === null) return undefined
   return ens.services?.find((s) => s.sid === sid)
+}
+
+/** Audio components of a service besides its primary one (SCIdS 1, 2...):
+ *  programmes of their own, on their own sub-channel, under its SId. */
+export function secondaries(svc: Service): Component[] {
+  return svc.components.filter((c) => !c.primary && c.tmid === 0 && !!c.scids)
+}
+
+/** Name of a secondary component: its label (FIG 1/4), else the service's with its number. */
+export function componentLabel(svc: Service, c: Component) {
+  return c.label?.trim() || `${svc.label} ${(c.scids ?? 0) + 1}`
+}
+
+/** Key of a component's "now playing" line (dlsAll): the SId, "SId:SCIdS" for a secondary one. */
+export function dlsKey(sid: number, scids?: number | null) {
+  return scids ? `${sid}:${scids}` : String(sid)
+}
+
+const asComponent = new WeakMap<Service, Map<number, Service>>()
+
+/** What plays: the service, or for a secondary component the service as that
+ *  component (its label, its sub-channel, `scids`). The same object as long as
+ *  the ensemble's is, so a store selector may return it. */
+export function playingService(ens: Ensemble, sel: { sid: number; scids: number } | null | undefined): Service | undefined {
+  const svc = findService(ens, sel?.sid)
+  if (!svc || !sel?.scids) return svc
+  const c = secondaries(svc).find((x) => x.scids === sel.scids)
+  if (!c) return svc
+  let byScids = asComponent.get(svc)
+  if (!byScids) asComponent.set(svc, (byScids = new Map()))
+  let v = byScids.get(sel.scids)
+  if (!v) {
+    const sc = ens.subchannels?.find((x) => x.id === c.subch)
+    const label = componentLabel(svc, c)
+    v = {
+      ...svc,
+      scids: sel.scids,
+      label,
+      short: c.short?.trim() || label,
+      long: c.long ?? null,
+      language: c.language ?? svc.language,
+      ca: c.ca,
+      codec: c.ctype === 63 ? 'DAB+' : 'DAB',
+      ascty: c.ctype,
+      bitrate: c.bitrate ?? sc?.bitrate ?? null,
+      subchannel: c.subch,
+      protection: c.protection ?? sc?.protection ?? null,
+      codeRate: sc?.codeRate ?? null,
+      startCu: sc?.start ?? null,
+      sizeCu: sc?.size ?? null,
+    }
+    byScids.set(sel.scids, v)
+  }
+  return v
 }
 
 export function formatDuration(sec: number) {

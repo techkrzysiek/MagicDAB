@@ -214,7 +214,8 @@ export interface Store {
   logoDialog: number | null
   dxResults: DxResult[]
   useRadioDns: boolean
-  dlsAll: Record<number, string>
+  /** "Now playing" line of every service (util.ts: dlsKey). */
+  dlsAll: Record<string, string>
   changeLog: ChangeEvent[]
   epgIndex: Record<string, number>
   epg: Record<number, { start: number; duration: number; name: string; description: string | null; genres: string[] }[]>

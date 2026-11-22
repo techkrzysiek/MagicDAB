@@ -64,6 +64,21 @@ impl FormatEntry {
     }
 }
 
+/// A secondary audio component (SCIdS 1, 2...): a programme of its own, on
+/// its own sub-channel, under the SId of a service.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SecondaryEntry {
+    pub sid: u32,
+    pub scids: u8,
+    /// Its label (FIG 1/4); empty when it has none.
+    pub label: String,
+    pub short: String,
+    pub codec: String,
+    pub bitrate: u16,
+    pub subch: Option<u8>,
+}
+
 /// A data service (EPG, TPEG, Journaline...).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Hash)]
 #[serde(rename_all = "camelCase")]
@@ -112,6 +127,9 @@ pub struct EnsembleEntry {
     /// Data services (`services` are the radio stations).
     #[serde(default)]
     pub data: Vec<DataEntry>,
+    /// Secondary audio components of the stations (not sent to the server map).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secondary: Vec<SecondaryEntry>,
     /// Band scans that looked at its channel and did not find it since it
     /// was last received (prune_gone).
     #[serde(default)]
@@ -206,6 +224,26 @@ impl ServiceList {
             })
             .collect();
         data.sort_by_key(|d| d.sid);
+        let mut secondary: Vec<SecondaryEntry> = ens
+            .services
+            .values()
+            .filter(|s| s.is_audio() && s.label.is_some())
+            .flat_map(|s| {
+                s.components.iter().filter(|c| !c.primary && c.tmid == 0 && c.scids.is_some_and(|i| i > 0)).map(|c| {
+                    let sc = c.subch_id.and_then(|id| ens.subchannels.get(&id));
+                    SecondaryEntry {
+                        sid: s.sid,
+                        scids: c.scids.unwrap_or(0),
+                        label: c.label.as_ref().map(|l| l.text.clone()).unwrap_or_default(),
+                        short: c.label.as_ref().map(|l| l.short.clone()).unwrap_or_default(),
+                        codec: if c.is_dabplus() { "DAB+".into() } else { "DAB".into() },
+                        bitrate: sc.map(|x| x.bitrate).unwrap_or(0),
+                        subch: c.subch_id,
+                    }
+                })
+            })
+            .collect();
+        secondary.sort_by_key(|c| (c.sid, c.scids));
         let entry = EnsembleEntry {
             channel: channel.to_string(),
             frequency,
@@ -219,6 +257,7 @@ impl ServiceList {
             tii: Vec::new(),
             subchannels,
             data,
+            secondary,
             misses: 0,
         };
         // with a weak signal not all labels may have arrived yet: keep the
@@ -245,6 +284,18 @@ impl ServiceList {
                     }
                 }
                 entry.data.sort_by_key(|d| d.sid);
+                for c in &old.secondary {
+                    if !entry.secondary.iter().any(|n| n.sid == c.sid && n.scids == c.scids) {
+                        entry.secondary.push(c.clone());
+                    }
+                }
+                entry.secondary.sort_by_key(|c| (c.sid, c.scids));
+            }
+            // a component's label (FIG 1/4) may come later than the rest
+            for c in entry.secondary.iter_mut().filter(|c| c.label.is_empty()) {
+                if let Some(o) = old.secondary.iter().find(|o| o.sid == c.sid && o.scids == c.scids && !o.label.is_empty()) {
+                    (c.label, c.short) = (o.label.clone(), o.short.clone());
+                }
             }
             // the audio of a station stays known while its sub-channel stays
             for s in entry.services.iter_mut().filter(|s| s.format.is_none()) {
@@ -267,7 +318,8 @@ impl ServiceList {
                     || e.label != entry.label
                     || e.short != entry.short
                     || e.subchannels != entry.subchannels
-                    || e.data != entry.data;
+                    || e.data != entry.data
+                    || e.secondary != entry.secondary;
                 let tii = std::mem::take(&mut e.tii);
                 *e = entry;
                 e.tii = tii;
@@ -423,6 +475,42 @@ mod tests {
         let mut m = mux();
         m.subchannels.get_mut(&9).unwrap().size = 18;
         assert!(l.update("11B", 218640, &m, 18.0));
+    }
+
+    #[test]
+    fn secondary_components_are_kept_and_their_label_too() {
+        let mut m = mux();
+        m.subchannels.insert(3, subch(3, 156, 48, 64));
+        let second = Component {
+            scids: Some(1),
+            primary: false,
+            label: Some(Label { text: "Radio 0 Chill".into(), short: "Chill".into() }),
+            ..component(0, 3, &[], None)
+        };
+        m.services.get_mut(&0x4A91).unwrap().components.push(second.clone());
+        let mut l = ServiceList::default();
+        assert!(l.update("11B", 218640, &m, 20.0));
+        let want = SecondaryEntry {
+            sid: 0x4A91,
+            scids: 1,
+            label: "Radio 0 Chill".into(),
+            short: "Chill".into(),
+            codec: "DAB+".into(),
+            bitrate: 64,
+            subch: Some(3),
+        };
+        assert_eq!(l.ensembles[0].secondary, vec![want.clone()]);
+        // (still one station each: the component is not a service of its own)
+        assert_eq!(l.ensembles[0].services.len(), 2);
+        // its label not received yet this time: the one from before stays
+        m.services.get_mut(&0x4A91).unwrap().components[1].label = None;
+        assert!(!l.update("11B", 218640, &m, 20.0));
+        assert_eq!(l.ensembles[0].secondary, vec![want]);
+        // off the air: gone from the list
+        m.services.get_mut(&0x4A91).unwrap().components.pop();
+        assert!(l.update("11B", 218640, &m, 20.0));
+        assert!(l.ensembles[0].secondary.is_empty());
+        assert!(!serde_json::to_string(&l.ensembles[0]).unwrap().contains("secondary"));
     }
 
     #[test]

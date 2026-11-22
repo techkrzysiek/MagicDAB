@@ -1742,6 +1742,7 @@ mod tests {
             snr: 12.345,
             tii: (0..20).map(|i| format!("1-{i}")).collect(),
             subchannels: vec![SubchEntry { id: 1, start: 0, size: 72, protection: "EEP 3-A".into(), bitrate: 96 }],
+            secondary: Vec::new(),
             data: vec![DataEntry {
                 sid: 0xE1C0_0001,
                 label: "EPG".into(),

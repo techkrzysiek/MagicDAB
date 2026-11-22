@@ -10,7 +10,7 @@ import { startRecording, stopRecording } from '../audio/recorder'
 import { player } from '../audio/player'
 import { pageCodec } from '../audio/speaker'
 import { useEffect, useRef } from 'react'
-import { audioCoding, fullSid, hex, mhz, fmMhz, ageShort } from '../util'
+import { audioCoding, fullSid, hex, mhz, fmMhz, ageShort, componentLabel, dlsKey, findService, playingService, secondaries } from '../util'
 import type { Service, Linking, LinkInfo } from '../types'
 import { StationBrowser } from './StationsView'
 import { useSlideLogoUrl } from '../components/logo'
@@ -332,6 +332,7 @@ function ServicePanel({ svc }: { svc?: Service }) {
   const [preferVis, setPreferVis] = useState(false)
   const linkInfo = useStore((s) => s.linkInfo)
   const slideLogo = useSlideLogoUrl(svc?.sid)
+  const parentLabel = useStore((s) => (svc?.scids ? findService(s.ensemble, svc.sid)?.label : undefined))
   // the sub-channel comes (about 4 s of it), not one audio unit decoded
   const st = data?.stats
   const noAudio = !!st && st.frames > 160 && st.auOk + st.auErrors === 0
@@ -389,11 +390,12 @@ function ServicePanel({ svc }: { svc?: Service }) {
   return (
     <div className="service-panel">
       <div className="sp-head">
-        <Logo label={svc.label} sid={svc.sid} onClick={() => useStore.getState().set({ logoDialog: svc.sid })} />
+        <Logo label={svc.label} sid={svc.sid} plain={!!svc.scids} onClick={() => useStore.getState().set({ logoDialog: svc.sid })} />
         <div className="name" title={svc.long ?? svc.label}>{svc.long || svc.label}</div>
         <OtherMuxes svc={svc} />
-        <FavStar sid={svc.sid} />
+        {!svc.scids && <FavStar sid={svc.sid} />}
       </div>
+      {!!svc.scids && <div className="hint sp-secondary">{t('secondary_in').replace('{s}', parentLabel ?? '')}</div>}
       <div className="pty-line">
         <Flag code={svc.country} />
         {/* (one item: the flex gap would stand before the comma) */}
@@ -591,6 +593,7 @@ function ServiceList() {
   const set = useStore((s) => s.set)
   const allowed = useChannelAllowed()
   const services = (ensemble.services ?? []).filter((s) => s.isAudio)
+  const rows = services.length + services.reduce((n, s) => n + secondaries(s).length, 0)
   const listRef = useRef<HTMLUListElement>(null)
 
   const favRows = useMemo(() => {
@@ -610,11 +613,11 @@ function ServiceList() {
   }, [favorites, services, serviceList, ensemble.channel, allowed])
 
   // the station playing stays in sight when it changes elsewhere (player buttons, keys)
-  const shown = listMode === 'ensemble' ? services.length : favRows.length
+  const shown = listMode === 'ensemble' ? rows : favRows.length
   useEffect(() => {
     const li = listRef.current?.querySelector<HTMLElement>('.svc-item.selected')
     if (li) scrollIntoList(li)
-  }, [selected?.sid, listMode, shown])
+  }, [selected?.sid, selected?.scids, listMode, shown])
 
   return (
     <div>
@@ -632,7 +635,7 @@ function ServiceList() {
       )}
       <div className="tabs">
         <button className={'tab' + (listMode === 'ensemble' ? ' active' : '')} onClick={() => set({ listMode: 'ensemble' })}>
-          {t('all_services')} ({services.length})
+          {t('all_services')} ({rows})
         </button>
         <button className={'tab' + (listMode === 'favorites' ? ' active' : '')} onClick={() => set({ listMode: 'favorites' })}>
           {t('favorites')} ({favRows.length})
@@ -640,10 +643,10 @@ function ServiceList() {
       </div>
       <ul className="svc-list" ref={listRef}>
         {listMode === 'ensemble' &&
-          services.map((s) => (
+          services.flatMap((s) => [
             <li
               key={s.sid}
-              className={'svc-item' + (selected?.sid === s.sid ? ' selected' : '')}
+              className={'svc-item' + (selected?.sid === s.sid && !selected.scids ? ' selected' : '')}
               onClick={() => selectService(s.sid, 0)}
             >
               <Logo label={s.label} sid={s.sid} small />
@@ -655,8 +658,29 @@ function ServiceList() {
                 </div>
               </div>
               <FavStar sid={s.sid} />
-            </li>
-          ))}
+            </li>,
+            // its secondary components, right under it
+            ...secondaries(s).map((c) => {
+              const label = componentLabel(s, c)
+              const line = dlsAll[dlsKey(s.sid, c.scids)]
+              return (
+                <li
+                  key={`${s.sid}:${c.scids}`}
+                  className={'svc-item secondary' + (selected?.sid === s.sid && selected.scids === c.scids ? ' selected' : '')}
+                  onClick={() => selectService(s.sid, c.scids ?? 0)}
+                >
+                  <Logo label={label} sid={s.sid} plain small />
+                  <div className="txt">
+                    <div className="lbl">{label}</div>
+                    <div className="sid" title={line ?? ''}>
+                      {t('secondary_in').replace('{s}', s.label)}
+                      {line ? <span className="dls-line">{line}</span> : null}
+                    </div>
+                  </div>
+                </li>
+              )
+            }),
+          ])}
         {listMode === 'favorites' &&
           favRows.map((r) => (
             <li
@@ -684,7 +708,7 @@ export default function ServiceView() {
   const ensemble = useStore((s) => s.ensemble)
   const selected = useStore((s) => s.selected)
   const [showTree, setShowTree] = useState(false)
-  const svc = ensemble.services?.find((s) => s.sid === selected?.sid)
+  const svc = playingService(ensemble, selected)
   return (
     <div className={'service-view' + (showTree ? ' show-tree' : '')}>
       <div className="pane">

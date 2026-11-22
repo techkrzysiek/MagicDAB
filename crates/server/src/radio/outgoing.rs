@@ -115,7 +115,7 @@ impl Radio {
         self.streams.set_title(key.sid, &label.text);
         self.hub.broadcast(m, |c| c.service == Some(key) && c.on_main());
         // short "now playing" line of every service for the service list
-        let all = json!({"type": "dlsAll", "sid": key.sid, "text": label.text});
+        let all = json!({"type": "dlsAll", "sid": key.sid, "scids": key.scids, "text": label.text});
         self.hub.broadcast(text(&all), |c| c.service != Some(key) && c.on_main());
     }
 
@@ -352,10 +352,12 @@ pub(super) fn send_service_state(
     }
 }
 
-/// The "now playing" line of every service (the service list).
+/// The "now playing" line of every service (the service list): by SId, a
+/// secondary component's by "SId:SCIdS".
 pub(super) fn dls_lines_json(services: &HashMap<ServiceKey, ServiceState>) -> Value {
+    let name = |k: &ServiceKey| if k.scids == 0 { k.sid.to_string() } else { format!("{}:{}", k.sid, k.scids) };
     let lines: serde_json::Map<String, Value> =
-        services.iter().filter_map(|(k, st)| st.dls.as_ref().map(|d| (k.sid.to_string(), json!(d.text)))).collect();
+        services.iter().filter_map(|(k, st)| st.dls.as_ref().map(|d| (name(k), json!(d.text)))).collect();
     json!({"type": "dlsAllBulk", "lines": lines})
 }
 

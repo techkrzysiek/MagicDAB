@@ -590,6 +590,10 @@ input[type='range'] {
   gap: 10px;
 }
 
+.sp-secondary {
+  margin: -4px 0 6px;
+}
+
 .sp-head {
   display: flex;
   align-items: center;
@@ -1336,6 +1340,11 @@ input[type='range'] {
 
 .svc-item:hover {
   background: var(--list-hover);
+}
+
+/* a secondary component, under its service */
+.svc-item.secondary {
+  padding-left: 26px;
 }
 
 .svc-item.selected {
@@ -3326,6 +3335,11 @@ table.table {
   border-radius: 10px;
   cursor: pointer;
   position: relative;
+}
+
+/* a secondary component right under its service (the list of this multiplex) */
+.st-list:not(.nested) > .st-row.secondary {
+  padding-left: 24px;
 }
 
 .st-row:hover {
