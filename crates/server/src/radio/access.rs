@@ -161,8 +161,8 @@ impl Radio {
             // empty: no tuning password any more
             if pw.is_empty() {
                 a.tune_password_hash = None;
-            } else if pw.chars().count() >= config::PASSWORD_MIN {
-                a.tune_password_hash = Some(config::hash_password(pw));
+            } else if let Ok(hash) = config::hash_new_password(pw) {
+                a.tune_password_hash = Some(hash);
             }
         }
         if *a == before {

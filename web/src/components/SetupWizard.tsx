@@ -124,7 +124,15 @@ function Wizard() {
 
   const index = STEPS.indexOf(step)
   const location = parseLocation(loc)
-  const pwError = pw && [...pw].length < 8 ? 'setup_password_short' : pw && pw2 !== pw ? 'setup_password_mismatch' : null
+  const pwError = !pw
+    ? null
+    : [...pw].length < 8
+      ? 'setup_password_short'
+      : new TextEncoder().encode(pw).length > 71
+        ? 'setup_password_long'
+        : pw2 !== pw
+          ? 'setup_password_mismatch'
+          : null
   const devError = dev.type === 'rtlTcp' && (!String(dev.host ?? '').trim() || !(dev.port > 0 && dev.port < 65536))
   const tunnelUrl = tunnel.enabled && tunnel.subdomain && tunnel.host ? `https://${tunnel.subdomain}.${tunnel.host}` : null
   const blocked =
@@ -381,7 +389,7 @@ function Wizard() {
                 {t('setup_password_repeat')}
                 <input type={showPw ? 'text' : 'password'} autoComplete="new-password" value={pw2} disabled={!pw} onChange={(e) => setPw2(e.target.value)} />
               </label>
-              {pwError && (pw.length < 4 || pw2) && <div className="hint error">{t(pwError)}</div>}
+              {pwError && (pw.length < 4 || pw2 || pwError === 'setup_password_long') && <div className="hint error">{t(pwError)}</div>}
             </div>
           )}
           {step === 'tunnel' && (

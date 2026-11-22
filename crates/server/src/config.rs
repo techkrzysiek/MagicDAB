@@ -495,13 +495,18 @@ pub fn capture_name_ok(name: &str) -> bool {
 
 /// The shortest password the settings take.
 pub const PASSWORD_MIN: usize = 8;
+/// The longest one, in bytes of UTF-8: bcrypt takes no more than 72 with
+/// the 0 at the end, and a longer one is refused, not cut.
+pub const PASSWORD_MAX_BYTES: usize = 71;
 
-/// Rounds of PBKDF2-HMAC-SHA256 for a password: whoever gets the settings
-/// file (a backup, a copy) must not find a short password in minutes. A
-/// fraction of a second on a small ARM board, so passwords are checked off
-/// the radio thread (radio/login.rs).
-const PBKDF2_ROUNDS: u32 = 200_000;
+/// Cost of bcrypt for a password (2^12 rounds): whoever gets the settings
+/// file (a backup, a copy) must not find a short password in minutes. About
+/// 0.2 s on a PC, more on a small ARM board, so passwords are checked off the
+/// radio thread (radio/login.rs).
+const BCRYPT_COST: u32 = 12;
 /// A file must not ask for more (a check would take the processor for long).
+const BCRYPT_COST_MAX: u32 = 15;
+/// PBKDF2-HMAC-SHA256 of earlier versions, still checked.
 const PBKDF2_ROUNDS_MAX: u32 = 5_000_000;
 
 fn hex(bytes: &[u8]) -> String {
@@ -520,13 +525,24 @@ pub fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
 }
 
-/// "pbkdf2$<rounds>$<salt hex>$<hash hex>" of a password.
-pub fn hash_password(password: &str) -> String {
-    let salt: [u8; 16] = rand::random();
-    let mut out = [0u8; 32];
-    let rounds = std::num::NonZeroU32::new(PBKDF2_ROUNDS).expect("rounds");
-    ring::pbkdf2::derive(ring::pbkdf2::PBKDF2_HMAC_SHA256, rounds, &salt, password.as_bytes(), &mut out);
-    format!("pbkdf2${PBKDF2_ROUNDS}${}${}", hex(&salt), hex(&out))
+/// The bcrypt hash of a password ("$2b$12$..."); `None` for one longer than
+/// PASSWORD_MAX_BYTES.
+pub fn hash_password(password: &str) -> Option<String> {
+    bcrypt::non_truncating_hash(password, BCRYPT_COST).ok()
+}
+
+/// The hash of a password from the settings, or why they do not take it
+/// ("password_short", "password_long": notices the page knows).
+pub fn hash_new_password(password: &str) -> Result<String, &'static str> {
+    if password.chars().count() < PASSWORD_MIN {
+        return Err("password_short");
+    }
+    hash_password(password).ok_or("password_long")
+}
+
+/// The cost of a bcrypt hash, `None` for a hash of another kind.
+fn bcrypt_cost(hash: &str) -> Option<u32> {
+    hash.starts_with("$2").then(|| hash.parse::<bcrypt::HashParts>().ok()).flatten().map(|p| p.get_cost())
 }
 
 /// The hash of earlier versions ("salt$sha256hex", one round).
@@ -537,14 +553,16 @@ fn digest(salt: &str, password: &str) -> String {
     hex(&h.finalize())
 }
 
-/// A hash of an earlier kind (one round of SHA-256, or fewer rounds than
-/// now): made anew at the next login with its password.
+/// A hash of an earlier kind (one round of SHA-256, PBKDF2, bcrypt of a
+/// lower cost): made anew at the next login with its password.
 pub fn hash_outdated(hash: &str) -> bool {
-    let rounds = hash.strip_prefix("pbkdf2$").and_then(|r| r.split('$').next()).and_then(|r| r.parse::<u32>().ok());
-    rounds.is_none_or(|r| r < PBKDF2_ROUNDS)
+    bcrypt_cost(hash).is_none_or(|c| c < BCRYPT_COST)
 }
 
 pub fn verify_password(hash: &str, password: &str) -> bool {
+    if hash.starts_with("$2") {
+        return bcrypt_cost(hash).is_some_and(|c| c <= BCRYPT_COST_MAX) && bcrypt::non_truncating_verify(password, hash).unwrap_or(false);
+    }
     if let Some(rest) = hash.strip_prefix("pbkdf2$") {
         let mut parts = rest.split('$');
         let rounds =
@@ -747,24 +765,37 @@ mod tests {
 
     #[test]
     fn passwords() {
-        let h = hash_password("correct horse");
-        assert!(h.starts_with("pbkdf2$200000$") && h.split('$').count() == 4, "{h}");
+        let h = hash_password("correct horse").unwrap();
+        assert!(h.starts_with("$2b$12$") && h.len() == 60, "{h}");
         assert!(verify_password(&h, "correct horse"));
         assert!(!verify_password(&h, "correct horsf") && !verify_password(&h, ""));
         assert!(!hash_outdated(&h));
         // another salt each time
-        assert_ne!(h, hash_password("correct horse"));
+        assert_ne!(Some(h), hash_password("correct horse"));
+        // bcrypt takes 71 bytes, a longer one is refused, not cut
+        let long = "ż".repeat(35);
+        assert_eq!(long.len(), 70);
+        assert!(hash_password(&long).is_some_and(|h| verify_password(&h, &long)));
+        assert!(hash_password(&format!("{long}ab")).is_none());
+        assert!(hash_new_password(&format!("{long}a")).is_ok());
+        assert_eq!(hash_new_password(&format!("{long}ab")), Err("password_long"));
+        assert!(hash_new_password("ąćęłńóśź").is_ok());
+        assert_eq!(hash_new_password("1234567"), Err("password_short"));
         // a hash of a version before (one round of SHA-256 over salt and password)
         let old = format!("0011223344556677${}", digest("0011223344556677", "battery staple"));
         assert!(verify_password(&old, "battery staple") && !verify_password(&old, "battery stapl"));
         assert!(hash_outdated(&old));
-        // fewer rounds than now: still checked, and made anew at the next login
+        // PBKDF2 of the versions up to 0.3.37: still checked, made anew at the next login
         let salt = [7u8; 16];
         let mut out = [0u8; 32];
         ring::pbkdf2::derive(ring::pbkdf2::PBKDF2_HMAC_SHA256, std::num::NonZeroU32::new(1000).unwrap(), &salt, b"pw", &mut out);
-        let weak = format!("pbkdf2$1000${}${}", hex(&salt), hex(&out));
-        assert!(verify_password(&weak, "pw") && hash_outdated(&weak));
-        // nonsense in the file
+        let pbkdf2 = format!("pbkdf2$1000${}${}", hex(&salt), hex(&out));
+        assert!(verify_password(&pbkdf2, "pw") && !verify_password(&pbkdf2, "pv") && hash_outdated(&pbkdf2));
+        // bcrypt of a lower cost: still checked, made anew
+        let cheap = bcrypt::non_truncating_hash("pw", 4).unwrap();
+        assert!(verify_password(&cheap, "pw") && hash_outdated(&cheap));
+        // nonsense in the file, or a cost that would take the processor for minutes
+        let dear = format!("$2b$31${}", &cheap[7..]);
         for bad in [
             "",
             "pbkdf2$",
@@ -773,6 +804,9 @@ mod tests {
             "pbkdf2$1000$zz$00",
             "pbkdf2$1000$00$00$00",
             "pbkdf2$4000000000$00$00",
+            "$2b$",
+            "$2b$12$short",
+            &dear,
             "nodollar",
         ] {
             assert!(!verify_password(bad, "pw"), "{bad}");

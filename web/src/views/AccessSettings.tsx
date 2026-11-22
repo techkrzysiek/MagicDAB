@@ -22,8 +22,10 @@ function parseAsns(text: string) {
 const asnText = (asns: number[] | undefined) => (asns ?? []).map((n) => `AS${n}`).join(', ')
 
 rule('blockedAsns', { ok: (v: string) => /^[\sAa-zA-Z0-9,;]*$/.test(v), encode: parseAsns })
-rule('tunePassword', { ok: (v: string) => v === '' || [...v].length >= 8 })
-rule('adminPassword', { ok: (v: string) => [...v].length >= 8 })
+/** From 8 characters, up to 71 bytes of UTF-8 (bcrypt takes no more, config.rs). */
+const passwordOk = (v: string) => [...v].length >= 8 && new TextEncoder().encode(v).length <= 71
+rule('tunePassword', { ok: (v: string) => v === '' || passwordOk(v) })
+rule('adminPassword', { ok: passwordOk })
 
 const when = (unix: number) => new Date(unix * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })
 

@@ -1,5 +1,5 @@
 //! Passwords, and the logins a browser keeps. A password is checked off the
-//! radio thread (config.rs: PBKDF2, a fraction of a second on a small board,
+//! radio thread (config.rs: bcrypt, a fraction of a second on a small board,
 //! and this thread carries the listeners' sound), one at a time, by a thread
 //! of its own; its answer comes back as Command::Password. A page that gave
 //! the right one gets a token for its next connections (sessions.rs), so it
@@ -54,7 +54,7 @@ fn start(results: Sender<Command>) -> Option<Sender<Check>> {
             let admin = matches(&c.admin);
             let tuner = !admin && matches(&c.tune);
             let matched = if admin { c.admin.as_ref() } else { c.tune.as_ref().filter(|_| tuner) };
-            let renew = matched.filter(|h| config::hash_outdated(h)).map(|h| (h.clone(), config::hash_password(&c.password)));
+            let renew = matched.filter(|h| config::hash_outdated(h)).and_then(|h| Some((h.clone(), config::hash_password(&c.password)?)));
             if results.send(Command::Password(Checked { client: c.client, ask: c.ask, auto: c.auto, admin, tuner, renew })).is_err() {
                 return;
             }

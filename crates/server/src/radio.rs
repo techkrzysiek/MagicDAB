@@ -448,9 +448,18 @@ impl Radio {
             // with it stay; another one ends them)
             let same = settings.admin_password_hash.as_deref().is_some_and(|h| config::verify_password(h, &pw));
             if !pw.is_empty() && (!same || settings.admin_password_hash.as_deref().is_some_and(config::hash_outdated)) {
-                settings.admin_password_hash = Some(config::hash_password(&pw));
-                if !same {
-                    sessions.close_all(crate::sessions::Kind::Admin, None);
+                match config::hash_password(&pw) {
+                    Some(hash) => {
+                        settings.admin_password_hash = Some(hash);
+                        if !same {
+                            sessions.close_all(crate::sessions::Kind::Admin, None);
+                        }
+                    }
+                    None if same => {}
+                    None => log::warn!(
+                        "MAGICDAB_ADMIN_PASSWORD is longer than {} bytes: not taken, the password stays as it was",
+                        config::PASSWORD_MAX_BYTES
+                    ),
                 }
             }
         }
@@ -464,7 +473,7 @@ impl Radio {
         if settings.admin_password_hash.is_none() {
             let pw: String = (0..10).map(|_| (b'a' + rand::random::<u8>() % 26) as char).collect();
             log::warn!("No admin password configured. Generated admin password: {pw}  (change it in Settings)");
-            settings.admin_password_hash = Some(config::hash_password(&pw));
+            settings.admin_password_hash = config::hash_password(&pw);
         }
         store.save(&settings);
         crate::access::get().load(&settings.access);

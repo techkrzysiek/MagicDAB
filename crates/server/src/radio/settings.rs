@@ -304,13 +304,15 @@ impl Radio {
             self.settings.scan_channels = v.iter().filter_map(|c| c.as_str().map(|s| s.to_string())).collect();
         }
         if let Some(pw) = s.get("adminPassword").and_then(|v| v.as_str()) {
-            if pw.chars().count() >= config::PASSWORD_MIN {
-                self.settings.admin_password_hash = Some(config::hash_password(pw));
-                // (the logins browsers kept with the old one end, but this admin's)
-                self.password_changed(crate::sessions::Kind::Admin, client);
-                log::info!("admin password changed");
-            } else if !pw.is_empty() {
-                self.notice(client, "error", "password_short");
+            match config::hash_new_password(pw) {
+                Ok(hash) => {
+                    self.settings.admin_password_hash = Some(hash);
+                    // (the logins browsers kept with the old one end, but this admin's)
+                    self.password_changed(crate::sessions::Kind::Admin, client);
+                    log::info!("admin password changed");
+                }
+                Err(problem) if !pw.is_empty() => self.notice(client, "error", problem),
+                Err(_) => {}
             }
         }
         self.apply_access_settings(s);
