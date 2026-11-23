@@ -2,7 +2,7 @@
 # MagicDAB - web based DAB/DAB+ receiver
 
 # ---- web UI (only needed at build time) ----
-FROM node:20-trixie-slim AS web
+FROM node:20-trixie-slim@sha256:abfbe12cc943141a0c9e8c0a57d710df1dadd95d35e8662cc02958b284d1f35b AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -11,7 +11,7 @@ COPY web/ ./
 RUN npm run build && find dist -name '*.map' -delete
 
 # ---- server ----
-FROM rust:1-slim-trixie AS build
+FROM rust:1-slim-trixie@sha256:6f14b2b4b278ec0d50aa1d69541c304ce0f95e0f6268487aa9924af1c2e9aebe AS build
 RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libopus-dev cmake make gcc libc6-dev curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 # faad2 of our own, static, without the dynamic range control: the gains it
@@ -42,7 +42,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && strip --strip-debug /usr/local/bin/magicdab
 
 # ---- runtime ----
-FROM debian:trixie-slim
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 RUN apt-get update && apt-get install -y --no-install-recommends librtlsdr0 libhackrf0 libusb-1.0-0 libopus0 libasound2t64 \
     ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
 COPY --from=build /usr/local/bin/magicdab /usr/local/bin/magicdab
