@@ -19,8 +19,10 @@ const MAX_OBJECT: usize = 4092;
 /// Inflated content is cut off here: room above the limit of the standard,
 /// but no deflate bomb.
 const MAX_INFLATED: usize = 4 * MAX_OBJECT;
-/// Objects kept at most; above it the one received longest ago goes.
+/// Objects kept at most, and their size in all (as JSON for the pages);
+/// above either the one received longest ago goes.
 const MAX_OBJECTS: usize = 4096;
+const MAX_BYTES: usize = 4 << 20;
 /// General link targets kept per object at most.
 const MAX_HOT_LINKS: usize = 16;
 
@@ -185,6 +187,8 @@ pub struct JournalineStats {
 struct Entry {
     raw: Vec<u8>,
     object: JmlObject,
+    /// Its size as JSON (MAX_BYTES).
+    size: usize,
     /// When it was last received (push counter).
     seen: u64,
 }
@@ -194,6 +198,8 @@ struct Entry {
 pub struct JournalineDecoder {
     extended_header_len: usize,
     objects: BTreeMap<u16, Entry>,
+    /// Sizes of `objects` added up.
+    bytes: usize,
     pushes: u64,
     toc: Option<Toc>,
     pub stats: JournalineStats,
@@ -211,12 +217,14 @@ impl JournalineDecoder {
         if self.extended_header_len != len as usize {
             self.extended_header_len = len as usize;
             self.objects.clear();
+            self.bytes = 0;
         }
     }
 
     /// Forget all objects and the TOC (another service).
     pub fn reset(&mut self) {
         self.objects.clear();
+        self.bytes = 0;
         self.toc = None;
         self.stats = JournalineStats::default();
     }
@@ -292,13 +300,15 @@ impl JournalineDecoder {
             return Vec::new();
         };
         let mut changed = vec![id];
-        if self.objects.len() >= MAX_OBJECTS && !self.objects.contains_key(&id) {
-            if let Some(oldest) = self.objects.iter().min_by_key(|(_, e)| e.seen).map(|(k, _)| *k) {
-                self.objects.remove(&oldest);
-                changed.push(oldest);
-            }
+        let size = serde_json::to_vec(&object).map_or(raw.len(), |v| v.len());
+        self.remove(id);
+        while self.objects.len() >= MAX_OBJECTS || (self.bytes + size > MAX_BYTES && !self.objects.is_empty()) {
+            let Some(oldest) = self.objects.iter().min_by_key(|(_, e)| e.seen).map(|(k, _)| *k) else { break };
+            self.remove(oldest);
+            changed.push(oldest);
         }
-        self.objects.insert(id, Entry { raw: raw.to_vec(), object, seen: self.pushes });
+        self.bytes += size;
+        self.objects.insert(id, Entry { raw: raw.to_vec(), object, size, seen: self.pushes });
         self.stats.updates += 1;
         changed
     }
@@ -341,9 +351,15 @@ impl JournalineDecoder {
         let listed: HashSet<u16> = listed.into_iter().collect();
         let gone: Vec<u16> = self.objects.keys().copied().filter(|&id| (lo..=hi).contains(&(id as u32)) && !listed.contains(&id)).collect();
         for id in &gone {
-            self.objects.remove(id);
+            self.remove(*id);
         }
         gone
+    }
+
+    fn remove(&mut self, id: u16) {
+        if let Some(e) = self.objects.remove(&id) {
+            self.bytes -= e.size;
+        }
     }
 }
 

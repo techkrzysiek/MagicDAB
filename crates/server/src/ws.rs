@@ -10,17 +10,74 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Notify};
 
-/// Commands a connection may send at once, and per second after that: far above
-/// what the interface sends (logos of a long station list come in a burst), so
-/// that only a flood is cut off before it reaches the radio thread.
-const BURST: f64 = 1000.0;
-const PER_SECOND: f64 = 200.0;
+/// Commands a connection may send at once, and per second after that: above
+/// what the interface sends (logos of a long station list come in a burst),
+/// so that only a flood is cut off before it reaches the radio thread. An
+/// admin's connection has more; all connections of one network of the
+/// internet (an IPv4 address, an IPv6 /64) share a budget too, so 40 of them
+/// are not 40 times as much (not the local network: a proxy there that is
+/// not trusted, or Docker's gateway, has every listener behind it).
+const BURST: f64 = 400.0;
+const PER_SECOND: f64 = 40.0;
+const ADMIN_BURST: f64 = 1000.0;
+const ADMIN_PER_SECOND: f64 = 200.0;
+const NETWORK_BURST: f64 = 1200.0;
+const NETWORK_PER_SECOND: f64 = 120.0;
+/// Commands with a large answer (pictures, documents, everything kept so far)
+/// count as this many.
+const HEAVY: f64 = 20.0;
+/// Commands of a connection waiting for the radio thread at most; more are
+/// ignored like a flood.
+const QUEUED_MAX: usize = 200;
 /// Commands ignored before the address is banned for a while (Settings >
 /// Access): a flood, not a burst of the interface.
 const FLOOD_BAN: u64 = 1000;
 /// The longest command of a listener; an admin's may be longer (a list of
 /// transmitters comes in parts of a few hundred kB).
 const LISTENER_MAX: usize = 64 * 1024;
+
+/// A budget of commands: what is left, refilled by the second up to `burst`.
+struct Bucket {
+    tokens: f64,
+    refilled: Instant,
+}
+
+impl Bucket {
+    fn new(burst: f64) -> Self {
+        Bucket { tokens: burst, refilled: Instant::now() }
+    }
+
+    fn take(&mut self, now: Instant, cost: f64, burst: f64, per_second: f64) -> bool {
+        self.tokens = (self.tokens + now.duration_since(self.refilled).as_secs_f64() * per_second).min(burst);
+        self.refilled = now;
+        if self.tokens < cost {
+            return false;
+        }
+        self.tokens -= cost;
+        true
+    }
+}
+
+/// The budgets of the networks (non-admin connections only).
+static NETWORKS: std::sync::LazyLock<Mutex<std::collections::HashMap<String, Bucket>>> = std::sync::LazyLock::new(Default::default);
+
+fn network_take(network: &str, now: Instant, cost: f64) -> bool {
+    let mut nets = NETWORKS.lock().unwrap();
+    if nets.len() > 10_000 {
+        // (the full ones are as good as new)
+        nets.retain(|_, b| now.duration_since(b.refilled).as_secs_f64() * NETWORK_PER_SECOND + b.tokens < NETWORK_BURST);
+    }
+    nets.entry(network.to_string()).or_insert_with(|| Bucket::new(NETWORK_BURST)).take(now, cost, NETWORK_BURST, NETWORK_PER_SECOND)
+}
+
+/// What a command costs of the budgets.
+fn cost(v: &serde_json::Value) -> f64 {
+    match v["type"].as_str().unwrap_or("") {
+        "getGallery" | "getSpiDoc" | "getSpiDocs" | "listeners" => HEAVY,
+        "subscribe" if v["journaline"].as_bool() == Some(true) || v["traffic"].as_bool() == Some(true) => HEAVY,
+        _ => 1.0,
+    }
+}
 
 /// Send one message; a peer that stopped reading (its TCP buffer stays full) is
 /// given up after a while instead of holding the connection until the kernel does.
@@ -122,7 +179,11 @@ pub async fn handle(socket: WebSocket, hub: Arc<Hub>, radio: Sender<Command>, me
         }
     });
 
-    let (mut tokens, mut refilled, mut dropped) = (BURST, Instant::now(), 0u64);
+    let mut own = Bucket::new(ADMIN_BURST);
+    let mut dropped = 0u64;
+    let network = crate::access::network(&meta.ip);
+    let shared_budget = !ip.is_some_and(crate::access::is_local);
+    let queued = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let reason = loop {
         tokio::select! {
             msg = stream.next() => match msg {
@@ -131,32 +192,47 @@ pub async fn handle(socket: WebSocket, hub: Arc<Hub>, radio: Sender<Command>, me
                     *last_seen.lock().unwrap() = now;
                     match msg {
                         Message::Text(t) => {
-                            tokens = (tokens + now.duration_since(refilled).as_secs_f64() * PER_SECOND).min(BURST);
-                            refilled = now;
-                            if tokens < 1.0 {
+                            let admin = hub.is_admin(id);
+                            let take = |own: &mut Bucket, c: f64| {
+                                if admin {
+                                    own.take(now, c, ADMIN_BURST, ADMIN_PER_SECOND)
+                                } else {
+                                    own.take(now, c, BURST, PER_SECOND) && (!shared_budget || network_take(&network, now, c))
+                                }
+                            };
+                            // (a flood goes before it costs a parse)
+                            let mut allowed = take(&mut own, 1.0) && (admin || queued.load(std::sync::atomic::Ordering::Relaxed) < QUEUED_MAX);
+                            let mut parsed = None;
+                            if allowed {
+                                if t.len() > LISTENER_MAX && !admin {
+                                    log::debug!("client {id}: a command of {} bytes ignored", t.len());
+                                } else {
+                                    match serde_json::from_str::<serde_json::Value>(&t) {
+                                        Ok(v) => parsed = Some(v),
+                                        Err(e) => log::debug!("client {id}: invalid message: {e}"),
+                                    }
+                                }
+                                let extra = parsed.as_ref().map_or(0.0, cost) - 1.0;
+                                if extra > 0.0 {
+                                    allowed = take(&mut own, extra);
+                                }
+                            }
+                            if !allowed {
                                 dropped += 1;
                                 if dropped == 1 || dropped % 10_000 == 0 {
                                     log::warn!("client {id}: too many commands, {dropped} ignored");
                                 }
                                 // (its connections close once banned)
-                                if dropped == FLOOD_BAN && !hub.is_admin(id) {
+                                if dropped == FLOOD_BAN && !admin {
                                     if let Some(ip) = ip {
                                         crate::access::get().auto_ban(ip, &format!("flood of commands ({FLOOD_BAN} ignored)"));
                                     }
                                 }
                                 continue;
                             }
-                            tokens -= 1.0;
-                            if t.len() > LISTENER_MAX && !hub.is_admin(id) {
-                                dropped += 1;
-                                log::debug!("client {id}: a command of {} bytes ignored", t.len());
-                                continue;
-                            }
-                            match serde_json::from_str::<serde_json::Value>(&t) {
-                                Ok(v) => {
-                                    let _ = radio.send(Command::Message { client: id, msg: v });
-                                }
-                                Err(e) => log::debug!("client {id}: invalid message: {e}"),
+                            if let Some(v) = parsed {
+                                queued.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                let _ = radio.send(Command::Message { client: id, msg: v, queued: queued.clone() });
                             }
                         }
                         Message::Close(f) => {

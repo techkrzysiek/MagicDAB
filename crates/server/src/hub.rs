@@ -3,8 +3,9 @@
 use magicdab_dab::receiver::ServiceKey;
 use parking_lot::Mutex;
 use serde::Serialize;
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -125,7 +126,7 @@ pub struct Hub {
     /// Tickets for a download each (`ticket`): what, its name, since when.
     tickets: Mutex<HashMap<String, (String, String, Instant)>>,
     /// The Opus audio of the main receiver's stations for /audio/<SId>.
-    pub taps: AudioTaps,
+    pub taps: Arc<AudioTaps>,
 }
 
 /// Opus frames of the main receiver's stations (as BIN_AUDIO, the same bytes
@@ -136,14 +137,90 @@ pub struct Hub {
 #[derive(Default)]
 pub struct AudioTaps {
     senders: Mutex<HashMap<u32, tokio::sync::broadcast::Sender<Arc<Vec<u8>>>>>,
+    /// The audio stations of the main receiver's multiplex (radio/streams.rs):
+    /// no other SId gets a channel, so made-up ones cannot fill the memory.
+    stations: Mutex<HashSet<u32>>,
+    /// Sockets open, in all and by address.
+    open: AtomicUsize,
+    by_address: Mutex<HashMap<IpAddr, usize>>,
 }
 
 /// Frames a socket of /audio may fall behind before it skips ahead (5 s).
 const TAP_BACKLOG: usize = 250;
 
+/// Sockets of /audio at once (a proxy needs one per station it passes on),
+/// and of one address of the internet (the local network has no limit).
+const TAP_SOCKETS_MAX: usize = 256;
+const TAP_SOCKETS_PER_ADDRESS: usize = 32;
+
+/// Why a socket of /audio was refused.
+pub enum TapRefused {
+    /// Not a station of the multiplex.
+    Unknown,
+    /// Too many sockets, in all or from the address.
+    Busy,
+}
+
+/// A socket of /audio: its frames, and its place given back when dropped
+/// (the channel of the station goes with its last socket).
+pub struct Tap {
+    taps: Arc<AudioTaps>,
+    sid: u32,
+    address: IpAddr,
+    rx: Option<tokio::sync::broadcast::Receiver<Arc<Vec<u8>>>>,
+}
+
+impl Tap {
+    pub fn rx(&mut self) -> &mut tokio::sync::broadcast::Receiver<Arc<Vec<u8>>> {
+        self.rx.as_mut().expect("receiver until dropped")
+    }
+}
+
+impl Drop for Tap {
+    fn drop(&mut self) {
+        drop(self.rx.take());
+        self.taps.open.fetch_sub(1, Ordering::Relaxed);
+        {
+            let mut by = self.taps.by_address.lock();
+            if let Some(n) = by.get_mut(&self.address) {
+                *n -= 1;
+                if *n == 0 {
+                    by.remove(&self.address);
+                }
+            }
+        }
+        let mut senders = self.taps.senders.lock();
+        if senders.get(&self.sid).is_some_and(|tx| tx.receiver_count() == 0) {
+            senders.remove(&self.sid);
+        }
+    }
+}
+
 impl AudioTaps {
-    pub fn subscribe(&self, sid: u32) -> tokio::sync::broadcast::Receiver<Arc<Vec<u8>>> {
-        self.senders.lock().entry(sid).or_insert_with(|| tokio::sync::broadcast::channel(TAP_BACKLOG).0).subscribe()
+    /// The audio stations of the multiplex now (the radio thread, every second).
+    pub fn set_stations(&self, stations: HashSet<u32>) {
+        *self.stations.lock() = stations;
+    }
+
+    pub fn subscribe(self: &Arc<Self>, sid: u32, address: IpAddr) -> Result<Tap, TapRefused> {
+        if !self.stations.lock().contains(&sid) {
+            return Err(TapRefused::Unknown);
+        }
+        {
+            let mut by = self.by_address.lock();
+            let n = by.entry(address).or_insert(0);
+            if self.open.load(Ordering::Relaxed) >= TAP_SOCKETS_MAX || (*n >= TAP_SOCKETS_PER_ADDRESS && !crate::access::is_local(address))
+            {
+                if *n == 0 {
+                    by.remove(&address);
+                }
+                return Err(TapRefused::Busy);
+            }
+            *n += 1;
+            self.open.fetch_add(1, Ordering::Relaxed);
+        }
+        let rx = self.senders.lock().entry(sid).or_insert_with(|| tokio::sync::broadcast::channel(TAP_BACKLOG).0).subscribe();
+        Ok(Tap { taps: self.clone(), sid, address, rx: Some(rx) })
     }
 
     /// A frame of station `sid` to its sockets, if it has any.
@@ -155,11 +232,16 @@ impl AudioTaps {
             }
         }
     }
+}
 
-    /// Sockets open in all.
-    pub fn sockets(&self) -> usize {
-        self.senders.lock().values().map(|tx| tx.receiver_count()).sum()
-    }
+/// Different stations of one network (an IPv4 address, an IPv6 /64) decoded
+/// at most for it; an admin and the local network have no limit (a proxy
+/// there not trusted, or Docker's gateway, has every listener behind it).
+const STATIONS_PER_NETWORK: usize = 3;
+
+/// An address of this computer or the local network (access::is_local).
+fn local_network(ip: &str) -> bool {
+    ip.parse::<IpAddr>().is_ok_and(crate::access::is_local)
 }
 
 /// A ticket opens its download for this long, once.
@@ -368,20 +450,44 @@ impl Hub {
 
     /// Services of a slot that should be decoded: (key, wants opus, wants pcm).
     pub fn wanted_services(&self, slot: u32) -> Vec<(ServiceKey, bool, bool)> {
-        let mut map: HashMap<ServiceKey, (bool, bool)> = HashMap::new();
-        for c in self.clients.lock().values().filter(|c| c.slot == slot) {
-            if let Some(k) = c.service {
-                let e = map.entry(k).or_insert((false, false));
-                if c.audio {
-                    match c.codec {
-                        Codec::Opus | Codec::Shared => e.0 = true,
-                        Codec::Pcm => e.1 = true,
-                        Codec::Native => {}
-                    }
+        let clients = self.clients.lock();
+        // those who listen first (the longest connected first), then the pages
+        // that only look: a few silent pages cannot push a listener out of
+        // the stations decoded (settings.max_services)
+        let mut order: Vec<&Client> = clients.values().filter(|c| c.slot == slot && c.service.is_some()).collect();
+        order.sort_by_key(|c| (!c.audio, c.connected, c.id));
+        let mut out: Vec<(ServiceKey, bool, bool)> = Vec::new();
+        let mut by_network: HashMap<String, Vec<ServiceKey>> = HashMap::new();
+        for c in order {
+            let Some(k) = c.service else { continue };
+            let mine = by_network.entry(crate::access::network(&c.ip)).or_default();
+            if !mine.contains(&k) {
+                if mine.len() >= STATIONS_PER_NETWORK && !c.admin && !local_network(&c.ip) {
+                    continue;
+                }
+                mine.push(k);
+            }
+            let i = match out.iter().position(|(x, _, _)| *x == k) {
+                Some(i) => i,
+                None => {
+                    out.push((k, false, false));
+                    out.len() - 1
+                }
+            };
+            if c.audio {
+                match c.codec {
+                    Codec::Opus | Codec::Shared => out[i].1 = true,
+                    Codec::Pcm => out[i].2 = true,
+                    Codec::Native => {}
                 }
             }
         }
-        map.into_iter().map(|(k, (o, p))| (k, o, p)).collect()
+        out
+    }
+
+    /// The clients of a receiver that listen (sound on), with their station.
+    pub fn listeners(&self, slot: u32) -> Vec<(u64, ServiceKey)> {
+        self.clients.lock().values().filter(|c| c.slot == slot && c.audio && !c.gated).filter_map(|c| Some((c.id, c.service?))).collect()
     }
 
     /// What the program's own sound output plays (slot, service): the station

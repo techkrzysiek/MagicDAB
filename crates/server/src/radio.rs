@@ -76,6 +76,8 @@ pub enum Command {
     Message {
         client: u64,
         msg: Value,
+        /// The connection's count of commands not taken yet (ws.rs), one less once taken.
+        queued: Arc<std::sync::atomic::AtomicUsize>,
     },
     RadioDnsLogo(radiodns::LogoResult),
     RadioDnsDoc(radiodns::SiDocument),
@@ -291,6 +293,12 @@ pub struct Radio {
     /// TPEG traffic messages of the multiplex, by their key ("A.B.C/scid/id").
     tpeg: std::collections::BTreeMap<String, magicdab_dab::tpeg::TrafficEvent>,
     decoding: HashSet<ServiceKey>,
+    /// The station whose data (slide, DLS, format) a client got last, and when:
+    /// the same one selected again soon gets nothing more (a flood of selects
+    /// would be a flood of slides).
+    service_sent: HashMap<u64, (ServiceKey, Instant)>,
+    /// Listeners told their station is not decoded (over settings.max_services).
+    told_not_decoded: HashSet<(u64, ServiceKey)>,
     wants: HashMap<ServiceKey, (bool, bool)>,
     audio: AudioHub,
     signal: SignalInfo,
@@ -451,6 +459,10 @@ impl Radio {
         }
         let mut sessions = crate::sessions::Sessions::load(&data_dir);
         if let Ok(pw) = std::env::var("MAGICDAB_ADMIN_PASSWORD") {
+            // (not refused: an installation with it would not come up)
+            if !pw.is_empty() && pw.chars().count() < 8 {
+                log::warn!("MAGICDAB_ADMIN_PASSWORD has fewer than 8 characters: easy to guess, choose a longer one");
+            }
             // (the same one as at the last start: its hash and the logins kept
             // with it stay; another one ends them)
             let same = settings.admin_password_hash.as_deref().is_some_and(|h| config::verify_password(h, &pw));
@@ -530,6 +542,8 @@ impl Radio {
             journaline: HashMap::new(),
             tpeg: std::collections::BTreeMap::new(),
             decoding: HashSet::new(),
+            told_not_decoded: HashSet::new(),
+            service_sent: HashMap::new(),
             wants: HashMap::new(),
             audio,
             signal: SignalInfo::default(),
@@ -712,6 +726,7 @@ impl Radio {
             Command::Connected(id) => self.on_connected(id),
             Command::Gone { id, session, reason, dropped, slot } => {
                 self.initial_pending.remove(&id);
+                self.service_sent.remove(&id);
                 let act = self.activity.remove(&id);
                 if let Some((ip, agent, secs, sid, audio)) = session {
                     let spent =
@@ -727,7 +742,10 @@ impl Radio {
                 self.update_decoding();
                 self.broadcast_listeners();
             }
-            Command::Message { client, msg } => self.on_message(client, msg),
+            Command::Message { client, msg, queued } => {
+                queued.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                self.on_message(client, msg)
+            }
             Command::RadioDnsLogo(l) => {
                 if self.spi.add_logo(l.sid, l.ecc, l.width, l.height, &l.data, "RadioDNS", &l.url) {
                     self.logos_dirty = true;

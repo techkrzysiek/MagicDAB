@@ -222,7 +222,8 @@ impl Radio {
         // (the interface never has it: empty keeps it, null removes it)
         match s.get("discordWebhook") {
             Some(Value::Null) => self.settings.discord_webhook.clear(),
-            Some(Value::String(v)) if !v.trim().is_empty() => self.settings.discord_webhook = v.trim().to_string(),
+            Some(Value::String(v)) if changes::webhook_ok(v.trim()) => self.settings.discord_webhook = v.trim().to_string(),
+            Some(Value::String(v)) if !v.trim().is_empty() => self.notice(client, "error", "webhook_invalid"),
             _ => {}
         }
         if let Some(v) = s.get("tunnel") {
@@ -234,10 +235,15 @@ impl Radio {
                 if t.token.is_empty() && crate::tunnel::token_stays(&old.host, &t.host) {
                     t.token = old.token.clone();
                 }
-                self.settings.tunnel = t;
-                let port = self.listen_port;
-                self.tunnel.apply(&self.settings.tunnel, port);
-                self.note_tunnel_server();
+                match t.check() {
+                    Ok(()) => {
+                        self.settings.tunnel = t;
+                        let port = self.listen_port;
+                        self.tunnel.apply(&self.settings.tunnel, port);
+                        self.note_tunnel_server();
+                    }
+                    Err(problem) => self.notice(client, "error", problem),
+                }
             }
         }
         if let Some(v) = s.get("channelMaps") {

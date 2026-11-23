@@ -36,6 +36,8 @@ struct Shared {
     error: Mutex<Option<String>>,
     /// The tuner chip from the server's header (librtlsdr's number, 0: not known).
     tuner: AtomicU32,
+    /// The server sent no header (DeviceStatus::headerless).
+    headerless: AtomicBool,
 }
 
 impl Shared {
@@ -175,6 +177,7 @@ impl InputDevice for RtlTcp {
             warning: None,
             model: None,
             tuner: self.shared.as_ref().and_then(|sh| crate::rtl_tuner_name(sh.tuner.load(Ordering::Relaxed) as i64)),
+            headerless: self.shared.as_ref().is_some_and(|sh| sh.headerless.load(Ordering::Relaxed)),
         }
     }
 
@@ -206,6 +209,7 @@ impl InputDevice for RtlTcp {
             mode: Mutex::new(self.mode.clone()),
             error: Mutex::new(None),
             tuner: AtomicU32::new(0),
+            headerless: AtomicBool::new(false),
         });
         self.shared = Some(shared.clone());
         self.frequency = frequency;
@@ -220,6 +224,7 @@ impl InputDevice for RtlTcp {
                         Ok(_) if sh.stop.load(Ordering::Relaxed) => return,
                         Ok((stream, reader, leading, tuner)) => {
                             sh.tuner.store(tuner, Ordering::Relaxed);
+                            sh.headerless.store(!leading.is_empty(), Ordering::Relaxed);
                             sh.connected(stream);
                             (reader, leading)
                         }

@@ -839,9 +839,32 @@ fn merge(into: &mut Vec<Change>, c: Change) {
 /// The changes in a few lines: what came and what went in one line each, the
 /// changes of a service together; the technical ones (sub-channels, capacity)
 /// are left to the Changes view.
+/// A Discord webhook: nothing else gets the reports (an admin's address
+/// would reach any server, the ones of the server's own network too).
+pub fn webhook_ok(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else { return false };
+    let host = rest.split('/').next().unwrap_or("");
+    matches!(host, "discord.com" | "discordapp.com" | "canary.discord.com" | "ptb.discord.com")
+        && rest[host.len()..].starts_with("/api/webhooks/")
+}
+
+/// Text from the air in a Discord message: its markdown characters escaped
+/// (a label `[a](http://a.example)` would be a link), and `:` too, so an
+/// address is not made one either.
+fn md(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(c, '\\' | '*' | '_' | '~' | '`' | '|' | '>' | '<' | '[' | ']' | '(' | ')' | '#' | '@' | ':') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn discord_lines(ev: &ChangeEvent) -> Vec<String> {
-    let text = |v: &Option<String>| v.clone().unwrap_or_default();
-    let name = |c: &Change| format!("**{}**", c.service.as_deref().map(str::trim).unwrap_or("?"));
+    let text = |v: &Option<String>| md(v.as_deref().unwrap_or_default());
+    let name = |c: &Change| format!("**{}**", md(c.service.as_deref().map(str::trim).unwrap_or("?")));
     let mut lines = Vec::new();
     for c in &ev.changes {
         match c.kind.as_str() {
@@ -932,7 +955,7 @@ pub struct Posted {
 pub type DiscordMsg = std::sync::Arc<parking_lot::Mutex<Posted>>;
 
 fn discord_header(station: &str, ev: &ChangeEvent) -> String {
-    format!("**{}, {}**, {} ({})", station, ev.channel, ev.ensemble.trim(), ev.eid)
+    format!("**{}, {}**, {} ({})", md(station), ev.channel, md(ev.ensemble.trim()), ev.eid)
 }
 
 /// The webhook's URL with `path` after it and `query` among its parameters
@@ -962,7 +985,7 @@ pub fn post_discord(webhook: &str, station: &str, base: Option<&str>, ev: &Chang
     let posted = DiscordMsg::default();
     let body = discord_lines(ev);
     // (only sub-channels or capacity: the Changes view has them)
-    if webhook.is_empty() || !webhook.starts_with("https://") || body.is_empty() {
+    if !webhook_ok(webhook) || body.is_empty() {
         posted.lock().done = true;
         return posted;
     }
@@ -1009,7 +1032,7 @@ pub fn post_discord(webhook: &str, station: &str, base: Option<&str>, ev: &Chang
 /// the recording.
 pub fn discord_report(webhook: &str, station: &str, base: Option<&str>, ev: &ChangeEvent, posted: DiscordMsg) {
     let Some(report) = ev.report.as_ref() else { return };
-    if webhook.is_empty() || !webhook.starts_with("https://") {
+    if !webhook_ok(webhook) {
         return;
     }
     let lines = report_lines(report, base).join("\n");
@@ -1518,6 +1541,22 @@ mod tests {
         let ev = event("8C", vec![change("siDescription", Some("4A91"), "Radio A", Some("x"), Some(&"a".repeat(300)))]);
         assert!(discord_lines(&ev)[0].ends_with("…”"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn only_discord_webhooks_get_reports() {
+        assert!(webhook_ok("https://discord.com/api/webhooks/1/abc"));
+        assert!(webhook_ok("https://discordapp.com/api/webhooks/1/abc?thread_id=2"));
+        assert!(!webhook_ok("http://discord.com/api/webhooks/1/abc"));
+        assert!(!webhook_ok("https://discord.com.evil.example/api/webhooks/1/abc"));
+        assert!(!webhook_ok("https://192.168.1.1/api/webhooks/1/abc"));
+        assert!(!webhook_ok("https://discord.com/other"));
+    }
+
+    #[test]
+    fn text_from_the_air_is_no_markdown() {
+        assert_eq!(md("[a](http://a.example)"), "\\[a\\]\\(http\\://a.example\\)");
+        assert_eq!(md("Radio 1"), "Radio 1");
     }
 
     #[test]

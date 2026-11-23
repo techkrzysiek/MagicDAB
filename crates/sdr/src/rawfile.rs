@@ -99,6 +99,7 @@ impl InputDevice for RawFile {
             warning: None,
             model: None,
             tuner: None,
+            headerless: false,
         }
     }
 

@@ -423,6 +423,7 @@ impl InputDevice for RtlSdr {
             warning: self.warning.clone(),
             model: self.model.clone(),
             tuner: self.tuner.clone(),
+            headerless: false,
             position: None,
             duration: None,
             ..Default::default()

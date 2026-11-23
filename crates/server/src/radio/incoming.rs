@@ -9,6 +9,13 @@ fn said(text: &str, max: usize) -> String {
     text.chars().take(max).map(|c| if c.is_control() { ' ' } else { c }).collect()
 }
 
+/// Journaline objects or traffic messages in one message to a page that
+/// starts watching (the rest follow in more).
+const SNAPSHOT_PART: usize = 200;
+
+/// The same station selected again within this time gets its data only once.
+const RESEND_AFTER: Duration = Duration::from_secs(10);
+
 impl Radio {
     pub(super) fn on_message(&mut self, client: u64, msg: Value) {
         let kind = msg["type"].as_str().unwrap_or("");
@@ -155,7 +162,11 @@ impl Radio {
                     }
                 }
                 self.update_decoding();
-                self.send_service_data(client, key);
+                let again = self.service_sent.get(&client).is_some_and(|(k, at)| *k == key && at.elapsed() < RESEND_AFTER);
+                if !again {
+                    self.service_sent.insert(client, (key, Instant::now()));
+                    self.send_service_data(client, key);
+                }
                 self.log_activity(client);
             }
             "speaker" => self.on_speaker_message(client, &msg),
@@ -236,17 +247,25 @@ impl Radio {
                 // receiver it listens to: the main one or its side slot)
                 let slot = self.hub.slot_of(client);
                 let side = (slot != 0).then(|| self.slots.get(slot)).flatten().map(|e| &e.slot);
+                // (in parts: the first one replaces what the page had, the rest add)
                 if journaline == Some(true) {
                     let kept = side.map_or(&self.journaline, |s| &s.journaline);
                     for (&(sid, scids), objects) in kept {
                         let objects: Vec<_> = objects.values().collect();
-                        let m = json!({"type": "journaline", "sid": sid, "scids": scids, "objects": objects, "all": true});
-                        self.hub.send(client, text(&m));
+                        for (i, part) in objects.chunks(SNAPSHOT_PART).enumerate() {
+                            let m = json!({"type": "journaline", "sid": sid, "scids": scids, "objects": part, "all": i == 0});
+                            self.hub.send(client, text(&m));
+                        }
                     }
                 }
                 if traffic == Some(true) {
                     let events: Vec<_> = side.map_or(&self.tpeg, |s| &s.tpeg).values().collect();
-                    self.hub.send(client, text(&json!({"type": "tpeg", "events": events, "all": true})));
+                    if events.is_empty() {
+                        self.hub.send(client, text(&json!({"type": "tpeg", "events": events, "all": true})));
+                    }
+                    for (i, part) in events.chunks(SNAPSHOT_PART).enumerate() {
+                        self.hub.send(client, text(&json!({"type": "tpeg", "events": part, "all": i == 0})));
+                    }
                 }
                 self.update_decoding();
             }
@@ -635,9 +654,15 @@ impl Radio {
                         let p = r.finish();
                         log::info!("raw recording stopped: {}", p.display());
                     }
-                } else if self.eti_input.is_some() || self.dongle_active() || matches!(self.input, DeviceConfig::RawFile { .. }) {
+                } else if self.eti_input.is_some()
+                    || self.dongle_active()
+                    || matches!(self.input, DeviceConfig::RawFile { .. })
+                    || self.device.status().headerless
+                {
                     // (a stream, a recording of ETI or the DTR-100: no IQ samples to
-                    // record; a file played as the tuner: its bytes are not handed out again)
+                    // record; a file played as the tuner: its bytes are not handed out
+                    // again; an rtl_tcp server without its header: maybe not a tuner
+                    // at all, but any service of the server's network)
                     self.notice(client, "warning", "raw_unavailable");
                 } else if self.raw_recorder.lock().is_none() {
                     let seconds = msg["seconds"].as_u64().unwrap_or(60).clamp(1, 3600) as u32;

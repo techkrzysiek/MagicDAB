@@ -1099,18 +1099,18 @@ async fn audio_socket_handler(
     }
     let Ok(sid) = u32::from_str_radix(&sid, 16) else { return StatusCode::NOT_FOUND.into_response() };
     let address = client_addr(&headers, addr);
-    if state.hub.taps.sockets() >= AUDIO_SOCKETS_MAX {
-        return (StatusCode::TOO_MANY_REQUESTS, "too many connections\n").into_response();
-    }
-    let rx = state.hub.taps.subscribe(sid);
+    let mut tap = match state.hub.taps.subscribe(sid, address) {
+        Ok(t) => t,
+        Err(hub::TapRefused::Unknown) => return StatusCode::NOT_FOUND.into_response(),
+        Err(hub::TapRefused::Busy) => return (StatusCode::TOO_MANY_REQUESTS, "too many connections\n").into_response(),
+    };
     log::debug!("audio socket: {sid:04X} to {address}");
     ws.max_message_size(4096).on_upgrade(move |socket| async move {
         use futures_util::{SinkExt, StreamExt};
         let (mut out, mut incoming) = socket.split();
-        let mut rx = rx;
         loop {
             tokio::select! {
-                frame = rx.recv() => match frame {
+                frame = tap.rx().recv() => match frame {
                     Ok(f) => {
                         if out.send(Message::Binary(axum::body::Bytes::from(f.as_ref().clone()))).await.is_err() {
                             break;
@@ -1128,9 +1128,6 @@ async fn audio_socket_handler(
         }
     })
 }
-
-/// Sockets of /audio at once (a proxy needs one per station it passes on).
-const AUDIO_SOCKETS_MAX: usize = 256;
 
 async fn ws_handler(
     ws: WebSocketUpgrade,

@@ -341,6 +341,12 @@ struct ServiceState {
 const ENC_ZLIB: u8 = 107;
 /// Uncompressed service frames are at most 8 kB; anything far larger is not TPEG.
 const INFLATE_LIMIT: u64 = 256 << 10;
+/// Messages kept per component at most (above it the one that expires first
+/// goes), services of SNI kept, and how far ahead an expiry time is taken:
+/// a hostile stream would otherwise keep everything it sends for ever.
+const MAX_EVENTS: usize = 2000;
+const MAX_SERVICES: usize = 32;
+const MAX_AHEAD: u64 = 48 * 3600;
 const AID_SNI: u16 = 0;
 const AID_TEC: u16 = 5;
 
@@ -597,6 +603,9 @@ impl TpegDecoder {
             return false;
         }
         let body = &data[..data.len() - 2];
+        if self.services.len() >= MAX_SERVICES && !self.services.contains_key(&sid) {
+            return false;
+        }
         let svc = self.services.entry(sid).or_default();
         let mut r = Reader::new(&body[1..]);
         let mut n = 0u64;
@@ -671,8 +680,11 @@ impl TpegDecoder {
             }
             return;
         }
-        if self.now.is_some_and(|now| ev.expires < now) {
-            return;
+        if let Some(now) = self.now {
+            if ev.expires < now {
+                return;
+            }
+            ev.expires = ev.expires.min(now + MAX_AHEAD);
         }
         ev.key = key.to_string();
         ev.sid = sid_text(key.sid);
@@ -683,6 +695,12 @@ impl TpegDecoder {
             if same {
                 (old.expires, old.generated, old.priority) = (ev.expires, ev.generated, ev.priority);
                 return;
+            }
+        }
+        if self.events.len() >= MAX_EVENTS && !self.events.contains_key(&key) {
+            if let Some(first) = self.events.iter().min_by_key(|(_, e)| e.expires).map(|(k, _)| *k) {
+                self.events.remove(&first);
+                self.changed.insert(first);
             }
         }
         self.events.insert(key, ev);

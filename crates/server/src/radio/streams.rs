@@ -35,7 +35,10 @@ impl Radio {
         // (not from the multiplexes a scan passes)
         if self.streams_policy_at.elapsed() >= Duration::from_secs(1) && self.scan.is_none() {
             self.streams_policy_at = Instant::now();
-            self.streams.set_policy(self.streams_policy());
+            let policy = self.streams_policy();
+            // (/audio/<SId> only for the stations of this multiplex)
+            self.hub.taps.set_stations(policy.stations.keys().copied().collect());
+            self.streams.set_policy(policy);
         }
         self.streams_quiet();
     }

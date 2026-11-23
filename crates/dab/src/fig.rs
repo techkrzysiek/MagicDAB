@@ -72,6 +72,10 @@ impl Seen {
     }
 }
 
+/// Services of a multiplex kept at most (a real one has a few dozen): a
+/// hostile stream cannot fill the memory with made-up ones.
+const MAX_SERVICES: usize = 256;
+
 #[derive(Default)]
 pub struct FigParser {
     pub ensemble: Ensemble,
@@ -369,6 +373,9 @@ impl FigParser {
                 }
                 self.pending_svc.remove(&sid);
                 self.gone.remove(&sid);
+            }
+            if self.ensemble.services.len() >= MAX_SERVICES && !self.ensemble.services.contains_key(&sid) {
+                continue;
             }
             let svc = self.ensemble.services.entry(sid).or_insert_with(|| Service { sid, is_data: pd, ..Default::default() });
             // the entry lists every component of the service: one that is not in it
@@ -1031,6 +1038,9 @@ impl FigParser {
                     if self.gone.contains(&sid) {
                         return;
                     }
+                    if self.ensemble.services.len() >= MAX_SERVICES && !self.ensemble.services.contains_key(&sid) {
+                        return;
+                    }
                     self.svc_seen.entry(sid).or_insert(Seen::new(self.fibs));
                     let svc = self.ensemble.services.entry(sid).or_insert_with(|| Service { sid, ..Default::default() });
                     if svc.label.as_ref() != Some(&l) {
@@ -1068,6 +1078,9 @@ impl FigParser {
                 let sid = u32be(body, 0);
                 if let Some(l) = label_at(4) {
                     if self.gone.contains(&sid) {
+                        return;
+                    }
+                    if self.ensemble.services.len() >= MAX_SERVICES && !self.ensemble.services.contains_key(&sid) {
                         return;
                     }
                     self.svc_seen.entry(sid).or_insert(Seen::new(self.fibs));

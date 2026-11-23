@@ -4,6 +4,7 @@ import { TriangleAlert } from 'lucide-react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
 import { setSubscriptions } from '../ws'
+import { esc } from '../components/common'
 import type { TrafficEvent } from '../types'
 
 /** Colour of a message on the map and in the list: closed roads red, accidents
@@ -195,7 +196,8 @@ export default function TrafficView() {
       const color = tone(e)
       const weight = e.key === sel ? 9 : 5
       const shape = pts.length > 1 ? L.polyline(pts, { color, weight, opacity: 0.85 }) : L.circleMarker(pts[0], { color, radius: e.key === sel ? 9 : 6, fillOpacity: 0.85 })
-      shape.bindTooltip(`${title(e)}${e.effect ? `, ${e.effect.name}` : ''}`)
+      // (a tooltip is HTML: the text escaped)
+      shape.bindTooltip(esc(`${title(e)}${e.effect ? `, ${e.effect.name}` : ''}`))
       shape.on('click', (ev) => {
         L.DomEvent.stopPropagation(ev)
         setSel((cur) => (cur === e.key ? null : e.key))

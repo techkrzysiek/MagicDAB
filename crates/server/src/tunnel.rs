@@ -185,6 +185,7 @@ impl Tunnel {
                 // (stderr straight to ours: a pipe nobody reads would stop frpc once full)
                 let mut cmd = Command::new(&frpc);
                 cmd.arg("-c").arg(&conf).stdout(Stdio::piped()).stderr(Stdio::inherit());
+                bare_env(&mut cmd);
                 leftovers::die_with_us(&mut cmd);
                 // no console window of its own on top of the program's (Windows)
                 #[cfg(windows)]
@@ -279,11 +280,30 @@ impl Drop for Tunnel {
     }
 }
 
+impl TunnelConfig {
+    /// Fields frpc can take as they are: frpc renders its configuration as a
+    /// Go template before it reads the TOML, so `{{ .Envs.NAME }}` in any of
+    /// them would put a variable of the program's environment into the server
+    /// address, the log and the tunnel's state.
+    pub fn check(&self) -> Result<(), &'static str> {
+        let host_ok = self.host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']'));
+        let subdomain_ok = self.subdomain.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        let plain = |v: &str| !v.chars().any(|c| c == '{' || c == '}' || c.is_control());
+        if host_ok && subdomain_ok && plain(&self.username) && plain(&self.token) {
+            Ok(())
+        } else {
+            Err("tunnel_invalid")
+        }
+    }
+}
+
 fn toml_str(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn write_config(path: &Path, c: &TunnelConfig, port: u16) -> std::io::Result<()> {
+    // (settings saved before the check came in)
+    c.check().map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     let mut s =
         format!("serverAddr = {}\nserverPort = {}\nloginFailExit = false\nlog.disablePrintColor = true\n", toml_str(&c.host), c.port);
     if !c.username.is_empty() {
@@ -301,6 +321,17 @@ fn write_config(path: &Path, c: &TunnelConfig, port: u16) -> std::io::Result<()>
     );
     // (only its user reads it, from its first byte: the tunnel's token is in it)
     crate::config::write_private(path, s.as_bytes())
+}
+
+/// frpc gets none of the program's environment (its template could read it:
+/// TunnelConfig::check), only what it needs to run.
+fn bare_env(cmd: &mut Command) {
+    cmd.env_clear();
+    for name in ["PATH", "SystemRoot", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR"] {
+        if let Some(v) = std::env::var_os(name) {
+            cmd.env(name, v);
+        }
+    }
 }
 
 fn exe_name() -> &'static str {
@@ -339,6 +370,7 @@ fn downloaded_before(frpc: &Path, data_dir: &Path) -> bool {
 fn version_of(frpc: &Path) -> Option<String> {
     let mut cmd = Command::new(frpc);
     cmd.arg("--version").stdin(Stdio::null()).stderr(Stdio::null());
+    bare_env(&mut cmd);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

@@ -243,6 +243,9 @@ fn put_files(dir: &std::path::Path, files: Vec<(String, Vec<u8>)>) -> Result<(),
             written.push(target);
         }
     }
+    // what the next start cleans up after (cleanup): only these, nothing else of the folder
+    let list: Vec<String> = written.iter().filter_map(|t| t.strip_prefix(dir).ok()).map(|r| r.to_string_lossy().into_owned()).collect();
+    let _ = std::fs::write(dir.join(UPDATE_LIST), list.join("\n"));
     // then the swap, only renames (a running program and its DLLs can be renamed)
     let mut swapped: Vec<PathBuf> = Vec::new();
     for target in &written {
@@ -473,18 +476,24 @@ mod predecessor {
     }
 }
 
-/// Remove the files replaced by the last update.
+/// The files the last update put into the program folder (put_files).
+const UPDATE_LIST: &str = ".magicdab-update";
+
+/// Remove the files replaced by the last update (".new": an install that was
+/// interrupted): those of its list and the program's own, nothing else (the
+/// program may have been copied into a folder of other programs).
 pub fn cleanup() {
-    let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())) else { return };
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            // (".new": an install that was interrupted)
-            let name = e.file_name().to_string_lossy().to_string();
-            if name.ends_with(".old") || name.ends_with(".new") {
-                let _ = std::fs::remove_file(e.path());
-            }
-        }
+    let Some(exe) = std::env::current_exe().ok() else { return };
+    let Some(dir) = exe.parent().map(|d| d.to_path_buf()) else { return };
+    let list = dir.join(UPDATE_LIST);
+    let mut files: Vec<PathBuf> =
+        std::fs::read_to_string(&list).unwrap_or_default().lines().filter_map(package_path).map(|rel| dir.join(rel)).collect();
+    files.push(exe.clone());
+    for f in files {
+        let _ = std::fs::remove_file(with_suffix(&f, ".old"));
+        let _ = std::fs::remove_file(with_suffix(&f, ".new"));
     }
+    let _ = std::fs::remove_file(list);
 }
 
 /// All files of a zip archive (stored or deflated).

@@ -54,6 +54,28 @@ fn capped(mut text: String) -> String {
     text
 }
 
+/// One entry of the log stays one: control characters become spaces, and a
+/// new line stays only when what follows is indented (a continuation, like
+/// the stack of a page's error). Nothing a listener sends (a chat message,
+/// why a page closed, a label from the air) reads as a line of its own.
+fn one_entry(text: String) -> String {
+    if !text.chars().any(|c| c.is_control()) {
+        return text;
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\n' && chars.peek() == Some(&' ') {
+            out.push('\n');
+        } else if c.is_control() {
+            out.push(' ');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Write the log into `path` too; before `init`.
 pub fn to_file(path: std::path::PathBuf) {
     if let Some(dir) = path.parent() {
@@ -98,7 +120,7 @@ impl log::Log for Logger {
             time: crate::localtime::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             level: record.level().to_string(),
             target: record.target().split("::").last().unwrap_or("").to_string(),
-            message: capped(record.args().to_string()),
+            message: capped(one_entry(record.args().to_string())),
         };
         let text = format!("{} {:5} [{}] {}", line.time, line.level, line.target, line.message);
         match STDERR.get() {
@@ -215,6 +237,14 @@ mod tests {
             ("2026-10-30 04:08:40", "INFO", "tunnel", "tunnel: online at https://x")
         );
         assert!(parse_line("(3 log lines dropped: stderr too slow)").is_none());
+    }
+
+    #[test]
+    fn an_entry_cannot_make_a_line_of_its_own() {
+        let forged = one_entry("chat: hi\n2026-11-22 23:59:59 INFO  [login] client 7 logged in as admin\r".to_string());
+        assert!(!forged.contains('\n') && !forged.contains('\r'));
+        // (a stack stays readable, its lines indented)
+        assert_eq!(one_entry("UI error: x\n    at f (a.js:1)".to_string()), "UI error: x\n    at f (a.js:1)");
     }
 
     #[test]

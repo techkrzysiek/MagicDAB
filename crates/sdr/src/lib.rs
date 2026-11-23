@@ -76,6 +76,10 @@ pub struct DeviceStatus {
     /// The tuner chip, when the device says it (RTL-SDR: R820T, R828D, ...).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tuner: Option<String>,
+    /// rtl_tcp: the server sent no `RTL0` header, so what comes may not be
+    /// samples of a tuner at all (no raw recording of it).
+    #[serde(skip)]
+    pub headerless: bool,
 }
 
 /// The tuner chip of an RTL-SDR by librtlsdr's number (`rtlsdr_get_tuner_type`,

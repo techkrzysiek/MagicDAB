@@ -393,6 +393,18 @@ impl Radio {
             self.last_audio.remove(&k);
         }
         self.decoding = set;
+        // a listener whose station is not decoded hears why, once (it would
+        // only be silence)
+        let left_out: HashSet<(u64, ServiceKey)> = self
+            .hub
+            .listeners(0)
+            .into_iter()
+            .filter(|(_, k)| !self.decoding.contains(k) && self.ensemble.services.contains_key(&k.sid))
+            .collect();
+        for &(client, _) in left_out.difference(&self.told_not_decoded) {
+            self.notice(client, "warning", "station_not_decoded");
+        }
+        self.told_not_decoded = left_out;
         let rec = self.hub.recorded_services(0);
         for k in rec.iter().filter(|k| !self.recording.contains(k)) {
             self.rx.send(RxCommand::RecordEncoded(*k, true));
