@@ -77,6 +77,10 @@ pub struct MapConfig {
     pub url: String,
     /// Public address of this server; empty: the tunnel's.
     pub public_url: String,
+    /// How the map's admin (and, when `contact_public`, its visitors) can
+    /// reach the owner: an e-mail, a Discord name, a page.
+    pub contact: String,
+    pub contact_public: bool,
     /// Our entry, issued at the first registration (its token proves it is
     /// ours); kept out of the web interface.
     pub entry: Option<Entry>,
@@ -102,7 +106,16 @@ pub fn apply(c: &mut MapConfig, v: &Value) {
     if let Some(u) = v["publicUrl"].as_str() {
         c.public_url = u.trim().trim_end_matches('/').to_string();
     }
+    if let Some(t) = v["contact"].as_str() {
+        c.contact = t.chars().filter(|c| !c.is_control()).collect::<String>().trim().chars().take(CONTACT_MAX).collect();
+    }
+    if let Some(b) = v["contactPublic"].as_bool() {
+        c.contact_public = b;
+    }
 }
+
+/// The longest contact (characters).
+const CONTACT_MAX: usize = 200;
 
 /// What the settings ask for, worked out on the radio thread.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -196,6 +209,8 @@ fn is_local(host: &str) -> bool {
 pub struct Snapshot {
     pub name: String,
     pub description: String,
+    pub contact: String,
+    pub contact_public: bool,
     pub location: Option<(f64, f64)>,
     pub tuner: &'static str,
     pub locked: bool,
@@ -275,6 +290,8 @@ impl Snapshot {
         Snapshot {
             name: s.station_name.trim().to_string(),
             description: s.description.clone(),
+            contact: s.server_map.contact.clone(),
+            contact_public: s.server_map.contact_public,
             location: s.location.as_ref().map(|l| (l.lat, l.lon)),
             tuner: match s.device {
                 DeviceConfig::RtlSdr { .. } => "rtlsdr",
@@ -370,6 +387,9 @@ pub fn payload(t: &Target, s: &Snapshot) -> Value {
     json!({
         "name": clip(name, 64),
         "description": clip(&s.description, 1000),
+        // (for the map's admin; on the public map only with contactPublic)
+        "contact": (!s.contact.is_empty()).then(|| clip(&s.contact, CONTACT_MAX)),
+        "contactPublic": s.contact_public,
         "url": t.url,
         "lat": lat,
         "lon": lon,
@@ -1793,6 +1813,7 @@ mod tests {
         assert_eq!(p["locked"], true);
         assert_eq!(p["listeners"], 3);
         assert_eq!(p["scanning"], false);
+        assert_eq!((p["contact"].clone(), p["contactPublic"].clone()), (Value::Null, json!(false)));
         assert_eq!(
             p["now"],
             json!({"channel": "12C", "eid": "6B3D", "ensemble": "MUX ONE", "service": "Radio Example", "snr": 18.4, "source": "air"})
@@ -1809,6 +1830,19 @@ mod tests {
         // nothing about the listeners but their number, no addresses
         let text = p.to_string();
         assert!(!text.contains("127.0.0.1") && !text.contains("token"));
+    }
+
+    #[test]
+    fn the_contact_is_one_line_and_short() {
+        let mut c = MapConfig::default();
+        apply(&mut c, &json!({"contact": "  owner@example.org\n\r", "contactPublic": true}));
+        assert_eq!((c.contact.as_str(), c.contact_public), ("owner@example.org", true));
+        apply(&mut c, &json!({"contact": "x".repeat(300)}));
+        assert_eq!(c.contact.chars().count(), 200);
+        let mut s = settings();
+        s.server_map.contact = "owner@example.org".into();
+        let p = payload(&Target::from_settings(&s), &Snapshot::build(&s, &public(), &list(), false));
+        assert_eq!((p["contact"].as_str(), p["contactPublic"].as_bool()), (Some("owner@example.org"), Some(false)));
     }
 
     #[test]

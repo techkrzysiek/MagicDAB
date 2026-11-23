@@ -388,7 +388,13 @@ function ServerMap() {
   const t = useT()
   const s = useStore((st) => st.settings?.settings)
   const status: ServerMapStatus | undefined = useStore((st) => st.serverMapStatus ?? st.settings?.serverMap)
-  const [f, setF] = useField('serverMap', { enabled: !!s?.serverMap?.enabled, url: s?.serverMap?.url ?? '', publicUrl: s?.serverMap?.publicUrl ?? '' })
+  const [f, setF] = useField('serverMap', {
+    enabled: !!s?.serverMap?.enabled,
+    url: s?.serverMap?.url ?? '',
+    publicUrl: s?.serverMap?.publicUrl ?? '',
+    contact: s?.serverMap?.contact ?? '',
+    contactPublic: !!s?.serverMap?.contactPublic,
+  })
   const tun = s?.tunnel
   const tunnelUrl = tun?.enabled && tun.subdomain && tun.host ? `https://${tun.subdomain}.${tun.host}` : ''
   return (
@@ -401,6 +407,12 @@ function ServerMap() {
       </Row>
       <Row label={t('map_url')}>
         <input type="text" value={f.url} placeholder={status?.defaultMap || 'https://dab.dxserver.eu'} onChange={(e) => setF({ ...f, url: e.target.value })} />
+      </Row>
+      <Row label={t('map_contact')} hint={t('map_contact_help')}>
+        <input type="text" value={f.contact} maxLength={200} placeholder="e-mail, Discord" onChange={(e) => setF({ ...f, contact: e.target.value })} />
+      </Row>
+      <Row label={t('map_contact_public')}>
+        <Toggle checked={f.contactPublic} onChange={(v) => setF({ ...f, contactPublic: v })} />
       </Row>
       <Row label={t('map_status')} wide>
         <MapStatus s={status} />
