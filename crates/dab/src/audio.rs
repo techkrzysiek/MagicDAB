@@ -26,6 +26,10 @@ pub struct AudioFormat {
 /// above +6 dBFS, up to +9.3 dBFS), and radios clip that, not drop it.
 const MAX_DECODED: f32 = 8.0;
 
+/// The levels (from, to) of the copies that conceal lost access units in a
+/// row (AudioDecoder::conceal); silence after the last.
+const CONCEAL_STEPS: [(f32, f32); 3] = [(1.0, 0.7), (0.7, 0.4), (0.4, 0.0)];
+
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioStats {
@@ -177,6 +181,13 @@ pub struct AudioDecoder {
     pad_events: Vec<PadEvent>,
     mute_frames: u32,
     fade_in: bool,
+    /// The last unit played (stereo, at `last_rate`), lost units in a row,
+    /// and what the concealment of the last one would go on with: the next
+    /// good unit crossfades from it (AudioDecoder::conceal).
+    last_good: Vec<f32>,
+    last_rate: u32,
+    lost_run: u32,
+    conceal_tail: Vec<f32>,
     /// Emit the original encoded audio (for recording).
     pub record: bool,
     /// Only PAD (DLS, slideshow) is decoded, no audio (background decoding).
@@ -207,6 +218,10 @@ impl AudioDecoder {
             pad_events: Vec::new(),
             mute_frames: 2,
             fade_in: true,
+            last_good: Vec::new(),
+            last_rate: 0,
+            lost_run: 0,
+            conceal_tail: Vec::new(),
             record: false,
             pad_only: false,
         };
@@ -271,6 +286,17 @@ impl AudioDecoder {
             self.mute_frames -= 1;
             self.stereo.iter_mut().for_each(|s| *s = 0.0);
             self.fade_in = true;
+            self.conceal_tail.clear();
+        } else if self.lost_run == 0 && !self.conceal_tail.is_empty() && self.last_rate == rate {
+            // back from a concealed unit: from what it would have gone on with
+            // into the new sound, 5 ms (no click where the two meet)
+            let k = (self.conceal_tail.len() / 2).min(self.stereo.len() / 2);
+            for i in 0..k {
+                let w = i as f32 / k as f32;
+                self.stereo[2 * i] = self.stereo[2 * i] * w + self.conceal_tail[2 * i] * (1.0 - w);
+                self.stereo[2 * i + 1] = self.stereo[2 * i + 1] * w + self.conceal_tail[2 * i + 1] * (1.0 - w);
+            }
+            self.fade_in = false;
         } else if self.fade_in {
             // smooth start after muted frames (avoids clicks)
             self.fade_in = false;
@@ -281,6 +307,58 @@ impl AudioDecoder {
                 self.stereo[2 * i + 1] *= g;
             }
         }
+        if self.lost_run == 0 {
+            self.conceal_tail.clear();
+            self.last_good.clear();
+            self.last_good.extend_from_slice(&self.stereo);
+            self.last_rate = rate;
+        }
+        self.resample_out(rate, out);
+    }
+
+    /// A lost access unit of `frames` samples at `rate`, concealed: the last
+    /// good unit played again, backwards, forwards, backwards (each copy goes
+    /// on from where the sound stopped, without a click) and fading out over
+    /// the three (CONCEAL_STEPS), silence after. Units are lost one at a time
+    /// or a superframe (2 to 6 units) at once at a weak signal; that is then a
+    /// dip in the sound, not a hole with a click at its start.
+    fn conceal(&mut self, rate: u32, frames: usize, out: &mut Vec<ServiceEvent>) {
+        self.lost_run += 1;
+        let usable = self.mute_frames == 0
+            && self.last_rate == rate
+            && self.last_good.len() == frames * 2
+            && self.lost_run as usize <= CONCEAL_STEPS.len();
+        if !usable {
+            self.conceal_tail.clear();
+            self.pcm.extend(std::iter::repeat_n(0.0, frames * 2));
+            self.emit_pcm(rate, 2, out);
+            self.fade_in = true;
+            return;
+        }
+        let backwards = self.lost_run % 2 == 1;
+        let (g0, g1) = CONCEAL_STEPS[self.lost_run as usize - 1];
+        self.stereo.clear();
+        for i in 0..frames {
+            let j = if backwards { frames - 1 - i } else { i };
+            let g = g0 + (g1 - g0) * i as f32 / frames as f32;
+            self.stereo.push(self.last_good[2 * j] * g);
+            self.stereo.push(self.last_good[2 * j + 1] * g);
+        }
+        // what would come after this copy: the unit the other way round
+        self.conceal_tail.clear();
+        if g1 > 0.0 {
+            let k = (rate as usize / 200).min(frames);
+            for i in 0..k {
+                let j = if backwards { i } else { frames - 1 - i };
+                self.conceal_tail.push(self.last_good[2 * j] * g1);
+                self.conceal_tail.push(self.last_good[2 * j + 1] * g1);
+            }
+        }
+        self.fade_in = g1 == 0.0;
+        self.resample_out(rate, out);
+    }
+
+    fn resample_out(&mut self, rate: u32, out: &mut Vec<ServiceEvent>) {
         let need_new = !matches!(&self.resampler, Some((r, _)) if *r == rate);
         if need_new {
             self.resampler = Some((rate, Resampler::new(rate, OUTPUT_RATE)));
@@ -396,14 +474,12 @@ impl AudioDecoder {
                 };
                 out.push(ServiceEvent::Format(self.format.clone()));
             }
+            // (a superframe is 120 ms)
+            let samples = fmt.sample_rate() as usize * 120 / 1000 / fmt.num_aus();
             if !ok {
-                // Conceal with silence of the access unit's duration (a superframe is
-                // 120 ms): a continuous timeline keeps the players from running dry
-                // and re-buffering. The next good unit fades in.
-                let samples = fmt.sample_rate() as usize * 120 / 1000 / fmt.num_aus();
-                self.pcm.extend(std::iter::repeat_n(0.0, samples * 2));
-                self.emit_pcm(fmt.sample_rate(), 2, out);
-                self.fade_in = true;
+                // Concealed for the access unit's duration: a continuous timeline
+                // keeps the players from running dry and re-buffering.
+                self.conceal(fmt.sample_rate(), samples, out);
                 continue;
             }
             if self.record {
@@ -433,15 +509,14 @@ impl AudioDecoder {
                         self.pcm.truncate(before);
                         self.stats.decode_errors += 1;
                         log::debug!("AAC: a unit decoded to {:+.1} dBFS, concealed", 20.0 * peak.log10());
-                        let samples = fmt.sample_rate() as usize * 120 / 1000 / fmt.num_aus();
-                        self.pcm.extend(std::iter::repeat_n(0.0, samples * 2));
-                        self.emit_pcm(fmt.sample_rate(), 2, out);
+                        self.conceal(fmt.sample_rate(), samples, out);
                         // (the decoder's state may be off for the next unit too)
                         self.mute_frames = self.mute_frames.max(1);
                         self.fade_in = true;
                         continue;
                     }
                     if info.channels > 0 && !self.pcm.is_empty() {
+                        self.lost_run = 0;
                         self.emit_pcm(info.sample_rate, info.channels, out);
                     }
                 }
@@ -449,6 +524,7 @@ impl AudioDecoder {
                     self.stats.decode_errors += 1;
                     self.pcm.clear();
                     log::debug!("AAC decode error: {e}");
+                    self.conceal(fmt.sample_rate(), samples, out);
                 }
                 None => {}
             }
