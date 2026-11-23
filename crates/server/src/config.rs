@@ -348,7 +348,7 @@ impl Default for Settings {
             opus_bitrate: 192_000,
             tii_mode: TiiMode::Sensitive,
             tii_log: false,
-            scan_channels: magicdab_dab::consts::BAND_III.iter().filter(|(n, _)| !n.ends_with('N')).map(|(n, _)| n.to_string()).collect(),
+            scan_channels: magicdab_dab::consts::BAND_III.iter().map(|(n, _)| n.to_string()).collect(),
             max_services: 8,
             eti_delay_ms: 1000,
             spi: true,

@@ -36,7 +36,8 @@ impl Radio {
         } else if self.settings.scan_channels.is_empty() {
             BAND_III.iter().map(|(n, _)| n.to_string()).collect()
         } else {
-            self.settings.scan_channels.clone()
+            // (a list saved before 10N, 11N and 12N were dropped may still name them)
+            self.settings.scan_channels.iter().filter(|c| magicdab_dab::consts::channel_frequency(c).is_some()).cloned().collect()
         };
         if matches!(self.settings.device, DeviceConfig::None) {
             channels = self.mapped_channels();
