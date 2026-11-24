@@ -208,7 +208,8 @@ fn main() {
                     }
                     let mux = last_signal.as_ref().map(|s: &magicdab_dab::receiver::SignalInfo| s.snr).unwrap_or(0.0);
                     if std::env::var("TIISNR").is_ok() {
-                        let own: Vec<String> = codes.iter().map(|c| format!("{}-{} {:.1}", c.main, c.sub, c.snr_db.unwrap_or(f32::NAN))).collect();
+                        let own: Vec<String> =
+                            codes.iter().map(|c| format!("{}-{} {:.1}", c.main, c.sub, c.snr_db.unwrap_or(f32::NAN))).collect();
                         let sum: f32 = codes.iter().filter_map(|c| c.snr_db).map(|v| 10f32.powf(v / 10.0)).sum();
                         println!("TII snr mux {mux:.1} own sum {:.1}: {}", 10.0 * sum.log10(), own.join(", "));
                     }
@@ -419,7 +420,10 @@ fn main() {
     }
     println!("TII codes:");
     for ((m, s), (n, lvl)) in &tii_hist {
-        let own = tii_snr.get(&(*m, *s)).map(|(k, o, x)| format!(", own SNR {:.1} dB (multiplex {:.1} dB)", o / *k as f64, x / *k as f64)).unwrap_or_default();
+        let own = tii_snr
+            .get(&(*m, *s))
+            .map(|(k, o, x)| format!(", own SNR {:.1} dB (multiplex {:.1} dB)", o / *k as f64, x / *k as f64))
+            .unwrap_or_default();
         println!("  {m}-{s}: seen {n}x level {lvl:.1} dB{own}");
     }
     println!("X-PAD MOT objects: {slides}");

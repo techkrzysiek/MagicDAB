@@ -409,7 +409,8 @@ impl Radio {
 
     /// TII heard while a DX recording runs goes into it (dxrec.rs).
     fn tii_for_dxrec(&self, pairs: &[f32]) -> Vec<u8> {
-        let codes: Vec<Value> = self.tii_codes.iter().map(|c| json!([c.main, c.sub, r1(c.level_db), r1(c.margin_db), c.snr_db.map(r1)])).collect();
+        let codes: Vec<Value> =
+            self.tii_codes.iter().map(|c| json!([c.main, c.sub, r1(c.level_db), r1(c.margin_db), c.snr_db.map(r1)])).collect();
         serde_json::to_vec(&json!({"codes": codes, "pairs": pairs.iter().map(|p| r1(*p)).collect::<Vec<_>>()})).unwrap_or_default()
     }
 

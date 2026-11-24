@@ -162,7 +162,14 @@ impl TiiDecoder {
             }
             if let Some(main) = pattern_to_main(pattern) {
                 let strength: f32 = idx[..4].iter().map(|&b| v[b]).sum::<f32>() / 4.0;
-                found.push(TiiCode { main, sub: comb as u8, level_db: 0.0, strength, margin_db: 10.0 * (fourth / noise).log10(), snr_db: None });
+                found.push(TiiCode {
+                    main,
+                    sub: comb as u8,
+                    level_db: 0.0,
+                    strength,
+                    margin_db: 10.0 * (fourth / noise).log10(),
+                    snr_db: None,
+                });
             }
         }
         if let Some(max) = found.iter().map(|c| c.strength).reduce(f32::max) {

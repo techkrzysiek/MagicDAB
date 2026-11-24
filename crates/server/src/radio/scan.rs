@@ -458,7 +458,8 @@ impl Radio {
         }
         let file = dir.join(format!("scan-{}.csv", crate::localtime::now().format("%Y-%m-%d")));
         // (the transmitter's coordinates last: columns of older files keep their places)
-        let mut out = String::from("time;channel;frequency;ueid;label;services;snr;main;sub;level;location;power;distance;azimuth;lat;lon\n");
+        let mut out =
+            String::from("time;channel;frequency;ueid;label;services;snr;main;sub;level;location;power;distance;azimuth;lat;lon\n");
         for r in &self.dx_results {
             out.push_str(&format!(
                 "{};{};{};{};{};{};{:.1};{};{};{};{};{};{};{};{};{}\n",
@@ -568,8 +569,14 @@ mod tests {
         let codes = tx[0]["tii"].as_array().unwrap();
         assert_eq!(codes.len(), 2);
         assert_eq!(codes[0]["location"], "Hill A");
-        assert_eq!((codes[0]["txLat"].as_f64(), codes[0]["txAntHeight"].as_f64(), codes[0]["power"].as_f64()), (Some(50.5), Some(256.0), Some(10.0)));
-        assert_eq!((codes[1]["location"].as_str(), codes[1]["txLat"].as_f64(), codes[1]["distance"].is_null()), (Some(""), Some(0.0), true));
+        assert_eq!(
+            (codes[0]["txLat"].as_f64(), codes[0]["txAntHeight"].as_f64(), codes[0]["power"].as_f64()),
+            (Some(50.5), Some(256.0), Some(10.0))
+        );
+        assert_eq!(
+            (codes[1]["location"].as_str(), codes[1]["txLat"].as_f64(), codes[1]["distance"].is_null()),
+            (Some(""), Some(0.0), true)
+        );
         assert_eq!(tx[1]["tii"], json!([]));
     }
 }
