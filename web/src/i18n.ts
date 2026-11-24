@@ -1,4 +1,5 @@
 import { useStore } from './store'
+import { de } from './de'
 
 const en = {
   nav_service: 'Listen',
@@ -2073,7 +2074,7 @@ const pl: Record<Key, string> = {
   stats_threads_rest: 'Pozostałe wątki razem',
 }
 
-const dicts = { en, pl }
+const dicts = { en, pl, de }
 
 export function useT() {
   const lang = useStore((s) => s.lang)
@@ -2089,8 +2090,9 @@ export function tr(k: string) {
 const weekdays = {
   en: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
   pl: ['niedziela', 'poniedziałek', 'wtorek', 'środa', 'czwartek', 'piątek', 'sobota'],
+  de: ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'],
 }
 
-export function weekday(lang: 'en' | 'pl', d: number) {
+export function weekday(lang: 'en' | 'pl' | 'de', d: number) {
   return weekdays[lang][d]
 }
