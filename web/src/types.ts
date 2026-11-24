@@ -638,6 +638,9 @@ export interface DxResult {
   location: string | null
   lat: number | null
   lon: number | null
+  /** the transmitter's site above sea level and its antenna above the ground, m */
+  altitude?: number | null
+  height?: number | null
   power: number | null
   distance: number | null
   azimuth: number | null

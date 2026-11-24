@@ -209,6 +209,9 @@ pub struct DxResult {
     location: Option<String>,
     lat: Option<f64>,
     lon: Option<f64>,
+    /// The transmitter's site above sea level and its antenna above the ground, m.
+    altitude: Option<f64>,
+    height: Option<f64>,
     power: Option<f32>,
     distance: Option<f64>,
     azimuth: Option<f64>,

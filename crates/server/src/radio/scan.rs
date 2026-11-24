@@ -114,7 +114,7 @@ impl Radio {
         }
         if scan.dx.is_some() {
             log::info!("DX scan stopped: {} results", self.dx_results.len());
-            self.save_dx_csv();
+            self.save_dx_logs(scan.started);
         } else {
             log::info!("band scan finished: {} ensembles", scan.found);
             self.service_list.save(&self.data_dir);
@@ -329,7 +329,8 @@ impl Radio {
                     return;
                 }
                 scan.index = 0;
-                self.save_dx_csv();
+                let started = scan.started;
+                self.save_dx_logs(started);
             }
             let scan = self.scan.as_mut().unwrap();
             scan.phase = ScanPhase::Settle;
@@ -398,6 +399,8 @@ impl Radio {
             location: None,
             lat: None,
             lon: None,
+            altitude: None,
+            height: None,
             power: None,
             distance: None,
             azimuth: None,
@@ -419,6 +422,8 @@ impl Radio {
                     r.location = Some(t.location.clone());
                     r.lat = Some(t.lat);
                     r.lon = Some(t.lon);
+                    r.altitude = Some(t.altitude);
+                    r.height = Some(t.height);
                     r.power = Some(t.power_kw);
                     if let Some(l) = &self.settings.location {
                         let (d, a) = distance_azimuth(l.lat, l.lon, t.lat, t.lon);
@@ -435,17 +440,28 @@ impl Radio {
         json!({"type": "dxResults", "results": self.dx_results})
     }
 
-    fn save_dx_csv(&self) {
+    /// The DX results as files in data/scanner: the CSV of the day (all results)
+    /// and the JSON log of this scan (its results, `started`: when it began).
+    fn save_dx_logs(&self, started: i64) {
         if self.dx_results.is_empty() {
             return;
         }
         let dir = self.data_dir.join("scanner");
         let _ = std::fs::create_dir_all(&dir);
+        let at = |t: i64| chrono::DateTime::from_timestamp(t, 0).map(crate::localtime::at);
+        if let Some(start) = at(started) {
+            let log = scan_log_json(&self.dx_results, started, self.settings.location.as_ref(), &|t| {
+                at(t).map(|x| x.format("%Y-%m-%d %H:%M:%S").to_string()).unwrap_or_default()
+            });
+            let file = dir.join(format!("scan-{}.json", start.format("%Y-%m-%d_%H%M%S")));
+            let _ = std::fs::write(file, serde_json::to_vec_pretty(&log).unwrap_or_default());
+        }
         let file = dir.join(format!("scan-{}.csv", crate::localtime::now().format("%Y-%m-%d")));
-        let mut out = String::from("time;channel;frequency;ueid;label;services;snr;main;sub;level;location;power;distance;azimuth\n");
+        // (the transmitter's coordinates last: columns of older files keep their places)
+        let mut out = String::from("time;channel;frequency;ueid;label;services;snr;main;sub;level;location;power;distance;azimuth;lat;lon\n");
         for r in &self.dx_results {
             out.push_str(&format!(
-                "{};{};{};{};{};{};{:.1};{};{};{};{};{};{};{}\n",
+                "{};{};{};{};{};{};{:.1};{};{};{};{};{};{};{};{};{}\n",
                 chrono::DateTime::from_timestamp(r.time, 0)
                     .map(|t| crate::localtime::at(t).format("%Y-%m-%d %H:%M:%S").to_string())
                     .unwrap_or_default(),
@@ -462,8 +478,98 @@ impl Radio {
                 r.power.map(|v| v.to_string()).unwrap_or_default(),
                 r.distance.map(|v| format!("{v:.1}")).unwrap_or_default(),
                 r.azimuth.map(|v| format!("{v:.1}")).unwrap_or_default(),
+                r.lat.map(|v| format!("{v:.6}")).unwrap_or_default(),
+                r.lon.map(|v| format!("{v:.6}")).unwrap_or_default(),
             ));
         }
         let _ = std::fs::write(file, out);
+    }
+}
+
+/// The JSON log of a DX scan: its receptions from `started` on, each with the
+/// TII codes found and their transmitters from the list (the layout other DX
+/// tools read: per transmitter "txLat"/"txLon", "rx" for the receiver; no
+/// coordinates are 0, as there). `time`: local time as text.
+fn scan_log_json(results: &[DxResult], started: i64, rx: Option<&crate::config::Location>, time: &dyn Fn(i64) -> String) -> Value {
+    let mut tx: Vec<Value> = Vec::new();
+    let mut last: Option<(i64, &str, &str)> = None;
+    for r in results.iter().filter(|r| r.time >= started) {
+        let key = (r.time, r.channel.as_str(), r.ueid.as_str());
+        if last != Some(key) {
+            last = Some(key);
+            tx.push(json!({
+                "timestamp": time(r.time), "frequency": r.frequency, "ueid": r.ueid, "label": r.label,
+                "snr": r.snr, "numServices": r.services, "channel": r.channel, "tii": [],
+            }));
+        }
+        let (Some(main), Some(sub)) = (r.main, r.sub) else { continue };
+        if let Some(Value::Array(codes)) = tx.last_mut().map(|t| &mut t["tii"]) {
+            codes.push(json!({
+                "main": main, "sub": sub, "level": r.level,
+                "location": r.location.clone().unwrap_or_default(), "power": r.power.unwrap_or(0.0),
+                "txLat": r.lat.unwrap_or(0.0), "txLon": r.lon.unwrap_or(0.0),
+                "txAlt": r.altitude.unwrap_or(0.0), "txAntHeight": r.height.unwrap_or(0.0),
+                "distance": r.distance, "azimuth": r.azimuth,
+            }));
+        }
+    }
+    json!({
+        "jsonVersion": 1,
+        "application": {"name": "MagicDAB", "version": VERSION},
+        "created": time(now()),
+        "scanStartTime": time(started),
+        "utc": false,
+        "data": {"rx": {"lat": rx.map(|l| l.lat), "lon": rx.map(|l| l.lon), "alt": 0}, "tx": tx},
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(time: i64, code: Option<(u8, u8)>, location: Option<&str>) -> DxResult {
+        DxResult {
+            time,
+            channel: "11B".into(),
+            frequency: 218640,
+            ueid: "E01F35".into(),
+            eid: 0x1F35,
+            label: "Example".into(),
+            services: 12,
+            snr: 12.8,
+            main: code.map(|c| c.0),
+            sub: code.map(|c| c.1),
+            level: code.map(|_| -3.1),
+            location: location.map(str::to_string),
+            lat: location.map(|_| 50.5),
+            lon: location.map(|_| 20.5),
+            altitude: location.map(|_| 420.0),
+            height: location.map(|_| 256.0),
+            power: location.map(|_| 10.0),
+            distance: location.map(|_| 79.9),
+            azimuth: location.map(|_| 75.3),
+            country: None,
+        }
+    }
+
+    #[test]
+    fn a_scan_log_has_its_receptions_with_their_transmitters() {
+        let results = [row(900, None, None), row(1000, Some((7, 1)), Some("Hill A")), row(1000, Some((7, 2)), None), row(1100, None, None)];
+        let rx = crate::config::Location { lat: 50.0, lon: 20.0 };
+        let log = scan_log_json(&results, 1000, Some(&rx), &|t| format!("t{t}"));
+        assert_eq!(log["scanStartTime"], "t1000");
+        assert_eq!(log["data"]["rx"], json!({"lat": 50.0, "lon": 20.0, "alt": 0}));
+        let tx = log["data"]["tx"].as_array().unwrap();
+        // (the reception before the scan is not in it; one entry per reception)
+        assert_eq!(tx.len(), 2);
+        assert_eq!(tx[0]["timestamp"], "t1000");
+        assert_eq!(tx[0]["ueid"], "E01F35");
+        assert_eq!(tx[0]["numServices"], 12);
+        let codes = tx[0]["tii"].as_array().unwrap();
+        assert_eq!(codes.len(), 2);
+        assert_eq!(codes[0]["location"], "Hill A");
+        assert_eq!((codes[0]["txLat"].as_f64(), codes[0]["txAntHeight"].as_f64(), codes[0]["power"].as_f64()), (Some(50.5), Some(256.0), Some(10.0)));
+        assert_eq!((codes[1]["location"].as_str(), codes[1]["txLat"].as_f64(), codes[1]["distance"].is_null()), (Some(""), Some(0.0), true));
+        assert_eq!(tx[1]["tii"], json!([]));
     }
 }

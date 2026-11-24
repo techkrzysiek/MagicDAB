@@ -74,11 +74,45 @@ export default function DxScanner() {
 
   const csv = () =>
     [
-      'Time;Channel;Frequency;UEID;Label;Services;SNR;Main;Sub;Level;Location;Power;Distance;Azimuth',
+      'Time;Channel;Frequency;UEID;Label;Services;SNR;Main;Sub;Level;Location;Power;Distance;Azimuth;Latitude;Longitude',
       ...results.map((r) =>
-        [new Date(r.time * 1000).toISOString(), r.channel, r.frequency, r.ueid, r.label, r.services, r.snr, r.main ?? '', r.sub ?? '', r.level ?? '', r.location ?? '', r.power ?? '', r.distance ?? '', r.azimuth ?? ''].join(';'),
+        [new Date(r.time * 1000).toISOString(), r.channel, r.frequency, r.ueid, r.label, r.services, r.snr, r.main ?? '', r.sub ?? '', r.level ?? '', r.location ?? '', r.power ?? '', r.distance ?? '', r.azimuth ?? '', r.lat ?? '', r.lon ?? ''].join(';'),
       ),
     ].join('\n')
+
+  // (the layout other DX tools read: one entry per reception with its TII codes,
+  // the transmitters' coordinates, 0 where unknown; times in UTC)
+  const json = () => {
+    const utc = (t: number) => new Date(t * 1000).toISOString().slice(0, 19).replace('T', ' ')
+    const tx: Record<string, unknown>[] = []
+    let last = ''
+    for (const r of [...results].sort((a, b) => a.time - b.time)) {
+      const key = `${r.time}/${r.channel}/${r.ueid}`
+      if (key !== last) {
+        last = key
+        tx.push({ timestamp: utc(r.time), frequency: r.frequency, ueid: r.ueid, label: r.label, snr: r.snr, numServices: r.services, channel: r.channel, tii: [] })
+      }
+      if (r.main === null || r.sub === null) continue
+      ;(tx[tx.length - 1].tii as unknown[]).push({
+        main: r.main, sub: r.sub, level: r.level, location: r.location ?? '', power: r.power ?? 0,
+        txLat: r.lat ?? 0, txLon: r.lon ?? 0, txAlt: r.altitude ?? 0, txAntHeight: r.height ?? 0,
+        distance: r.distance, azimuth: r.azimuth,
+      })
+    }
+    const loc = hello?.location
+    return JSON.stringify(
+      {
+        jsonVersion: 1,
+        application: { name: 'MagicDAB', version: hello?.version ?? '' },
+        created: utc(Date.now() / 1000),
+        scanStartTime: results.length ? utc(Math.min(...results.map((r) => r.time))) : utc(Date.now() / 1000),
+        utc: true,
+        data: { rx: { lat: loc?.lat ?? null, lon: loc?.lon ?? null, alt: 0 }, tx },
+      },
+      null,
+      2,
+    )
+  }
 
   const running = scan?.dx
   return (
@@ -137,6 +171,9 @@ export default function DxScanner() {
         <span style={{ flex: 1 }} />
         <button className="btn" disabled={!results.length} onClick={() => downloadText('magicdab-dx.csv', csv())}>
           {t('export_csv')}
+        </button>
+        <button className="btn" disabled={!results.length} onClick={() => downloadText('magicdab-dx.json', json(), 'application/json')}>
+          {t('export_json')}
         </button>
         <button className="btn" disabled={!results.length} onClick={() => send({ type: 'dxScan', action: 'clear' })}>
           {t('clear')}
