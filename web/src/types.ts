@@ -581,6 +581,8 @@ export interface TiiCode {
   code: string
   level: number
   margin: number
+  /** Own SNR from its TII carriers (null in older DX recordings). */
+  snr?: number | null
   tx: Transmitter | null
   distance: number | null
   azimuth: number | null
@@ -676,6 +678,8 @@ export interface ChangeReport {
 export interface ChangeReportTx {
   code: string
   level: number
+  /** Own SNR from its TII carriers (missing in older reports). */
+  snr?: number
   location: string | null
   country: string | null
   distance: number | null

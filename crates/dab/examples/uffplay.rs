@@ -126,6 +126,8 @@ fn main() {
     let mut wav_data: Vec<i16> = Vec::new();
     let mut last_signal = None;
     let mut tii_hist: BTreeMap<(u8, u8), (u32, f32)> = BTreeMap::new();
+    // own SNR from TII next to the multiplex SNR, per code: (n, sum own, sum mux)
+    let mut tii_snr: BTreeMap<(u8, u8), (u32, f64, f64)> = BTreeMap::new();
     let mut stats = BTreeMap::new();
     let mut stat_series: Vec<(u64, magicdab_dab::audio::AudioStats)> = Vec::new();
     let mut formats = BTreeMap::new();
@@ -204,10 +206,22 @@ fn main() {
                         let row: Vec<String> = pairs.iter().map(|p| format!("{:.0}", 10.0 * (p / med).log10())).collect();
                         println!("TII pairs dB over median: {}", row.join(" "));
                     }
+                    let mux = last_signal.as_ref().map(|s: &magicdab_dab::receiver::SignalInfo| s.snr).unwrap_or(0.0);
+                    if std::env::var("TIISNR").is_ok() {
+                        let own: Vec<String> = codes.iter().map(|c| format!("{}-{} {:.1}", c.main, c.sub, c.snr_db.unwrap_or(f32::NAN))).collect();
+                        let sum: f32 = codes.iter().filter_map(|c| c.snr_db).map(|v| 10f32.powf(v / 10.0)).sum();
+                        println!("TII snr mux {mux:.1} own sum {:.1}: {}", 10.0 * sum.log10(), own.join(", "));
+                    }
                     for c in codes {
                         let e = tii_hist.entry((c.main, c.sub)).or_insert((0, 0.0));
                         e.0 += 1;
                         e.1 = c.level_db;
+                        if let Some(v) = c.snr_db {
+                            let e = tii_snr.entry((c.main, c.sub)).or_insert((0, 0.0, 0.0));
+                            e.0 += 1;
+                            e.1 += v as f64;
+                            e.2 += mux as f64;
+                        }
                     }
                 }
                 RxEvent::XpadObject { key, app_type, object } => {
@@ -405,7 +419,8 @@ fn main() {
     }
     println!("TII codes:");
     for ((m, s), (n, lvl)) in &tii_hist {
-        println!("  {m}-{s}: seen {n}x level {lvl:.1} dB");
+        let own = tii_snr.get(&(*m, *s)).map(|(k, o, x)| format!(", own SNR {:.1} dB (multiplex {:.1} dB)", o / *k as f64, x / *k as f64)).unwrap_or_default();
+        println!("  {m}-{s}: seen {n}x level {lvl:.1} dB{own}");
     }
     println!("X-PAD MOT objects: {slides}");
     // statistics in a signal time window (frames of 96 ms)

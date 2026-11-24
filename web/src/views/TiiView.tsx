@@ -6,10 +6,12 @@ import { ViewHeader, esc } from '../components/common'
 import { kw, mhz } from '../util'
 import type { TiiCode } from '../types'
 
-// A transmitter's own signal: the SNR of the multiplex plus its TII level
-// (against the strongest, 0 dB), coloured with the SNR thresholds of the
-// signal bars (below 7 dB weak, below 10 dB fair, from 10 dB good); white
-// with a grey rim: known but not heard now (a layer of its own, to hide).
+// A transmitter's own signal: the SNR the server measures on its TII carriers
+// (older DX recordings: the SNR of the multiplex plus its TII level, which
+// gives the signal of a transmitter without TII to the strongest code),
+// coloured with the SNR thresholds of the signal bars (below 7 dB weak, below
+// 10 dB fair, from 10 dB good); white with a grey rim: known but not heard now
+// (a layer of its own, to hide).
 function cssColor(name: string, fallback: string) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
   return v || fallback
@@ -35,6 +37,8 @@ function levelColor(est: number | null) {
 interface Row {
   code: string
   level: number | null
+  /** Own SNR (server), null where not measured. */
+  own: number | null
   distance: number | null
   azimuth: number | null
   location: string
@@ -113,6 +117,7 @@ export default function TiiView() {
       out.push({
         code: c.code,
         level: now ? now.level : null,
+        own: now && typeof now.snr === 'number' ? now.snr : null,
         distance: c.distance,
         azimuth: c.azimuth,
         location: c.tx?.location ?? '',
@@ -132,6 +137,19 @@ export default function TiiView() {
     })
     return sorted
   }, [seen, tii, sortKey])
+
+  const rowSnr = (r: Row) => (r.own !== null ? r.own : txSnr(snr, r.level))
+
+  // The signal no code explains: the multiplex' SNR less the transmitters heard
+  // (power sum of their own SNR), shown when it is over half of it, i.e. a
+  // transmitter sends no TII (or its code is too weak to be found).
+  const hidden = useMemo(() => {
+    if (snr === null || snr < 8 || !tii) return null
+    if (tii.codes.some((c) => typeof c.snr !== 'number')) return null
+    const heard = tii.codes.reduce((a, c) => a + 10 ** ((c.snr as number) / 10), 0)
+    const total = 10 ** (snr / 10)
+    return heard > total / 2 ? null : 10 * Math.log10(total - heard)
+  }, [snr, tii])
 
   // the panel's height for the map controls: on a phone the panel spans the
   // map's width and the zoom and layer buttons go below it
@@ -229,14 +247,14 @@ export default function TiiView() {
             [loc.lat, loc.lon],
             [r.lat, r.lon],
           ],
-          { color: levelColor(txSnr(snr, r.level)), weight: selected === r.code ? 4 : 2, opacity: selected === r.code ? 0.95 : 0.7, interactive: false },
+          { color: levelColor(rowSnr(r)), weight: selected === r.code ? 4 : 2, opacity: selected === r.code ? 0.95 : 0.7, interactive: false },
         ).addTo(lg)
       }
     }
     for (const r of rows) {
       if (r.lat === null || r.lon === null) continue
-      // (its signal under the code: the multiplex' SNR plus its TII level)
-      const est = r.detected ? txSnr(snr, r.level) : null
+      // (its signal under the code)
+      const est = r.detected ? rowSnr(r) : null
       const db = est !== null ? `<span class="db">${est.toFixed(1)} dB</span>` : r.detected && r.level !== null ? `<span class="db">${r.level.toFixed(1)} dB</span>` : ''
       const icon = L.divIcon({
         className: '',
@@ -292,9 +310,9 @@ export default function TiiView() {
                     <td>{r.code}</td>
                     <td>{r.level !== null ? `${r.level.toFixed(1)} dB` : ''}</td>
                     <td>
-                      {txSnr(snr, r.level) !== null && (
-                        <span className="tii-snr" style={{ color: levelColor(txSnr(snr, r.level)) }}>
-                          {txSnr(snr, r.level)!.toFixed(1)} dB
+                      {rowSnr(r) !== null && (
+                        <span className="tii-snr" style={{ color: levelColor(rowSnr(r)) }}>
+                          {rowSnr(r)!.toFixed(1)} dB
                         </span>
                       )}
                     </td>
@@ -317,6 +335,11 @@ export default function TiiView() {
           <div>
             ECC: <b>{ens.eccHex ?? '-'}</b> | EID: <b>{ens.eidHex ?? '-'}</b> | TX: <b>{tii?.codes.length ?? 0}</b>
           </div>
+          {hidden !== null && (
+            <div className="tii-hidden" title={t('tii_hidden_hint')}>
+              {t('tii_hidden')}: <b>≈{hidden.toFixed(1)} dB</b>
+            </div>
+          )}
           {sel && (
             <div style={{ borderTop: '1px solid var(--divider-soft)', marginTop: 6, paddingTop: 6 }}>
               <div>

@@ -55,7 +55,7 @@ function Report({ t, r }: { t: (k: string) => string; r: ChangeReport }) {
           <span className="change-kind">TII {x.code}</span>{' '}
           {x.location ? <b>{x.location + (x.country ? ` (${x.country})` : '')}</b> : <span className="hint">{t('chg_report_unknown_tx')}</span>}
           {x.distance != null && x.azimuth != null ? `, ${x.distance.toFixed(0)} km, ${x.azimuth.toFixed(0)}°` : ''}
-          {x.powerKw ? `, ${kw(x.powerKw)} kW` : ''}, ≈{(r.snrMean + x.level).toFixed(1)} dB
+          {x.powerKw ? `, ${kw(x.powerKw)} kW` : ''}, ≈{(x.snr ?? r.snrMean + x.level).toFixed(1)} dB
         </div>
       ))}
       {r.recording && <Recording t={t} name={r.recording} />}

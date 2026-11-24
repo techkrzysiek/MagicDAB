@@ -409,7 +409,7 @@ impl Radio {
 
     /// TII heard while a DX recording runs goes into it (dxrec.rs).
     fn tii_for_dxrec(&self, pairs: &[f32]) -> Vec<u8> {
-        let codes: Vec<Value> = self.tii_codes.iter().map(|c| json!([c.main, c.sub, r1(c.level_db), r1(c.margin_db)])).collect();
+        let codes: Vec<Value> = self.tii_codes.iter().map(|c| json!([c.main, c.sub, r1(c.level_db), r1(c.margin_db), c.snr_db.map(r1)])).collect();
         serde_json::to_vec(&json!({"codes": codes, "pairs": pairs.iter().map(|p| r1(*p)).collect::<Vec<_>>()})).unwrap_or_default()
     }
 
@@ -467,6 +467,7 @@ pub(super) fn tii_view(txdb: &TxDb, loc: Option<&config::Location>, tii: &[TiiCo
                 "code": format!("{}-{}", c.main, c.sub),
                 "level": r1(c.level_db),
                 "margin": r1(c.margin_db),
+                "snr": c.snr_db.map(r1),
                 "tx": tx,
                 "distance": dist,
                 "azimuth": az,
@@ -482,7 +483,7 @@ pub(super) fn tii_view(txdb: &TxDb, loc: Option<&config::Location>, tii: &[TiiCo
     json!({"type": "tii", "codes": codes, "known": known, "eid": format!("{eid:04X}"), "frequency": frequency})
 }
 
-/// The codes as a DX recording keeps them: [main, sub, level dB, margin dB].
+/// The codes as a DX recording keeps them: [main, sub, level dB, margin dB, own SNR dB or null].
 pub(super) fn tii_codes_from(v: &Value) -> Vec<TiiCode> {
     let n = |x: &Value| x.as_f64().unwrap_or(0.0) as f32;
     v.as_array()
@@ -495,6 +496,7 @@ pub(super) fn tii_codes_from(v: &Value) -> Vec<TiiCode> {
                 level_db: n(&c[2]),
                 strength: 0.0,
                 margin_db: n(&c[3]),
+                snr_db: c.get(4).and_then(|x| x.as_f64()).map(|x| x as f32),
             })
         })
         .collect()

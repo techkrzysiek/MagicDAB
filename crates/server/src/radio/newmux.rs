@@ -29,8 +29,8 @@ pub struct Probe {
     snr_sum: f32,
     snr_max: f32,
     fib_sum: f32,
-    /// TII code -> sum of its levels, seconds it was there.
-    tii: HashMap<(u8, u8), (f32, u32)>,
+    /// TII code -> sum of its levels, seconds it was there, sum and count of its own SNR.
+    tii: HashMap<(u8, u8), (f32, u32, f32, u32)>,
     recording: Option<String>,
     discord: DiscordMsg,
 }
@@ -109,6 +109,10 @@ impl Radio {
             let e = p.tii.entry((c.main, c.sub)).or_default();
             e.0 += c.level_db;
             e.1 += 1;
+            if let Some(v) = c.snr_db {
+                e.2 += v;
+                e.3 += 1;
+            }
         }
     }
 
@@ -121,8 +125,8 @@ impl Radio {
         let mut transmitters: Vec<ReportTx> = p
             .tii
             .iter()
-            .filter(|(_, (_, k))| *k >= 3.min(p.seconds))
-            .map(|(&(main, sub), &(sum, k))| {
+            .filter(|(_, (_, k, _, _))| *k >= 3.min(p.seconds))
+            .map(|(&(main, sub), &(sum, k, own, own_n))| {
                 let tx = self.txdb.find(p.eid, p.ecc, main, sub, p.frequency);
                 let (distance, azimuth) = match (&loc, tx) {
                     (Some(l), Some(t)) => {
@@ -134,6 +138,7 @@ impl Radio {
                 ReportTx {
                     code: format!("{main}-{sub}"),
                     level: r1(sum / k as f32),
+                    snr: (own_n > 0).then(|| r1(own / own_n as f32)),
                     location: tx.map(|t| t.location.clone()),
                     country: tx.map(|t| t.country.clone()).filter(|c| !c.is_empty()),
                     distance,

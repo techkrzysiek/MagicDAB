@@ -105,6 +105,9 @@ pub struct ReportTx {
     pub code: String,
     /// Mean level against the strongest transmitter (0 dB).
     pub level: f32,
+    /// Its own mean SNR from its TII carriers (tii.rs); missing in older reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snr: Option<f32>,
     /// From the transmitter database, when it has the code.
     pub location: Option<String>,
     pub country: Option<String>,
@@ -1103,8 +1106,9 @@ fn report_lines(r: &Report, base: Option<&str>) -> Vec<String> {
         if let Some(p) = t.power_kw.filter(|p| *p > 0.0) {
             l.push_str(&format!(", {p} kW"));
         }
-        // (its own signal: the multiplex' SNR plus its TII level, as in the TII view)
-        l.push_str(&format!(", ≈{:.1} dB", r.snr_mean + t.level));
+        // (its own signal from its TII carriers; older reports: the multiplex' SNR
+        // plus its TII level, which gives a transmitter without TII to the strongest code)
+        l.push_str(&format!(", ≈{:.1} dB", t.snr.unwrap_or(r.snr_mean + t.level)));
         lines.push(l);
     }
     if r.transmitters.len() > SHOWN {
@@ -1499,6 +1503,7 @@ mod tests {
                     distance: Some(123.4),
                     azimuth: Some(250.0),
                     power_kw: Some(5.0),
+                    snr: Some(4.2),
                 },
                 ReportTx { code: "7-1".into(), level: -6.0, ..Default::default() },
             ],
@@ -1506,7 +1511,7 @@ mod tests {
         };
         let l = report_lines(&r, Some("https://rx.example.org/"));
         assert_eq!(l[0], "📶 SNR śr. 6.0 dB, max 9.5 dB przez 23 s, potem zanik, błędy FIC 2%, 🇨🇿 CZ");
-        assert_eq!(l[1], "📡 TII 5-2, 🇨🇿 Hill A, 123 km, 250°, 5 kW, ≈6.0 dB");
+        assert_eq!(l[1], "📡 TII 5-2, 🇨🇿 Hill A, 123 km, 250°, 5 kW, ≈4.2 dB");
         assert_eq!(l[2], "📡 TII 7-1, nie ma w bazie, ≈0.0 dB");
         assert_eq!(l[3], "🎙 nagranie: <https://rx.example.org/?dxrec=2026-01-02_030405_12C_1234.eti>");
         assert_eq!(l.len(), 4);
