@@ -510,7 +510,7 @@ impl Radio {
         if txdb.count > 0 {
             log::info!("transmitter database: {} entries", txdb.count);
         }
-        let device = magicdab_sdr::open(&settings.device);
+        let device = device::open_device(&settings.device, settings.ppm);
         let input = settings.device.clone();
         let rx = ReceiverHandle::start();
         rx.send(RxCommand::TiiMode(settings.tii_mode));

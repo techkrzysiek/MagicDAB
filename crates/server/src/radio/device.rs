@@ -3,6 +3,18 @@
 
 use super::*;
 
+/// The device of `config` with the frequency correction of the settings: the
+/// interface sets that one (the device's own `ppm` stays 0), so it has to be
+/// given to every device opened, not only when it changes; else a restart
+/// tuned with 0 while the settings showed the value.
+pub(super) fn open_device(config: &DeviceConfig, ppm: i32) -> Box<dyn InputDevice> {
+    let mut device = magicdab_sdr::open(config);
+    if ppm != 0 {
+        device.set_ppm(ppm);
+    }
+    device
+}
+
 impl Radio {
     pub(super) fn start_device(&mut self, freq_khz: u32) {
         let queue = self.rx.queue.clone();
@@ -56,7 +68,7 @@ impl Radio {
 
     pub(super) fn reopen_device(&mut self) {
         self.device.stop();
-        self.device = magicdab_sdr::open(&self.settings.device);
+        self.device = open_device(&self.settings.device, self.settings.ppm);
         self.input = self.settings.device.clone();
         self.device_running = false;
         self.device_error = None;
@@ -249,7 +261,7 @@ impl Radio {
                 self.device_running = false;
             }
             if self.input != self.settings.device {
-                self.device = magicdab_sdr::open(&self.settings.device);
+                self.device = open_device(&self.settings.device, self.settings.ppm);
                 self.input = self.settings.device.clone();
             }
             self.rx.set_eti_mode(true);
@@ -281,7 +293,7 @@ impl Radio {
                 if let Some(path) = &file {
                     log::info!("{channel} from recording {path}");
                 }
-                self.device = magicdab_sdr::open(&want);
+                self.device = open_device(&want, self.settings.ppm);
                 self.input = want;
                 self.device_error = None;
             }
