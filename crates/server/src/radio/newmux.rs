@@ -168,6 +168,8 @@ impl Radio {
         );
         let Some(ev) = self.changes.attach_report(p.time, &p.channel, &p.ev_eid, report) else { return };
         self.hub.broadcast_all(text(&json!({"type": "changeReport", "event": ev})));
+        // (to the map again, now with its report: the map's message waits for it)
+        self.server_map.send_changes([&ev]);
         // (the address on the map, else of the tunnel: for the link to the recording)
         let base = crate::servermap::Target::from_settings(&self.settings).url;
         changes::discord_report(&self.settings.discord_webhook, &self.settings.station_name, base.as_deref(), &ev, p.discord);

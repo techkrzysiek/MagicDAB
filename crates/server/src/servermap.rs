@@ -1632,12 +1632,16 @@ impl Worker {
 }
 
 /// A change log event as the map takes it: the log keeps the ECC in front of
-/// the EId ("E25B7A"), the map has them apart.
+/// the EId ("E25B7A"), the map has them apart. The report of a new multiplex
+/// goes along: the map's message about it has its signal. DX recordings stay
+/// at the server: their names do not go to the map.
 fn change_event(ev: &ChangeEvent) -> Option<Value> {
     let mut v = serde_json::to_value(ev).ok()?;
-    // (the report of a new multiplex is not in the contract: docs/server-map-api.md)
     if let Some(o) = v.as_object_mut() {
-        o.remove("report");
+        o.remove("recording");
+        if let Some(r) = o.get_mut("report").and_then(Value::as_object_mut) {
+            r.remove("recording");
+        }
     }
     if ev.eid.len() == 6 && ev.eid.is_ascii() {
         v["ecc"] = json!(&ev.eid[..2]);
@@ -2292,5 +2296,23 @@ mod tests {
         };
         let v = change_event(&ev).unwrap();
         assert_eq!((v["eid"].as_str(), v["ecc"].as_str()), (Some("5B7A"), Some("E2")));
+        assert!(v.get("report").is_none());
+        // (a new multiplex: its report goes along, as the map's contract names it)
+        // (without the names of DX recordings: they stay at the server)
+        let report = crate::changes::Report {
+            seconds: 57,
+            snr_mean: 21.5,
+            snr_max: 22.0,
+            country: Some("PL".into()),
+            recording: Some("2026-01-02_030405_12A_5B7A.eti".into()),
+            ..Default::default()
+        };
+        let v =
+            change_event(&ChangeEvent { report: Some(report), recording: Some("2026-01-02_030405_12A_5B7A.eti".into()), ..ev }).unwrap();
+        assert_eq!(
+            (v["report"]["seconds"].as_u64(), v["report"]["snrMean"].as_f64(), v["report"]["country"].as_str()),
+            (Some(57), Some(21.5), Some("PL"))
+        );
+        assert!(v.get("recording").is_none() && v["report"].get("recording").is_none());
     }
 }
