@@ -790,8 +790,12 @@ impl Radio {
             }
         }
         let mut changed = false;
+        let mapped = self.mapped_channels();
         for (channel, frequency, ens, snr) in due {
             changed |= self.service_list.update(&channel, frequency, &ens, snr);
+            if let (Some(eid), true) = (ens.eid, mapped.iter().any(|m| m.eq_ignore_ascii_case(&channel))) {
+                changed |= self.service_list.alone(&channel, eid);
+            }
         }
         if changed {
             self.service_list.save(&self.data_dir);

@@ -310,6 +310,9 @@ impl ServiceList {
         let name = entry.label.trim().to_lowercase();
         let count = self.ensembles.len();
         self.ensembles.retain(|e| !(e.channel == channel && e.eid != eid && e.label.trim().to_lowercase() == name));
+        // another multiplex of this channel not heard for a day leaves it (DX:
+        // muxes alternate on the air, so not at once)
+        self.ensembles.retain(|e| !(e.channel == channel && e.eid != eid && e.last_seen < now() - GONE_AFTER));
         let replaced = self.ensembles.len() != count;
         match self.ensembles.iter_mut().find(|e| e.channel == channel && e.eid == eid) {
             Some(e) => {
@@ -326,9 +329,6 @@ impl ServiceList {
                 changed
             }
             None => {
-                // a different ensemble now occupies this channel: kept for a week
-                // (DX: muxes alternate)
-                self.ensembles.retain(|e| !(e.channel == channel && e.eid != eid && e.last_seen < now() - 7 * 86400));
                 self.ensembles.push(entry);
                 self.sort();
                 true
@@ -371,6 +371,16 @@ impl ServiceList {
             std::mem::take(&mut self.ensembles).into_iter().partition(|e| e.misses >= GONE_MISSES && now - e.last_seen > GONE_AFTER);
         self.ensembles = keep;
         gone
+    }
+
+    /// The multiplex `eid` is the only one of `channel`: a channel fed by a
+    /// stream or a recording carries one multiplex, so another EId there is
+    /// gone for good, not one of the muxes that alternate on the air (kept a
+    /// day). True when the list changed.
+    pub fn alone(&mut self, channel: &str, eid: u16) -> bool {
+        let n = self.ensembles.len();
+        self.ensembles.retain(|e| !(e.channel == channel && e.eid != eid));
+        n != self.ensembles.len()
     }
 
     pub fn remove_ensemble(&mut self, channel: &str, eid: u16) -> bool {
@@ -552,14 +562,14 @@ mod tests {
         l.update("5D", 180064, &ens(0x2B02, "LOCAL"), 20.0);
         l.update("8B", 197648, &ens(0x3C03, "OTHER"), 20.0);
         let t = now();
-        for e in l.ensembles.iter_mut().filter(|e| e.eid != 0x3C03) {
+        // (an update of the local one would take it out at once: not heard for a day)
+        for e in l.ensembles.iter_mut().filter(|e| e.eid == 0x1A01) {
             e.last_seen = t - GONE_AFTER - 60;
         }
-        // the scans find only the local one on 5D (whose last time is then new)
+        // the scans find only the local one on 5D
         for _ in 0..GONE_MISSES - 1 {
             l.scanned("5D", &[0x2B02]);
         }
-        l.update("5D", 180064, &ens(0x2B02, "LOCAL"), 20.0);
         assert!(l.prune_gone(t).is_empty(), "looked for too few times");
         l.scanned("5D", &[0x2B02]);
         let gone = l.prune_gone(t);
@@ -578,5 +588,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(old.ensembles[0].misses, 0);
+    }
+
+    /// On the air another multiplex of a channel stays for a day (DX: they
+    /// alternate), on a stream it is gone at once.
+    #[test]
+    fn a_stream_keeps_only_its_multiplex() {
+        let mut l = ServiceList::default();
+        assert!(l.update("12A", 223936, &mux(), 0.0));
+        let mut other = mux();
+        other.eid = Some(0x4B6F);
+        other.label = Some(Label { text: "MUX B".into(), short: String::new() });
+        assert!(l.update("12A", 223936, &other, 0.0));
+        assert_eq!(l.ensembles.len(), 2);
+        // (heard a day ago: gone with the next update of the channel)
+        l.ensembles.iter_mut().find(|e| e.eid == 0x4B6E).unwrap().last_seen = now() - GONE_AFTER - 60;
+        let mut kept = l.clone();
+        assert!(kept.update("12A", 223936, &other, 0.0));
+        assert_eq!(kept.ensembles.iter().map(|e| e.eid).collect::<Vec<_>>(), vec![0x4B6F]);
+        assert!(l.alone("12A", 0x4B6F));
+        assert_eq!(l.ensembles.iter().map(|e| e.eid).collect::<Vec<_>>(), vec![0x4B6F]);
+        assert!(!l.alone("12A", 0x4B6F));
     }
 }

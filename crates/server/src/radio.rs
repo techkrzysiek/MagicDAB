@@ -1290,6 +1290,10 @@ impl Radio {
                 if let Some(ch) = self.channel.clone() {
                     let ens = self.dyn_labels.stable(&self.ensemble);
                     let mut changed = self.service_list.update(&ch, self.frequency, &ens, self.signal.snr);
+                    // (a stream or a recording: the multiplex it had before is gone)
+                    if let (Some(eid), true) = (ens.eid, self.mapped_channels().iter().any(|m| m.eq_ignore_ascii_case(&ch))) {
+                        changed |= self.service_list.alone(&ch, eid);
+                    }
                     // (audio decoded before the multiplex was in the list)
                     if let Some(eid) = ens.eid {
                         for (k, s) in &self.services {
