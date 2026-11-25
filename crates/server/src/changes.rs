@@ -359,10 +359,12 @@ impl ChangeTracker {
                 .map(|(k, s)| (k.clone(), s.clone()));
             // the same stations under a new EId are that multiplex renumbered;
             // others are another multiplex (an opening brings a foreign one
-            // onto the channel of a local one)
+            // onto the channel of a local one). Most of both line-ups: a new
+            // multiplex with two stations of an old one of nine is another one
+            // (a transmitter switched from a test multiplex to the real one).
             let same_stations = |ps: &Snapshot| {
                 let shared = new.services.keys().filter(|sid| ps.services.contains_key(*sid)).count();
-                shared * 2 >= new.services.len().max(1)
+                shared * 2 >= new.services.len().max(ps.services.len()).max(1)
             };
             if let Some((pk, ps)) = prev.filter(|(_, s)| s.seen > 0 && same_stations(s)) {
                 changes.push(Change {
@@ -1292,6 +1294,19 @@ mod tests {
         assert_eq!(ev.changes[0].kind, "ensembleNew");
         // the local one is still known as it was
         assert!(t.observe("12D", &ensemble(17), true, &[], &mute).is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_new_eid_with_a_few_stations_of_the_old_one_is_another_multiplex() {
+        let (mut t, dir) = tracker();
+        let mute = crate::config::NotifyMute::default();
+        t.observe("5D", &ensemble(9), true, &[], &mute);
+        // two of its nine stations under another EId: not that one renumbered
+        let mut other = ensemble(2);
+        other.eid = Some(0x6A1F);
+        let ev = t.observe("5D", &other, true, &[], &mute).expect("reported at once");
+        assert_eq!(ev.changes.iter().map(|c| c.kind.as_str()).collect::<Vec<_>>(), vec!["ensembleNew"]);
         let _ = std::fs::remove_dir_all(dir);
     }
 
