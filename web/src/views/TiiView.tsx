@@ -143,8 +143,9 @@ export default function TiiView() {
   // The signal no code explains: the multiplex' SNR less the transmitters heard
   // (power sum of their own SNR), shown when it is over half of it, i.e. a
   // transmitter sends no TII (or its code is too weak to be found).
+  // (none before the first result after a retune: the codes are still being summed)
   const hidden = useMemo(() => {
-    if (snr === null || snr < 8 || !tii) return null
+    if (snr === null || snr < 8 || !tii?.eid) return null
     if (tii.codes.some((c) => typeof c.snr !== 'number')) return null
     const heard = tii.codes.reduce((a, c) => a + 10 ** ((c.snr as number) / 10), 0)
     const total = 10 ** (snr / 10)
@@ -333,7 +334,7 @@ export default function TiiView() {
             {t('channel')}: <b>{ens.channel ?? '-'}</b> ({ens.frequency ? `${ens.frequency} kHz` : '-'})
           </div>
           <div>
-            ECC: <b>{ens.eccHex ?? '-'}</b> | EID: <b>{ens.eidHex ?? '-'}</b> | TX: <b>{tii?.codes.length ?? 0}</b>
+            ECC: <b>{ens.eccHex ?? '-'}</b> | EID: <b>{ens.eidHex ?? '-'}</b> | TX: <b>{tii?.eid ? tii.codes.length : '-'}</b>
           </div>
           {hidden !== null && (
             <div className="tii-hidden" title={t('tii_hidden_hint')}>

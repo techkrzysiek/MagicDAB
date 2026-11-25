@@ -520,7 +520,7 @@ impl Core {
     fn reset(&mut self) {
         self.fic = FicDecoder::new();
         self.figs.reset();
-        self.tii.reset();
+        self.tii.restart();
         self.services.clear();
         self.background.clear();
         self.packet_channels.clear();
@@ -777,6 +777,8 @@ impl FrameSink for Core {
         self.signal.signal = signal;
         if !synced {
             self.signal.snr = 0.0;
+            // (what was summed before is of another timing and frequency)
+            self.tii.restart();
         }
         if self.last_signal_sent.elapsed() > Duration::from_millis(250) {
             let _ = self.events.send(RxEvent::Signal(self.signal.clone()));

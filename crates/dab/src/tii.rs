@@ -12,6 +12,15 @@ use serde::{Deserialize, Serialize};
 
 pub const PAIRS: usize = 192;
 
+/// Frames left out after a retune or a loss of synchronisation. The frequency
+/// tracking takes 0.4 of the error per frame, so a fractional offset of half a
+/// carrier needs about ten frames to come under 3 Hz; before that each carrier
+/// leaks into its neighbours, and a strong transmitter came out with the codes
+/// of the combs beside its own (up to four on each side, 17 to 30 dB lower,
+/// only in the first result after tuning; a recording moved by 3.4 kHz shows
+/// it too).
+pub const SETTLE_FRAMES: usize = 10;
+
 /// 8 bit pattern (b0 = MSB) of TII main identifier 0..69.
 pub fn tii_pattern(main: u8) -> u8 {
     let mut n = 0;
@@ -71,6 +80,8 @@ pub struct TiiDecoder {
     /// Summed mean carrier power of the null symbols (the active carriers).
     null_power: f64,
     frames: usize,
+    /// Frames still to leave out (`SETTLE_FRAMES` after a restart).
+    settle: usize,
     pub integration: usize,
     pub mode: TiiMode,
     /// Last integrated pair magnitudes (192 values), for the spectrum plot.
@@ -90,6 +101,7 @@ impl TiiDecoder {
             pair_power: vec![0.0; PAIRS],
             null_power: 0.0,
             frames: 0,
+            settle: SETTLE_FRAMES,
             integration: 16,
             mode: TiiMode::Sensitive,
             last_pairs: vec![0.0; PAIRS],
@@ -103,9 +115,20 @@ impl TiiDecoder {
         self.frames = 0;
     }
 
+    /// Another signal (a retune, synchronisation regained): the frames of the
+    /// next moments are left out until the frequency has settled.
+    pub fn restart(&mut self) {
+        self.reset();
+        self.settle = SETTLE_FRAMES;
+    }
+
     /// Feed the FFT of a null symbol; returns detected codes after each integration period.
     pub fn push(&mut self, null_fft: &[Complex32]) -> Option<Vec<TiiCode>> {
         debug_assert_eq!(null_fft.len(), T_U);
+        if self.settle > 0 {
+            self.settle -= 1;
+            return None;
+        }
         const STARTS: [usize; 4] = [T_U - 768, T_U - 384, 1, 385];
         for &k in STARTS.iter() {
             for i in 0..PAIRS {
@@ -223,6 +246,22 @@ mod tests {
         }
     }
 
+    /// After a restart the first frames are left out: a result only after
+    /// the settling and a whole integration period.
+    #[test]
+    fn frames_after_a_restart_left_out() {
+        let fft = vec![Complex32::new(1.0, 0.0); T_U];
+        let mut dec = TiiDecoder::new();
+        for _ in 0..3 {
+            dec.push(&fft);
+        }
+        dec.restart();
+        for i in 0..SETTLE_FRAMES + dec.integration - 1 {
+            assert!(dec.push(&fft).is_none(), "a result at frame {i}");
+        }
+        assert!(dec.push(&fft).is_some());
+    }
+
     /// A code at a known carrier power over noise comes out with its own SNR.
     #[test]
     fn own_snr_of_a_code() {
@@ -234,7 +273,7 @@ mod tests {
         let (main, sub, tii_power) = (5u8, 3usize, 10.0f32);
         let mut dec = TiiDecoder::new();
         let mut codes = None;
-        for _ in 0..dec.integration {
+        for _ in 0..SETTLE_FRAMES + dec.integration {
             let mut fft = vec![Complex32::new(0.0, 0.0); T_U];
             for k in [T_U - 768, T_U - 384, 1, 385] {
                 for bin in k..k + 384 {
