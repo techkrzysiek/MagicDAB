@@ -168,6 +168,8 @@ struct Sweep {
     measure_from: Instant,
     until: Instant,
     best: Option<(f32, usize)>,
+    /// What the start level gave (its first measurement).
+    at_start: Option<f32>,
     max: f32,
     reports: u32,
 }
@@ -379,6 +381,12 @@ impl GainSeeker {
                     // good reception: nothing to win, a probe would be heard
                     self.learn();
                     self.phase = Phase::Wait(now + MAX_INTERVAL);
+                } else if let Some(c) = (!lowered).then(|| self.start_rise(base, room, hi, now)).flatten() {
+                    // poor reception far below what the level allows: most of the
+                    // room at once, not steps of a dB or two whose gain the noise
+                    // of a 3 s measurement hides (measured: stuck at 2.7 dB, SNR
+                    // 10.5 dB, for a signal giving 21 dB at 22.9 dB)
+                    return Some(c);
                 } else if let Some(c) = self.start_probe(base, now) {
                     return Some(c);
                 }
@@ -433,8 +441,9 @@ impl GainSeeker {
         None
     }
 
-    /// Good reception at a ceiling the gain is at, with much room left by the
-    /// level (`RISE_ROOM_DB`): the ceiling to try instead, most of the room up.
+    /// Reception (good, or poor and far from what the level allows) at a ceiling
+    /// the gain is at, with much room left by the level (`RISE_ROOM_DB`): the
+    /// ceiling to try instead, most of the room up.
     fn start_rise(&mut self, base: Quality, room: Option<f32>, gain: usize, now: Instant) -> Option<Ceiling> {
         let room = room.filter(|&r| r >= RISE_ROOM_DB)?;
         if base.snr >= RISE_BELOW_SNR || gain != self.ceiling {
@@ -548,6 +557,7 @@ impl GainSeeker {
             measure_from: now,
             until: now + SWEEP_MEASURE,
             best: None,
+            at_start: None,
             max: f32::MIN,
             reports: 0,
         });
@@ -567,6 +577,9 @@ impl GainSeeker {
             return None;
         }
         log::debug!("gain sweep: {:.1} dB -> SNR {:.1} dB", self.gains[sw.level], sw.max);
+        if sw.level == sw.start && sw.at_start.is_none() {
+            sw.at_start = Some(sw.max);
+        }
         let worse = sw.best.is_some_and(|(b, _)| b >= FOUND_SNR && sw.max < b - WORSE_DB);
         if sw.best.is_none_or(|(b, _)| sw.max > b) {
             sw.best = Some((sw.max, sw.level));
@@ -589,14 +602,27 @@ impl GainSeeker {
             sw.reports = 0;
             return Some(Ceiling { index: level, jump: true });
         }
-        let start = sw.start;
+        let (start, sw_at_start) = (sw.start, sw.at_start);
         self.sweep = None;
         self.phase = Phase::Settle(now + SETTLE);
         self.trouble_since = None;
-        if best >= FOUND_SNR {
+        // Another level only for reception clearly better than at the start: the
+        // levels are measured one after another, and a transmitter that was off
+        // (switched over, restarted) comes back at whichever level is measured
+        // then, mostly a low one, with an SNR of a few dB on its way to sync.
+        // (measured: 22.9 dB -> 0.0 dB by a sweep at SNR 2.2 dB, 21 dB lost.)
+        let at_start = sw_at_start.unwrap_or(f32::MIN);
+        if best >= FOUND_SNR && (best_level == start || best >= at_start + WORSE_DB) {
             log::info!("gain: {:.1} dB -> {:.1} dB by a sweep (SNR {best:.1} dB)", self.gains[start], self.gains[best_level]);
             self.ceiling = best_level;
             self.learn();
+        } else if best >= FOUND_SNR {
+            log::info!(
+                "gain: {:.1} dB kept, the sweep found nothing clearly better (SNR {best:.1} dB at {:.1} dB)",
+                self.gains[start],
+                self.gains[best_level]
+            );
+            self.ceiling = start;
         } else {
             log::info!("gain: no reception at any gain, back to {:.1} dB", self.gains[start]);
             self.ceiling = start;
@@ -802,6 +828,55 @@ mod tests {
             dev.agc();
         }
         (g, dev)
+    }
+
+    /// A channel learned at `learned` dB on a device whose level allows gains up
+    /// to `limit`: the SNR by the gain, or what `at(k)` says for report `k`.
+    fn run_at(learned: f32, limit: usize, seconds: u64, at: impl Fn(u64, f32) -> (bool, f32)) -> (GainSeeker, Device, f32) {
+        let mut g = GainSeeker::new();
+        g.learn_db("5D", learned);
+        let start = g.retune("5D", &GAINS).unwrap();
+        let mut dev = Device { gain: start, ceiling: start, limit, ticks: 0, changes: 0, over: 0 };
+        let t0 = Instant::now();
+        let mut lowest = f32::MAX;
+        for k in 0..seconds * 4 {
+            let (synced, snr) = at(k, GAINS[dev.gain]);
+            let null_snr = if synced { snr } else { 0.4 };
+            if let Some(c) = g.on_signal(report(synced, snr, null_snr, Some(dev.gain), dev.room()), t0 + Duration::from_millis(250 * k)) {
+                dev.apply(c);
+            }
+            dev.agc();
+            lowest = lowest.min(GAINS[g.ceiling]);
+        }
+        (g, dev, lowest)
+    }
+
+    /// A transmitter switched over (off for 6 s) while the gain was right: a
+    /// sweep in the gap must not leave the gain at a level where it came back
+    /// (measured: 22.9 dB -> 0.0 dB by a sweep at SNR 2.2 dB).
+    #[test]
+    fn a_transmitter_off_for_a_moment_does_not_take_the_gain_down() {
+        // the 8 bits' noise below, 21 dB from 20 dB of gain, the level allowing up to 29.7 dB
+        let curve = |db: f32| (2.5 + db).min(21.0);
+        let (g, _, lowest) = run_at(22.9, 16, 120, |k, db| match k {
+            // off from 20 s to 26 s, then 2 s back at 2 dB on the way to sync
+            80..104 => (false, 0.0),
+            104..112 => (true, 2.2),
+            _ => (true, curve(db)),
+        });
+        assert!(lowest >= 20.0, "the ceiling went down to {lowest:.1} dB");
+        assert!(GAINS[g.ceiling] >= 20.0, "ceiling {:.1} dB", GAINS[g.ceiling]);
+    }
+
+    /// Poor reception at a gain far below what the level allows (left there by
+    /// an old sweep): most of the room at once, within seconds, not a climb of
+    /// probes a dB or two each.
+    #[test]
+    fn poor_reception_far_below_the_level_rises_at_once() {
+        let curve = |db: f32| (2.5 + 3.0 * db).min(21.0);
+        let (g, dev, _) = run_at(2.7, 16, 12, |_, db| (true, curve(db)));
+        assert!(GAINS[g.ceiling] >= 15.0, "ceiling {:.1} dB", GAINS[g.ceiling]);
+        assert_eq!(dev.over, 0, "the gain went above what the level allows");
     }
 
     #[test]
