@@ -39,7 +39,7 @@ export function AppClose() {
         <div className="modal-head">
           <b>{t('close_title')}</b>
           <span style={{ flex: 1 }} />
-          <button type="button" className="icon-btn" onClick={() => choose('cancel')} aria-label="close">
+          <button type="button" className="icon-btn" onClick={() => choose('cancel')} aria-label={t('close')}>
             <X />
           </button>
         </div>

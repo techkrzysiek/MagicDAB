@@ -110,7 +110,7 @@ export function JournalineDialog() {
               <ChevronLeft size={16} /> {t('jml_back')}
             </button>
           )}
-          <button className="icon-btn" onClick={close} aria-label="close">
+          <button className="icon-btn" onClick={close} aria-label={t('close')}>
             <X />
           </button>
         </div>

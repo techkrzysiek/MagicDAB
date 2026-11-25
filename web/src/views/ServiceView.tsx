@@ -567,7 +567,7 @@ export function ChannelRow({ className }: { className?: string }) {
   const mapped = state?.mappedChannels ?? EMPTY
   return (
     <div className={'chan-row' + (className ? ' ' + className : '')}>
-      <select value={state?.channel ?? ''} onChange={(e) => tune(e.target.value)} disabled={!!fixed} title={fixed ? t('channel_fixed') : undefined}>
+      <select value={state?.channel ?? ''} onChange={(e) => tune(e.target.value)} disabled={!!fixed} title={fixed ? t('channel_fixed') : undefined} aria-label={t('channel')}>
         {(hello?.channels ?? [])
           .filter((c) => !state?.noTuner || mapped.includes(c.name))
           .filter((c) => allowed(c.name) || c.name === state?.channel)
@@ -583,13 +583,13 @@ export function ChannelRow({ className }: { className?: string }) {
           <Lock size={13} /> {t('fixed_source')}
         </span>
       ) : (
-        <button className="icon-btn" onClick={() => stepChannel(-1)}>
+        <button className="icon-btn" onClick={() => stepChannel(-1)} title={t('prev_channel')} aria-label={t('prev_channel')}>
           <ChevronLeft />
         </button>
       )}
       <span className="freq">{state ? `${mhz(state.frequency)} MHz` : ''}</span>
       {!fixed && (
-        <button className="icon-btn" onClick={() => stepChannel(1)}>
+        <button className="icon-btn" onClick={() => stepChannel(1)} title={t('next_channel')} aria-label={t('next_channel')}>
           <ChevronRight />
         </button>
       )}
@@ -730,6 +730,7 @@ function ServiceList() {
 }
 
 export default function ServiceView() {
+  const t = useT()
   const ensemble = useStore((s) => s.ensemble)
   const selected = useStore((s) => s.selected)
   const [showTree, setShowTree] = useState(false)
@@ -740,14 +741,14 @@ export default function ServiceView() {
         <ServicePanel svc={svc} />
       </div>
       <div className="pane list-pane" style={{ position: 'relative' }}>
-        <button className="icon-btn tree-toggle" style={{ position: 'absolute', right: 8, top: 12 }} onClick={() => setShowTree(true)}>
+        <button className="icon-btn tree-toggle" style={{ position: 'absolute', right: 8, top: 12 }} onClick={() => setShowTree(true)} title={t('stations_show')} aria-label={t('stations_show')}>
           <ListTree />
         </button>
         <ServiceList />
       </div>
       <div className="pane tree-pane" style={{ position: 'relative' }}>
         {showTree && (
-          <button className="icon-btn" style={{ position: 'absolute', right: 8, top: 8 }} onClick={() => setShowTree(false)}>
+          <button className="icon-btn" style={{ position: 'absolute', right: 8, top: 8 }} onClick={() => setShowTree(false)} title={t('stations_hide')} aria-label={t('stations_hide')}>
             <ChevronLeft />
           </button>
         )}

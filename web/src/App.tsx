@@ -142,7 +142,7 @@ function NavRail() {
         <div className="menu more-sheet" ref={sheet}>
           <div className="sheet-head">
             <span>{t('more_title')}</span>
-            <button className="icon-btn" onClick={() => setMenu(false)} aria-label="close">
+            <button className="icon-btn" onClick={() => setMenu(false)} aria-label={t('close')}>
               <X />
             </button>
           </div>
@@ -348,7 +348,8 @@ function Latency() {
   const value = l.ms >= 1000 ? `${(l.ms / 1000).toFixed(1)} s` : `${l.ms} ms`
   return (
     <span className={'latency ' + level} title={t(l.late ? 'latency_late' : 'latency_help')}>
-      <Activity size={15} /> {l.late ? '> ' : ''}
+      <Activity size={15} /> <span className="sr-only">{t('latency_sr')} </span>
+      {l.late ? '> ' : ''}
       {value}
     </span>
   )
@@ -399,6 +400,44 @@ function SetupBanner() {
   )
 }
 
+/**
+ * For a screen reader: the multiplex that came after tuning (its name,
+ * channel and number of stations), or that none came. A sighted listener sees
+ * the list fill; a blind one heard nothing and could not tell a list still
+ * loading from a channel without signal (or tuned by someone else).
+ */
+function TuneAnnouncer() {
+  const t = useT()
+  const key = useStore((s) => (s.ensemble.valid ? `${s.ensemble.channel}/${s.ensemble.eid}` : ''))
+  const channel = useStore((s) => s.state?.channel)
+  const [msg, setMsg] = useState('')
+  const said = useRef('')
+  useEffect(() => {
+    if (!key || said.current === key) return
+    // (once its list had a moment to fill)
+    const id = setTimeout(() => {
+      const e = useStore.getState().ensemble
+      said.current = key
+      const n = (e.services ?? []).filter((s) => s.isAudio).length
+      setMsg(t('sr_mux').replace('{m}', e.label ?? '').replace('{c}', e.channel ?? '').replace('{n}', String(n)))
+    }, 3000)
+    return () => clearTimeout(id)
+  }, [key, t])
+  useEffect(() => {
+    if (!channel) return
+    const id = setTimeout(() => {
+      const e = useStore.getState().ensemble
+      if (!(e.valid && e.channel === channel)) setMsg(`${t('no_signal')}, ${channel}`)
+    }, 10000)
+    return () => clearTimeout(id)
+  }, [channel, t])
+  return (
+    <div className="sr-only" aria-live="polite">
+      {msg}
+    </div>
+  )
+}
+
 function StatusBar() {
   const t = useT()
   const signal = useStore((s) => s.signal)
@@ -415,7 +454,10 @@ function StatusBar() {
     <footer className={'statusbar' + (playback ? ' playback' : '')}>
       {playback && <History size={15} className="pb-mark" aria-label={t('playback_title')} />}
       <SignalBars level={lvl} synced={!!signal?.synced} />
-      <span title={signal?.input === 'dongle' ? 'DTR-100' : playback ? t('playback_signal_help') : t('snr')}>{signalText(signal, t)}</span>
+      <span title={signal?.input === 'dongle' ? 'DTR-100' : playback ? t('playback_signal_help') : t('snr')}>
+        <span className="sr-only">{t('signal_sr')} </span>
+        {signalText(signal, t)}
+      </span>
       <span className="ens-chip">{ensLabel}</span>
       <div className="center">
         <Clock />
@@ -424,11 +466,13 @@ function StatusBar() {
       {admin ? (
         // the admin opens the list (kick, ban)
         <button className="icon-btn listeners-btn" title={t('listeners')} onClick={() => useStore.getState().set({ listenersOpen: true })}>
-          <Users size={15} /> {listeners}
+          <Users size={15} /> <span className="sr-only">{t('listeners')}: </span>
+          {listeners}
         </button>
       ) : (
         <span className="muted" title={t('listeners')} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <Users size={15} /> {listeners}
+          <Users size={15} /> <span className="sr-only">{t('listeners')}: </span>
+          {listeners}
         </span>
       )}
       <button className="icon-btn" onClick={toggleAudio} title={audioEnabled ? t('stop') : t('play')}>
@@ -446,6 +490,7 @@ function StatusBar() {
         value={muted ? 0 : volume}
         onChange={(e) => setVolume(parseFloat(e.target.value))}
         title={t('volume')}
+        aria-label={t('volume')}
       />
     </footer>
   )
@@ -656,6 +701,7 @@ export default function App() {
         {view === 'catsls' && <SlidesView />}
       </main>
       <StatusBar />
+      <TuneAnnouncer />
       <MiniPlayer />
       <Notices />
       <LogoDialog />

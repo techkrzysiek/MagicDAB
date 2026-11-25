@@ -70,7 +70,7 @@ export default function SlidesView() {
       {open && (
         <div className="gallery-full" onClick={() => setOpen(null)}>
           <div className="gallery-full-box" onClick={(e) => e.stopPropagation()}>
-            <button className="icon-btn gallery-close" onClick={() => setOpen(null)} aria-label="close">
+            <button className="icon-btn gallery-close" onClick={() => setOpen(null)} aria-label={t('close')}>
               <X />
             </button>
             {urls[open.id] && <img src={urls[open.id]} alt={open.contentName} />}

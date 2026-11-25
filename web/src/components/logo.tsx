@@ -89,7 +89,7 @@ export function LogoDialog() {
           <b>{label ?? sid.toString(16).toUpperCase()}</b>
           <span className="hint">, {t('logos')}</span>
           <span style={{ flex: 1 }} />
-          <button className="icon-btn" onClick={() => set({ logoDialog: null })}>
+          <button className="icon-btn" onClick={() => set({ logoDialog: null })} aria-label={t('close')}>
             <X />
           </button>
         </div>

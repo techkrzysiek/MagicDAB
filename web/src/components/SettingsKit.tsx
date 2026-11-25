@@ -1,6 +1,6 @@
 // Building blocks of the settings: cards of rows, switches, and the draft of
 // server settings that one bar saves (or discards) for all tabs at once.
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useId, useRef, type ReactNode } from 'react'
 import { create } from 'zustand'
 import { useStore } from '../store'
 import { useT } from '../i18n'
@@ -23,15 +23,58 @@ export function Card({ title, badge, note, children }: { title: string; badge?: 
 /** A setting: what it is (and a hint) on the left, its control on the right;
  * wide: the control below, over the whole width (lists, texts). */
 export function Row({ label, hint, wide, children }: { label: ReactNode; hint?: ReactNode; wide?: boolean; children?: ReactNode }) {
+  const id = useId()
+  const control = useRef<HTMLDivElement>(null)
+  const hinted = !!hint
+  useEffect(() => {
+    const el = control.current
+    if (!el) return
+    const named = () => nameControls(el, id + 'n', hinted ? id + 'h' : null)
+    named()
+    // (controls that come later: a field shown by a switch, a list loaded)
+    const watch = new MutationObserver(named)
+    watch.observe(el, { childList: true, subtree: true })
+    return () => watch.disconnect()
+  }, [id, hinted])
   return (
     <div className={'set-row' + (wide ? ' wide' : '')}>
       <div className="set-label">
-        <div className="set-name">{label}</div>
-        {hint && <div className="hint">{hint}</div>}
+        <div className="set-name" id={id + 'n'}>
+          {label}
+        </div>
+        {hint && (
+          <div className="hint" id={id + 'h'}>
+            {hint}
+          </div>
+        )}
       </div>
-      {children !== undefined && <div className="set-control">{children}</div>}
+      {children !== undefined && (
+        <div className="set-control" ref={control}>
+          {children}
+        </div>
+      )}
     </div>
   )
+}
+
+/**
+ * The name of the row (and its hint) for the controls that have none: the
+ * text sits apart from the switch or field, so a screen reader said only
+ * "switch, off". Choices side by side become a group of that name.
+ */
+function nameControls(el: HTMLElement, name: string, hint: string | null) {
+  for (const c of el.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input, select, textarea')) {
+    if (c.type === 'hidden') continue
+    const named = c.hasAttribute('aria-label') || c.hasAttribute('aria-labelledby') || [...(c.labels ?? [])].some((l) => l.textContent?.trim())
+    if (!named) c.setAttribute('aria-labelledby', name)
+    // (also for a control with a name of its own, and a hint that came later)
+    if (hint && !c.hasAttribute('aria-describedby')) c.setAttribute('aria-describedby', hint)
+  }
+  for (const g of el.querySelectorAll<HTMLElement>('.set-seg')) {
+    if (g.hasAttribute('aria-labelledby')) continue
+    g.setAttribute('role', 'group')
+    g.setAttribute('aria-labelledby', name)
+  }
 }
 
 export function Toggle({ checked, onChange, disabled, label }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; label?: string }) {
@@ -48,7 +91,7 @@ export function Choice<T extends string>({ value, options, onChange }: { value: 
   return (
     <div className="seg set-seg">
       {options.map(([v, label]) => (
-        <button key={v} className={v === value ? 'on' : ''} onClick={() => onChange(v)}>
+        <button key={v} className={v === value ? 'on' : ''} aria-pressed={v === value} onClick={() => onChange(v)}>
           {label}
         </button>
       ))}

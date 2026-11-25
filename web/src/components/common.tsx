@@ -98,7 +98,7 @@ export function SignalBars({ level, synced }: { level: number; synced: boolean }
   const c = colors[level] ?? colors[0]
   const lit = synced ? level + 1 : level > 0 ? 1 : 0
   return (
-    <span className="sigbars">
+    <span className="sigbars" aria-hidden="true">
       {[0, 1, 2, 3].map((i) => (
         <span key={i} style={{ background: i < lit ? c : undefined }} />
       ))}

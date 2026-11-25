@@ -455,7 +455,7 @@ export default function InfoView() {
           <span style={{ flex: 1 }} />
           {admin && (
             <>
-              <input className="input" type="number" min={1} max={3600} value={rawSecs} style={{ width: 80 }} onChange={(e) => setRawSecs(parseInt(e.target.value) || 60)} />
+              <input className="input" type="number" min={1} max={3600} value={rawSecs} style={{ width: 80 }} aria-label={t('raw_secs')} onChange={(e) => setRawSecs(parseInt(e.target.value) || 60)} />
               <span className="hint">s</span>
               {raw?.active ? (
                 <button className="btn rec on" onClick={() => send({ type: 'rawRecord', action: 'stop' })}>

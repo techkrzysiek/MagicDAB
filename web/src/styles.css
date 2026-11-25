@@ -6291,3 +6291,16 @@ kbd + kbd {
   margin-top: 4px;
   color: var(--warning, #d9a400);
 }
+
+/* text only for screen readers (what a number on the screen is) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

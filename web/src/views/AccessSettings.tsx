@@ -165,7 +165,7 @@ export default function AccessSettings() {
           >
             <input className="input" type="text" placeholder={t('ban_address')} value={ban.address} onChange={(e) => setBan({ ...ban, address: e.target.value })} />
             <input className="input" type="text" maxLength={200} placeholder={t('ban_reason')} value={ban.reason} onChange={(e) => setBan({ ...ban, reason: e.target.value })} />
-            <select className="input" value={ban.hours} onChange={(e) => setBan({ ...ban, hours: parseInt(e.target.value) })}>
+            <select className="input" value={ban.hours} aria-label={t('ban_time')} onChange={(e) => setBan({ ...ban, hours: parseInt(e.target.value) })}>
               <option value={0}>{t('ban_forever')}</option>
               <option value={1}>{t('dur_1h')}</option>
               <option value={24}>{t('dur_24h')}</option>
