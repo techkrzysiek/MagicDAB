@@ -903,6 +903,7 @@ impl FrameSink for Core {
                             ServiceEvent::Journaline { objects, removed } => {
                                 RxEvent::Journaline { sid: key.sid, scids: key.scids, objects, removed }
                             }
+                            ServiceEvent::Format(format) => RxEvent::AudioFormat { key, format, bitrate: svc.bitrate },
                             _ => continue,
                         };
                         let _ = self.events.send(e);

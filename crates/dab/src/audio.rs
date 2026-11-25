@@ -194,6 +194,18 @@ pub struct AudioDecoder {
     pub pad_only: bool,
 }
 
+/// The audio of a DAB+ superframe header.
+fn aac_format(f: &AacFormat) -> AudioFormat {
+    AudioFormat {
+        codec: f.codec_name().to_string(),
+        sample_rate: f.sample_rate(),
+        channels: if f.stereo || f.ps { 2 } else { 1 },
+        sbr: f.sbr,
+        ps: f.ps,
+        stereo: f.stereo || f.ps,
+    }
+}
+
 const MP2_BITRATES_V1: [u32; 15] = [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384];
 const MP2_BITRATES_V2: [u32; 15] = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
 
@@ -434,6 +446,15 @@ impl AudioDecoder {
             self.stats.superframes = st.superframes;
         }
         if self.pad_only {
+            // (its format from the superframe header, no AAC decoder needed:
+            // the service list shows the codec of every station)
+            if let (Some(&(fmt, _, _)), Kind::DabPlus { format, .. }) = (aus.first(), &mut self.kind) {
+                if *format != Some(fmt) {
+                    *format = Some(fmt);
+                    self.format = aac_format(&fmt);
+                    out.push(ServiceEvent::Format(self.format.clone()));
+                }
+            }
             for (_, au, ok) in aus {
                 if ok {
                     if let Some((xpad, fpad)) = dabplus_pad(&au) {
@@ -464,14 +485,7 @@ impl AudioDecoder {
                 }
             }
             if let Some(f) = new_format {
-                self.format = AudioFormat {
-                    codec: f.codec_name().to_string(),
-                    sample_rate: f.sample_rate(),
-                    channels: if f.stereo || f.ps { 2 } else { 1 },
-                    sbr: f.sbr,
-                    ps: f.ps,
-                    stereo: f.stereo || f.ps,
-                };
+                self.format = aac_format(&f);
                 out.push(ServiceEvent::Format(self.format.clone()));
             }
             // (a superframe is 120 ms)

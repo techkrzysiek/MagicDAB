@@ -371,6 +371,8 @@ export interface ServiceEntry {
   codec: string
   bitrate: number
   ecc: number | null
+  /** its audio as decoded ("HE-AAC v2", "AAC-LC", "MP2"); unknown before */
+  format?: { codec: string; sampleRate: number; stereo: boolean } | null
 }
 
 /** A secondary audio component (SCIdS 1, 2...) as the service list keeps it. */

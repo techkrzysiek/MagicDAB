@@ -5,7 +5,13 @@ import { useT } from '../i18n'
 import { Logo, FavStar, SignalBars, scrollIntoList } from '../components/common'
 import { selectService, tuningLocked } from '../actions'
 import { ageShort, componentLabel, dlsKey, fullSid, hex, secondaries } from '../util'
-import type { EnsembleEntry, SecondaryEntry } from '../types'
+import type { EnsembleEntry, SecondaryEntry, ServiceEntry } from '../types'
+
+/** "DAB+, HE-AAC v2": the kind of the service and its codec where known (DAB is always MP2). */
+const serviceKind = (s: ServiceEntry) => {
+  const codec = s.format?.codec ?? (s.codec === 'DAB' ? 'MP2' : null)
+  return codec ? `${s.codec}, ${codec}` : s.codec
+}
 
 export type StationMode = 'mux' | 'all' | 'fav'
 
@@ -426,7 +432,7 @@ export function StationBrowser({ full, panel }: { full?: boolean; panel?: boolea
                           <div className="st-txt">
                             <div className="st-name">{s.label}</div>
                             <div className="st-sub hint">
-                              {s.codec}{s.bitrate ? `, ${s.bitrate} kbps` : ''}
+                              {serviceKind(s)}{s.bitrate ? `, ${s.bitrate} kbps` : ''}
                             </div>
                           </div>
                           {blocked && <Lock size={16} className="st-lock" />}
