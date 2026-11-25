@@ -1144,10 +1144,18 @@ function Tunnel() {
             )}
           </div>
         </Row>
-        <Row label={t('tunnel_host')}>
+        {/* (the port of the tunnel server, not of this receiver: 3222 there only times out) */}
+        <Row label={t('tunnel_host')} hint={f.host === 'dxserver.eu' && f.port !== 7000 ? t('tunnel_port_hint') : undefined}>
           <div className="set-inline">
             <input type="text" value={f.host} placeholder="dxserver.eu" onChange={(e) => setF({ ...f, host: e.target.value.trim() })} />
-            <input type="number" className="num" value={f.port} onChange={(e) => setF({ ...f, port: parseInt(e.target.value) || 0 })} />
+            <input
+              type="number"
+              className="num"
+              value={f.port}
+              title={t('tunnel_port')}
+              aria-label={t('tunnel_port')}
+              onChange={(e) => setF({ ...f, port: parseInt(e.target.value) || 0 })}
+            />
           </div>
         </Row>
         <Row label={t('tunnel_user')}>
