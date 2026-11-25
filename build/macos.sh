@@ -61,7 +61,9 @@ for arch in arm64 x86_64; do
         cmake --build "$DEPS/build/faad-$arch" -j4 && cmake --install "$DEPS/build/faad-$arch"
     fi
     if [ ! -f "$p/lib/libusb-1.0.0.dylib" ]; then
-        rm -rf "$DEPS/build/libusb-$arch" && cp -R "$DEPS/src/libusb-$LIBUSB_VERSION" "$DEPS/build/libusb-$arch"
+        # (-p: with their times; a configure older than configure.ac makes make
+        # run autoconf, which the runners do not have)
+        rm -rf "$DEPS/build/libusb-$arch" && cp -Rp "$DEPS/src/libusb-$LIBUSB_VERSION" "$DEPS/build/libusb-$arch"
         [ "$arch" = arm64 ] && host=aarch64-apple-darwin || host=x86_64-apple-darwin
         (cd "$DEPS/build/libusb-$arch" && ./configure --host=$host --prefix="$p" --disable-static CC="clang -arch $arch" \
             && make -j4 && make install)
