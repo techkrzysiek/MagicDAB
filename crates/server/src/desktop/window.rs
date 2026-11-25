@@ -173,6 +173,14 @@ fn make_webview(
         .with_document_title_changed_handler(move |t| {
             let _ = p_title.send_event(UserEvent::Title(t));
         })
+        // A file saved from the page (CSV, JSON, a recording) goes to the
+        // Downloads folder as in a browser, but wry hides WebView2's download
+        // bubble: without this, nothing showed that it was saved.
+        .with_download_completed_handler(|_, path, ok| {
+            if let (true, Some(path)) = (ok, path) {
+                show_in_folder(&path);
+            }
+        })
         .with_devtools(std::env::var_os("MAGICDAB_DEVTOOLS").is_some())
         .with_default_context_menus(false)
         .with_additional_browser_args(BROWSER_ARGS)
@@ -248,6 +256,15 @@ fn open_browser(port: u16) {
         .args(["/C", "start", "", &format!("http://localhost:{port}/")])
         .creation_flags(0x0800_0000)
         .spawn();
+}
+
+/// Explorer with the file selected in its folder.
+fn show_in_folder(path: &std::path::Path) {
+    use std::os::windows::process::CommandExt;
+    // (one argument as Explorer wants it: `/select,"C:\a b\c.csv"`)
+    if let Err(e) = std::process::Command::new("explorer").raw_arg(format!("/select,\"{}\"", path.display())).spawn() {
+        log::warn!("cannot show {}: {e}", path.display());
+    }
 }
 
 /// Chromium flags: autoplay (a radio plays when started) and no throttling of
