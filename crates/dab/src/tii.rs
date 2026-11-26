@@ -5,8 +5,15 @@
 //! same phase, so X[k] * conj(X[k+1]) accumulates coherently while noise does
 //! not. The four 384 carrier blocks repeat the same comb/pattern and are summed.
 //! Results are integrated over several frames before detection.
+//!
+//! Some transmitters give the second carrier of a pair the phase of the phase
+//! reference symbol on that carrier instead of the first one's: their products
+//! turn by 0, 90 or 180 degrees from block to block and cancel in the sum
+//! (a recording with eight or more transmitters: none found, each block alone
+//! 10 to 12 dB over the noise). The products are summed both ways, and each
+//! comb takes the way it comes out stronger.
 
-use crate::consts::T_U;
+use crate::consts::{prs_phase_quadrant, T_U};
 use num_complex::Complex32;
 use serde::{Deserialize, Serialize};
 
@@ -75,6 +82,11 @@ pub enum TiiMode {
 
 pub struct TiiDecoder {
     acc: Vec<Complex32>,
+    /// The same with the phase reference difference of each pair taken out
+    /// (the second carrier with a phase of its own).
+    acc_own: Vec<Complex32>,
+    /// That difference, per block and pair (block * PAIRS + pair).
+    turn: Vec<Complex32>,
     /// Summed power of each pair (both carriers, the four blocks).
     pair_power: Vec<f64>,
     /// Summed mean carrier power of the null symbols (the active carriers).
@@ -96,8 +108,21 @@ impl Default for TiiDecoder {
 
 impl TiiDecoder {
     pub fn new() -> Self {
+        // (carriers of the blocks: -768, -384, 1, 385; a quadrant of pi/2 each)
+        let turn = [-768i32, -384, 1, 385]
+            .iter()
+            .flat_map(|&k| (0..PAIRS as i32).map(move |i| k + 2 * i))
+            .map(|k| match (prs_phase_quadrant(k) - prs_phase_quadrant(k + 1)) & 3 {
+                0 => Complex32::new(1.0, 0.0),
+                1 => Complex32::new(0.0, -1.0),
+                2 => Complex32::new(-1.0, 0.0),
+                _ => Complex32::new(0.0, 1.0),
+            })
+            .collect();
         TiiDecoder {
             acc: vec![Complex32::new(0.0, 0.0); PAIRS],
+            acc_own: vec![Complex32::new(0.0, 0.0); PAIRS],
+            turn,
             pair_power: vec![0.0; PAIRS],
             null_power: 0.0,
             frames: 0,
@@ -110,6 +135,7 @@ impl TiiDecoder {
 
     pub fn reset(&mut self) {
         self.acc.iter_mut().for_each(|c| *c = Complex32::new(0.0, 0.0));
+        self.acc_own.iter_mut().for_each(|c| *c = Complex32::new(0.0, 0.0));
         self.pair_power.iter_mut().for_each(|p| *p = 0.0);
         self.null_power = 0.0;
         self.frames = 0;
@@ -130,10 +156,12 @@ impl TiiDecoder {
             return None;
         }
         const STARTS: [usize; 4] = [T_U - 768, T_U - 384, 1, 385];
-        for &k in STARTS.iter() {
+        for (j, &k) in STARTS.iter().enumerate() {
             for i in 0..PAIRS {
                 let (a, b) = (null_fft[k + 2 * i], null_fft[k + 2 * i + 1]);
-                self.acc[i] += a * b.conj();
+                let p = a * b.conj();
+                self.acc[i] += p;
+                self.acc_own[i] += p * self.turn[j * PAIRS + i];
                 self.pair_power[i] += (a.norm_sqr() + b.norm_sqr()) as f64;
             }
         }
@@ -147,13 +175,28 @@ impl TiiDecoder {
         // magnitude rather than the real part: the absolute phase of a pair depends
         // on the FFT window position inside the null symbol
         let mags: Vec<f32> = self.acc.iter().map(|c| c.norm()).collect();
-        self.last_pairs = mags.iter().map(|m| m / self.frames as f32).collect();
+        let mags_own: Vec<f32> = self.acc_own.iter().map(|c| c.norm()).collect();
+        self.last_pairs = mags.iter().zip(&mags_own).map(|(a, b)| a.max(*b) / self.frames as f32).collect();
         // (per carrier, averaged over the blocks and frames)
         let n = (8 * self.frames) as f64;
         let carriers: Vec<f32> = self.pair_power.iter().map(|p| (p / n) as f32).collect();
         let null_mean = (self.null_power / self.frames as f64) as f32;
         self.reset();
+        // (a comb gives one code: the stronger of the two ways)
         let mut codes = self.detect(&mags);
+        for c in self.detect(&mags_own) {
+            match codes.iter_mut().find(|x| x.sub == c.sub) {
+                Some(x) if x.strength >= c.strength => {}
+                Some(x) => *x = c,
+                None => codes.push(c),
+            }
+        }
+        if let Some(max) = codes.iter().map(|c| c.strength).reduce(f32::max) {
+            for c in codes.iter_mut() {
+                c.level_db = 10.0 * (c.strength / max).log10();
+            }
+        }
+        codes.sort_by(|a, b| b.strength.total_cmp(&a.strength));
         for c in codes.iter_mut() {
             c.snr_db = own_snr(c.main, c.sub, &carriers, null_mean);
         }
@@ -260,6 +303,53 @@ mod tests {
             assert!(dec.push(&fft).is_none(), "a result at frame {i}");
         }
         assert!(dec.push(&fft).is_some());
+    }
+
+    /// Null symbols with one code over unit noise, its pairs as `own` says:
+    /// the second carrier with the phase reference phase of its own carrier,
+    /// else with that of the first; a phase of the frame and a delay over all.
+    fn code_frames(main: u8, sub: usize, power: f32, own: bool, frames: usize) -> Option<Vec<TiiCode>> {
+        let mut seed = 0x9e37_79b9u64;
+        let mut uniform = move || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((seed >> 11) as f64 / (1u64 << 53) as f64).max(1e-12)
+        };
+        let tau = std::f32::consts::TAU;
+        let mut dec = TiiDecoder::new();
+        let mut codes = None;
+        for _ in 0..SETTLE_FRAMES + frames {
+            let mut fft = vec![Complex32::new(0.0, 0.0); T_U];
+            let frame = (tau as f64 * uniform()) as f32;
+            for (j, k0) in [-768i32, -384, 1, 385].into_iter().enumerate() {
+                let bin0 = [T_U - 768, T_U - 384, 1, 385][j];
+                for bin in bin0..bin0 + 384 {
+                    let (r, ph) = ((-uniform().ln()).sqrt() as f32, (tau as f64 * uniform()) as f32);
+                    fft[bin] = Complex32::from_polar(r, ph);
+                }
+                for b in (0..8).filter(|b| tii_pattern(main) & (0x80 >> b) != 0) {
+                    let i = sub + 24 * b;
+                    let k = k0 + 2 * i as i32;
+                    let phase = |q: i32| q as f32 * std::f32::consts::FRAC_PI_2;
+                    let second = if own { prs_phase_quadrant(k + 1) } else { prs_phase_quadrant(k) };
+                    // (a delay of 12 samples: the phase turns from carrier to carrier)
+                    let delay = |k: i32| -tau * 12.0 * k as f32 / T_U as f32;
+                    fft[bin0 + 2 * i] += Complex32::from_polar(power.sqrt(), frame + phase(prs_phase_quadrant(k)) + delay(k));
+                    fft[bin0 + 2 * i + 1] += Complex32::from_polar(power.sqrt(), frame + phase(second) + delay(k + 1));
+                }
+            }
+            codes = dec.push(&fft).or(codes);
+        }
+        codes
+    }
+
+    /// Both ways of giving the second carrier of a pair its phase are found.
+    #[test]
+    fn a_code_with_either_phase_of_the_second_carrier() {
+        for own in [false, true] {
+            let codes = code_frames(37, 6, 1.5, own, 16).expect("a result");
+            assert_eq!(codes.len(), 1, "own {own}: {codes:?}");
+            assert_eq!((codes[0].main, codes[0].sub), (37, 6), "own {own}");
+        }
     }
 
     /// A code at a known carrier power over noise comes out with its own SNR.
