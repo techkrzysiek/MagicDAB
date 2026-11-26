@@ -956,7 +956,9 @@ pub fn spi_upload(spi: &SpiStore, s: &Snapshot) -> Option<SpiUpload> {
 
 /// The logos of a station (or of a multiplex, by its EId) for the map: a square
 /// one of about 128 px and the 320x240 one, by the SHA-256 of their files (added
-/// to `files` for the map to ask for).
+/// to `files` for the map to ask for). With neither, the largest other one: some
+/// broadcasters send only a size of their own (e.g. 100x70), which some
+/// receivers show as well.
 fn logos_to_send(spi: &SpiStore, ecc: u8, id: u32, files: &mut Vec<LogoFile>) -> Vec<Value> {
     let logos: Vec<&crate::spi::LogoVariant> =
         spi.spi_logos(ecc, id).into_iter().filter(|v| v.mime == "image/png" || v.mime == "image/jpeg").collect();
@@ -967,8 +969,9 @@ fn logos_to_send(spi: &SpiStore, ecc: u8, id: u32, files: &mut Vec<LogoFile>) ->
         .or_else(|| logos.iter().filter(|v| v.width == v.height).max_by_key(|v| v.width))
         .copied();
     let wide = logos.iter().find(|v| v.width == 320 && v.height == 240).copied();
+    let other = if square.is_none() && wide.is_none() { logos.iter().max_by_key(|v| v.width * v.height).copied() } else { None };
     let mut sent = Vec::new();
-    for v in square.into_iter().chain(wide) {
+    for v in square.into_iter().chain(wide).chain(other) {
         let path = spi.logo_path(v);
         let Ok(data) = std::fs::read(&path) else { continue };
         if data.len() > LOGO_MAX_BYTES {
@@ -1681,6 +1684,9 @@ mod tests {
         spi.set_text(0xE2, 0x4A91, crate::spi::ServiceText { long_name: Some("Radio Alfa".into()), ..Default::default() });
         let station = |sid| Station { sid, ecc: 0xE2, label: "PR".into(), ..Default::default() };
         spi.add_logo(0x4B6E, 0xE2, 128, 128, &png(128, 128, 6), "SPI", "f");
+        // a station with logos of its own sizes only: the largest
+        spi.add_logo(0x4A93, 0xE2, 100, 70, &png(100, 70, 7), "SPI", "g");
+        spi.add_logo(0x4A93, 0xE2, 64, 45, &png(64, 45, 8), "SPI", "h");
         let s = Snapshot {
             ensembles: vec![
                 Received {
@@ -1688,7 +1694,7 @@ mod tests {
                     eid: 0x4B6E,
                     ecc: 0xE2,
                     source: "air",
-                    stations: vec![station(0x4A91)],
+                    stations: vec![station(0x4A91), station(0x4A93)],
                     ..Default::default()
                 },
                 Received { channel: "10C".into(), ecc: 0xE2, source: "stream", stations: vec![station(0x4A92)], ..Default::default() },
@@ -1697,7 +1703,10 @@ mod tests {
         };
         let u = spi_upload(&spi, &s).unwrap();
         let svc = u.body["services"].as_array().unwrap();
-        assert_eq!(svc.len(), 1);
+        assert_eq!(svc.len(), 2);
+        let own: Vec<(u64, u64)> =
+            svc[1]["logos"].as_array().unwrap().iter().map(|l| (l["width"].as_u64().unwrap(), l["height"].as_u64().unwrap())).collect();
+        assert_eq!((svc[1]["sid"].as_str(), own), (Some("4A93"), vec![(100, 70)]));
         assert_eq!(
             (svc[0]["ecc"].as_str(), svc[0]["sid"].as_str(), svc[0]["longName"].as_str()),
             (Some("E2"), Some("4A91"), Some("Radio Alfa"))
@@ -1705,14 +1714,14 @@ mod tests {
         let sizes: Vec<(u64, u64)> =
             svc[0]["logos"].as_array().unwrap().iter().map(|l| (l["width"].as_u64().unwrap(), l["height"].as_u64().unwrap())).collect();
         assert_eq!(sizes, [(128, 128), (320, 240)]);
-        assert_eq!(u.files.len(), 3);
+        assert_eq!(u.files.len(), 4);
         // the multiplex's own logo
         assert_eq!(
             (u.body["ensembles"][0]["eid"].as_str(), u.body["ensembles"][0]["logos"][0]["width"].as_u64()),
             (Some("4B6E"), Some(128))
         );
         let named: Vec<&Value> =
-            svc[0]["logos"].as_array().unwrap().iter().chain(u.body["ensembles"][0]["logos"].as_array().unwrap()).collect();
+            svc.iter().flat_map(|x| x["logos"].as_array().unwrap()).chain(u.body["ensembles"][0]["logos"].as_array().unwrap()).collect();
         assert!(u.files.iter().all(|f| f.sha256.len() == 64 && named.iter().any(|l| l["sha256"] == f.sha256)));
         // unchanged: the same key, nothing goes again; no guide: nothing
         assert_eq!(spi_upload(&spi, &s).unwrap().key, u.key);

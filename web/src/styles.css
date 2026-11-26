@@ -3171,6 +3171,15 @@ table.table {
   padding: 8px;
   font-size: 13px;
 }
+.logo-warn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--sig-mid, #f5a524);
+  cursor: help;
+}
 
 .logo-preview {
   height: 150px;

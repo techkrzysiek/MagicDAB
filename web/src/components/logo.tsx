@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { X } from 'lucide-react'
+import { TriangleAlert, X } from 'lucide-react'
 import { useStore } from '../store'
 import type { Store } from '../store'
 import { useT } from '../i18n'
@@ -67,6 +67,11 @@ function LogoImage({ v }: { v: LogoVariant }) {
   return url ? <img src={url} alt="" style={{ maxWidth: Math.min(v.width || 128, 320), maxHeight: 240, imageRendering: v.width <= 64 ? 'pixelated' : 'auto' }} /> : <span className="hint">…</span>
 }
 
+/** The logo sizes of the SPI specification (ETSI TS 102 818). */
+const SPI_SIZES = ['32x32', '112x32', '128x128', '320x240', '600x600']
+/** A logo of SPI in a size of its broadcaster's own (shown anyway, as receivers do). */
+export const offSpec = (v: LogoVariant) => v.source === 'SPI' && !SPI_SIZES.includes(`${v.width}x${v.height}`)
+
 /** Dialog with all logos of a service (size, source, file size, reception time). */
 export function LogoDialog() {
   const t = useT()
@@ -117,6 +122,11 @@ export function LogoDialog() {
               </div>
               <div className="hint">{new Date(v.received * 1000).toLocaleString()}</div>
               <div className="hint" style={{ wordBreak: 'break-all' }}>{v.url}</div>
+              {offSpec(v) && (
+                <div className="logo-warn" title={t('logo_off_spec_hint').replace('{size}', `${v.width}×${v.height}`)}>
+                  <TriangleAlert size={13} /> {t('logo_off_spec')}
+                </div>
+              )}
             </div>
           ))}
         </div>
