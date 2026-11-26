@@ -1318,8 +1318,9 @@ impl Radio {
         let no_band = matches!(self.settings.device, DeviceConfig::RawFile { .. } | DeviceConfig::None);
         if self.settings.idle_scan.enabled && self.scan.is_none() && !no_band {
             // the tuner is free while nobody listens (an open page does not use
-            // it, a stream's player does)
-            if !self.hub.any(|c| c.audio) && self.streams_wanted.is_empty() {
+            // it, a stream's player does) and nobody watches the signal or the
+            // transmitters of its channel (those views show the tuner's input)
+            if !self.hub.any(|c| c.audio || c.subs.spectrum || c.subs.tii_pairs) && self.streams_wanted.is_empty() {
                 let since = *self.idle_since.get_or_insert_with(Instant::now);
                 let idle = Duration::from_secs(self.settings.idle_scan.idle_minutes as u64 * 60);
                 let interval = Duration::from_secs(self.settings.idle_scan.interval_minutes as u64 * 60);

@@ -236,6 +236,13 @@ impl Radio {
                         c.subs.log = v;
                     }
                 });
+                // the signal or the transmitters watched: the background scan
+                // gives the tuner back (as to a listener)
+                if (spectrum == Some(true) || tii == Some(true)) && self.scan.as_ref().is_some_and(|s| s.silent) {
+                    log::info!("client {client} watches the signal, stopping background scan");
+                    self.stop_scan();
+                    self.idle_since = None;
+                }
                 // the log is for admins only (as its new lines, ws.rs): it holds
                 // the addresses of listeners and the password generated at the
                 // first start, which guards the setup of a new installation
@@ -304,6 +311,9 @@ impl Radio {
                 if self.scan.is_some() {
                     self.stop_scan();
                 }
+                // (somebody uses the tuner: the idle scan waits its minutes again,
+                // else it came back at once and took the tuner off the channel)
+                self.idle_since = None;
                 let ch = ch.to_string();
                 log::info!("client {client} ({}) tunes to {ch}", self.client_ip(client));
                 if self.tune(&ch) {
@@ -331,6 +341,8 @@ impl Radio {
                     }
                     log::info!("client {client} ({}) stopped the scan", self.client_ip(client));
                     self.stop_scan();
+                    // (stopped by hand: no idle scan again until the tuner has been idle a while)
+                    self.idle_since = None;
                 } else {
                     log::info!("client {client} ({}) started a band scan", self.client_ip(client));
                     let only = self.only_channels(client);
