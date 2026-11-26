@@ -469,6 +469,8 @@ impl PacketChannel {
 struct Core {
     background_pad: bool,
     background: Vec<ActiveService>,
+    /// Services just no longer wanted, until update_background takes them.
+    released: Vec<ActiveService>,
     recording: Vec<ServiceKey>,
     data_services: bool,
     packet_channels: Vec<PacketChannel>,
@@ -546,7 +548,13 @@ impl Core {
                 }
                 RxCommand::StopService(k) => {
                     self.wanted.retain(|w| *w != k);
-                    self.services.retain(|s| s.key != k);
+                    // (on in the background, warm for the next time it is chosen:
+                    // update_services takes it after a station chosen instead,
+                    // whose decoder of the background it takes first)
+                    let (gone, keep): (Vec<ActiveService>, Vec<ActiveService>) =
+                        std::mem::take(&mut self.services).into_iter().partition(|s| s.key == k);
+                    self.services = keep;
+                    self.released.extend(gone);
                 }
                 RxCommand::Spectrum(on) => {
                     self.spectrum = on;
@@ -598,8 +606,12 @@ impl Core {
     /// Bring the decoders of wanted services in line with the ensemble configuration.
     fn update_services(&mut self) {
         let ens = &self.figs.ensemble;
-        // remove services that are no longer wanted
-        self.services.retain(|s| self.wanted.contains(&s.key));
+        // services no longer wanted: to the background as they are (a station
+        // chosen again starts without waiting for its sub-channel)
+        let (keep, released): (Vec<ActiveService>, Vec<ActiveService>) =
+            std::mem::take(&mut self.services).into_iter().partition(|s| self.wanted.contains(&s.key));
+        self.services = keep;
+        self.released.extend(released);
         for &key in &self.wanted {
             let Some(svc) = ens.services.get(&key.sid) else { continue };
             let comp = svc.components.iter().find(|c| c.scids == Some(key.scids) || (key.scids == 0 && c.primary)).filter(|c| c.is_audio());
@@ -614,6 +626,26 @@ impl Core {
             };
             if !needs_new {
                 continue;
+            }
+            // the decoder of the background for it: its sub-channel is
+            // deinterleaved and its superframes found, the sound comes at once
+            // (a new decoder waits for 16 frames of time interleaving and the
+            // start of a superframe, about half a second)
+            if existing.is_none() {
+                let warm = self
+                    .background
+                    .iter()
+                    .position(|b| b.key == key && b.subch_id == subch_id && b.subch.as_ref().is_some_and(|d| d.subch == *sc));
+                if let Some(p) = warm {
+                    let mut s = self.background.remove(p);
+                    if let Some(a) = s.audio.as_mut() {
+                        a.set_pad_only(false);
+                        a.record = self.recording.contains(&key);
+                    }
+                    s.last_stats = Instant::now();
+                    self.services.push(s);
+                    continue;
+                }
             }
             let mut audio = AudioDecoder::new(dabplus, sc.bitrate);
             audio.record = self.recording.contains(&key);
@@ -642,6 +674,7 @@ impl Core {
         }
         self.update_data_services();
         self.update_background();
+        self.released.clear();
         self.update_recorder();
     }
 
@@ -679,6 +712,20 @@ impl Core {
                     continue;
                 }
                 self.background.remove(p);
+            }
+            // a station just left: its decoder goes on in the background
+            let released = self
+                .released
+                .iter()
+                .position(|r| r.key == key && r.subch_id == subch_id && r.subch.as_ref().is_some_and(|d| d.subch == *sc));
+            if let Some(p) = released {
+                let mut s = self.released.remove(p);
+                if let Some(a) = s.audio.as_mut() {
+                    a.set_pad_only(true);
+                    a.record = false;
+                }
+                self.background.push(s);
+                continue;
             }
             let mut audio = AudioDecoder::new(comp.is_dabplus(), sc.bitrate);
             audio.pad_only = true;
@@ -1154,7 +1201,7 @@ impl Core {
                 labels.insert(k, v);
             }
             let _ = self.events.send(RxEvent::Ensemble(Arc::new(self.figs.ensemble.clone()), Arc::new(labels)));
-        } else if self.services.len() != self.wanted.len() {
+        } else if self.services.len() != self.wanted.len() || !self.released.is_empty() {
             self.update_services();
         }
         if let Some(t) = self.figs.ensemble.time {
@@ -1225,6 +1272,7 @@ impl ReceiverHandle {
                 let mut core = Core {
                     background_pad: true,
                     background: Vec::new(),
+                    released: Vec::new(),
                     recording: Vec::new(),
                     data_services: true,
                     packet_channels: Vec::new(),

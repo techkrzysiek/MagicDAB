@@ -423,6 +423,29 @@ impl AudioDecoder {
         self.pad_events = events;
     }
 
+    /// A decoder of the background (PAD only) taken for listening, or the other
+    /// way round: the sub-channel and its superframes stay in step, the audio
+    /// starts as after a new decoder (fade in; a fresh AAC decoder, the frames
+    /// skipped meanwhile not being in its state; the format told again).
+    pub fn set_pad_only(&mut self, pad_only: bool) {
+        if self.pad_only == pad_only {
+            return;
+        }
+        self.pad_only = pad_only;
+        if !pad_only {
+            if let Kind::DabPlus { aac, format, .. } = &mut self.kind {
+                *aac = None;
+                *format = None;
+            }
+            self.format = AudioFormat::default();
+            self.mute_frames = 2;
+            self.fade_in = true;
+            self.lost_run = 0;
+            self.conceal_tail.clear();
+            self.last_good.clear();
+        }
+    }
+
     /// Feed one decoded logical frame of the sub-channel.
     pub fn push(&mut self, frame: &[u8], out: &mut Vec<ServiceEvent>) {
         self.stats.frames += 1;
