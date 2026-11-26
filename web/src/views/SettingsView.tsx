@@ -89,6 +89,7 @@ function General() {
             options={[
               ['pl', 'Polski'],
               ['en', 'English'],
+              ['de', 'Deutsch'],
             ]}
             onChange={(v) => {
               set({ lang: v })
