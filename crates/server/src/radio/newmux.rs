@@ -172,6 +172,6 @@ impl Radio {
         self.server_map.send_changes([&ev]);
         // (the address on the map, else of the tunnel: for the link to the recording)
         let base = crate::servermap::Target::from_settings(&self.settings).url;
-        changes::discord_report(&self.settings.discord_webhook, &self.settings.station_name, base.as_deref(), &ev, p.discord);
+        changes::discord_report(&changes::Hook::of(&self.settings), base.as_deref(), &ev, p.discord);
     }
 }

@@ -28,7 +28,7 @@ const TAB_OF: Record<string, Tab> = {
   device: 'receiver', ppm: 'receiver', lockChannel: 'receiver', lockService: 'receiver', channelMaps: 'receiver', etiDelayMs: 'receiver', listenerMultiplex: 'receiver', listenerMultiplexLimit: 'receiver', idleScan: 'receiver', maxServices: 'receiver', streams: 'receiver', backgroundPad: 'receiver', spi: 'receiver', opusBitrate: 'receiver',
   fmEnabled: 'fm', fmPort: 'fm', fmAudio: 'fm', fmAntennas: 'fm', linkingEnabled: 'fm', linkingMatchLevel: 'fm',
   tiiMode: 'tii', tiiLog: 'tii',
-  internet: 'internet', radioVis: 'internet', discordWebhook: 'internet', chatEnabled: 'internet', noIndex: 'internet', updateUrl: 'internet', updateAuto: 'internet',
+  internet: 'internet', radioVis: 'internet', discordWebhook: 'internet', discordLang: 'internet', chatEnabled: 'internet', noIndex: 'internet', updateUrl: 'internet', updateAuto: 'internet',
   publicServer: 'access', tunerLocked: 'access', tunePassword: 'access', allowedChannels: 'access', blockTor: 'access', blockedAsns: 'access', autoBanHours: 'access', trustLocalProxies: 'access', adminPassword: 'access', idleCheck: 'access',
   tunnel: 'tunnel',
 }
@@ -998,6 +998,10 @@ function Internet() {
   // the server never sends the webhook: only that there is one
   const hasHook = !!s?.hasDiscordWebhook
   const [hook, setHook, hookChanged] = useField<string | null>('discordWebhook', '')
+  // (not chosen yet: Polish where a webhook was set before the choice, else this page's language)
+  const lang = useStore((st) => st.lang)
+  const [hookLang, setHookLang, hookLangChanged] = useField<string | null>('discordLang', s?.discordLang ?? null)
+  const shownLang = hookLang ?? (hasHook ? 'pl' : lang)
   const [chat, setChat] = useField('chatEnabled', s?.chatEnabled ?? true)
   const [noIndex, setNoIndex] = useField('noIndex', !!s?.noIndex)
   if (!s) return null
@@ -1025,17 +1029,37 @@ function Internet() {
               className={fieldOk('discordWebhook', hook) ? '' : 'invalid'}
               placeholder={hasHook && hook !== null ? '••••••••' : 'https://discord.com/api/webhooks/…'}
               value={hook ?? ''}
-              onChange={(e) => setHook(e.target.value)}
+              onChange={(e) => {
+                setHook(e.target.value)
+                // (a first webhook: its messages in the language shown here)
+                if (!hasHook && !s.discordLang && !hookLangChanged) setHookLang(lang)
+              }}
             />
             {hasHook && hook !== null && (
               <button className="btn" onClick={() => setHook(null)}>
                 {t('remove')}
               </button>
             )}
-            <button className="btn" disabled={hookChanged || !hasHook} title={hookChanged ? t('set_save_first') : undefined} onClick={() => send({ type: 'testDiscord' })}>
+            <button
+              className="btn"
+              disabled={hookChanged || hookLangChanged || !hasHook}
+              title={hookChanged || hookLangChanged ? t('set_save_first') : undefined}
+              onClick={() => send({ type: 'testDiscord' })}
+            >
               Test
             </button>
           </div>
+        </Row>
+        <Row label={t('discord_lang')}>
+          <Choice
+            value={shownLang}
+            options={[
+              ['pl', 'Polski'],
+              ['en', 'English'],
+              ['de', 'Deutsch'],
+            ]}
+            onChange={setHookLang}
+          />
         </Row>
       </Card>
       )}

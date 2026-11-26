@@ -867,15 +867,179 @@ fn md(s: &str) -> String {
     out
 }
 
-fn discord_lines(ev: &ChangeEvent) -> Vec<String> {
+/// The words of the Discord messages in one language (Settings, Internet,
+/// "Language" of the notifications).
+pub struct Words {
+    open: &'static str,
+    close: &'static str,
+    new_mux: &'static str,
+    eid: &'static str,
+    mux_label: &'static str,
+    added: &'static str,
+    removed: &'static str,
+    label: &'static str,
+    short: &'static str,
+    apps: &'static str,
+    si_short: &'static str,
+    si_name: &'static str,
+    si_long: &'static str,
+    si_no_desc: &'static str,
+    si_desc: &'static str,
+    si_genres: &'static str,
+    si_links: &'static str,
+    si_logos: &'static str,
+    si_new_logo: &'static str,
+    test: &'static str,
+    snr_mean: &'static str,
+    over: &'static str,
+    then_lost: &'static str,
+    then_retuned: &'static str,
+    fic_errors: &'static str,
+    tii_none: &'static str,
+    not_in_db: &'static str,
+    and_more: &'static str,
+    more: &'static str,
+    recording: &'static str,
+}
+
+pub const PL: Words = Words {
+    open: "„",
+    close: "”",
+    new_mux: "🆕 nowy multipleks",
+    eid: "🆔 EId multipleksu",
+    mux_label: "✏️ nazwa multipleksu",
+    added: "➕ nowe",
+    removed: "➖ zniknęły",
+    label: "nazwa",
+    short: "skrót",
+    apps: "aplikacje",
+    si_short: "SI nazwa krótka",
+    si_name: "SI nazwa",
+    si_long: "SI nazwa długa",
+    si_no_desc: "SI bez opisu",
+    si_desc: "SI opis",
+    si_genres: "SI gatunki",
+    si_links: "SI linki",
+    si_logos: "SI logo",
+    si_new_logo: "SI nowe logo",
+    test: "🔔 test webhooka, działa",
+    snr_mean: "SNR śr.",
+    over: "przez",
+    then_lost: "potem zanik",
+    then_retuned: "potem przestrojony",
+    fic_errors: "błędy FIC",
+    tii_none: "nic nie odebrano",
+    not_in_db: "nie ma w bazie",
+    and_more: "i",
+    more: "więcej",
+    recording: "nagranie",
+};
+
+pub const EN: Words = Words {
+    open: "“",
+    close: "”",
+    new_mux: "🆕 new multiplex",
+    eid: "🆔 multiplex EId",
+    mux_label: "✏️ multiplex name",
+    added: "➕ new",
+    removed: "➖ gone",
+    label: "name",
+    short: "short name",
+    apps: "applications",
+    si_short: "SI short name",
+    si_name: "SI name",
+    si_long: "SI long name",
+    si_no_desc: "SI without description",
+    si_desc: "SI description",
+    si_genres: "SI genres",
+    si_links: "SI links",
+    si_logos: "SI logo",
+    si_new_logo: "SI new logo",
+    test: "🔔 webhook test, it works",
+    snr_mean: "SNR avg",
+    over: "over",
+    then_lost: "then lost",
+    then_retuned: "then retuned",
+    fic_errors: "FIC errors",
+    tii_none: "none received",
+    not_in_db: "not in the database",
+    and_more: "and",
+    more: "more",
+    recording: "recording",
+};
+
+pub const DE: Words = Words {
+    open: "„",
+    close: "“",
+    new_mux: "🆕 neuer Multiplex",
+    eid: "🆔 EId des Multiplex",
+    mux_label: "✏️ Name des Multiplex",
+    added: "➕ neu",
+    removed: "➖ weg",
+    label: "Name",
+    short: "Kurzname",
+    apps: "Anwendungen",
+    si_short: "SI Kurzname",
+    si_name: "SI Name",
+    si_long: "SI langer Name",
+    si_no_desc: "SI ohne Beschreibung",
+    si_desc: "SI Beschreibung",
+    si_genres: "SI Genres",
+    si_links: "SI Links",
+    si_logos: "SI Logo",
+    si_new_logo: "SI neues Logo",
+    test: "🔔 Webhook-Test, funktioniert",
+    snr_mean: "SNR Mittel",
+    over: "über",
+    then_lost: "dann weg",
+    then_retuned: "dann umgestimmt",
+    fic_errors: "FIC-Fehler",
+    tii_none: "nichts empfangen",
+    not_in_db: "nicht in der Datenbank",
+    and_more: "und",
+    more: "weitere",
+    recording: "Aufnahme",
+};
+
+impl Words {
+    /// By the language code of the settings; Polish as before the choice
+    /// existed.
+    pub fn of(lang: Option<&str>) -> &'static Words {
+        match lang {
+            Some("en") => &EN,
+            Some("de") => &DE,
+            _ => &PL,
+        }
+    }
+
+    fn quoted(&self, s: &str) -> String {
+        format!("{}{s}{}", self.open, self.close)
+    }
+}
+
+/// Where the messages go: the webhook, the name of this server, the language.
+pub struct Hook<'a> {
+    pub url: &'a str,
+    pub station: &'a str,
+    pub words: &'static Words,
+}
+
+impl<'a> Hook<'a> {
+    pub fn of(s: &'a crate::config::Settings) -> Hook<'a> {
+        Hook { url: &s.discord_webhook, station: &s.station_name, words: Words::of(s.discord_lang.as_deref()) }
+    }
+}
+
+fn discord_lines(ev: &ChangeEvent, w: &Words) -> Vec<String> {
     let text = |v: &Option<String>| md(v.as_deref().unwrap_or_default());
     let name = |c: &Change| format!("**{}**", md(c.service.as_deref().map(str::trim).unwrap_or("?")));
     let mut lines = Vec::new();
     for c in &ev.changes {
         match c.kind.as_str() {
-            "ensembleNew" => lines.push(format!("🆕 nowy multipleks: {}", text(&c.to))),
-            "ensembleId" => lines.push(format!("🆔 EId multipleksu: {} → {}", text(&c.from), text(&c.to))),
-            "ensembleLabel" => lines.push(format!("✏️ nazwa multipleksu: „{}” → „{}”", text(&c.from), text(&c.to))),
+            "ensembleNew" => lines.push(format!("{}: {}", w.new_mux, text(&c.to))),
+            "ensembleId" => lines.push(format!("{}: {} → {}", w.eid, text(&c.from), text(&c.to))),
+            "ensembleLabel" => lines.push(format!("{}: {} → {}", w.mux_label, w.quoted(&text(&c.from)), w.quoted(&text(&c.to)))),
+            "test" => lines.push(w.test.to_string()),
             _ => {}
         }
     }
@@ -886,32 +1050,33 @@ fn discord_lines(ev: &ChangeEvent) -> Vec<String> {
         .map(|c| format!("{} ({}{})", name(c), c.sid.as_deref().map(|s| format!("{s}, ")).unwrap_or_default(), text(&c.to)))
         .collect();
     if !added.is_empty() {
-        lines.push(format!("➕ nowe: {}", added.join(", ")));
+        lines.push(format!("{}: {}", w.added, added.join(", ")));
     }
     let removed: Vec<String> = ev.changes.iter().filter(|c| c.kind == "serviceRemoved").map(name).collect();
     if !removed.is_empty() {
-        lines.push(format!("➖ zniknęły: {}", removed.join(", ")));
+        lines.push(format!("{}: {}", w.removed, removed.join(", ")));
     }
     // the rest by service, in the order they came
     let mut services: Vec<(String, Vec<String>)> = Vec::new();
     for c in &ev.changes {
         let (from, to) = (text(&c.from), text(&c.to));
+        let (qf, qt) = (w.quoted(&from), w.quoted(&to));
         let part = match c.kind.as_str() {
-            "label" => format!("nazwa „{from}” → „{to}”"),
-            "shortLabel" => format!("skrót „{from}” → „{to}”"),
+            "label" => format!("{} {qf} → {qt}", w.label),
+            "shortLabel" => format!("{} {qf} → {qt}", w.short),
             "codec" | "bitrate" | "protection" => format!("{from} → {to}"),
             "pty" => format!("PTY {from} → {to}"),
-            "userApps" => format!("aplikacje: {} → {}", if from.is_empty() { "-" } else { &from }, if to.is_empty() { "-" } else { &to }),
+            "userApps" => format!("{}: {} → {}", w.apps, or_dash(&from), or_dash(&to)),
             // the service information (SPI SI): sichanges.rs
-            "siShortName" => format!("SI nazwa krótka „{from}” → „{to}”"),
-            "siMediumName" => format!("SI nazwa „{from}” → „{to}”"),
-            "siLongName" => format!("SI nazwa długa „{from}” → „{to}”"),
-            "siDescription" if to.is_empty() => "SI bez opisu".to_string(),
-            "siDescription" => format!("SI opis: „{}”", short_text(&to, 200)),
-            "siGenres" => format!("SI gatunki: {} → {}", or_dash(&genre_names(&from)), or_dash(&genre_names(&to))),
-            "siLinks" => format!("SI linki: {} → {}", or_dash(&from), or_dash(&to)),
-            "siLogos" => format!("SI logo: {} → {}", or_dash(&from), or_dash(&to)),
-            "siLogoImage" => format!("SI nowe logo {to}"),
+            "siShortName" => format!("{} {qf} → {qt}", w.si_short),
+            "siMediumName" => format!("{} {qf} → {qt}", w.si_name),
+            "siLongName" => format!("{} {qf} → {qt}", w.si_long),
+            "siDescription" if to.is_empty() => w.si_no_desc.to_string(),
+            "siDescription" => format!("{}: {}", w.si_desc, w.quoted(&short_text(&to, 200))),
+            "siGenres" => format!("{}: {} → {}", w.si_genres, or_dash(&genre_names(&from)), or_dash(&genre_names(&to))),
+            "siLinks" => format!("{}: {} → {}", w.si_links, or_dash(&from), or_dash(&to)),
+            "siLogos" => format!("{}: {} → {}", w.si_logos, or_dash(&from), or_dash(&to)),
+            "siLogoImage" => format!("{} {to}", w.si_new_logo),
             "siRadioDns" => format!("SI RadioDNS: {} → {}", or_dash(&from), or_dash(&to)),
             _ => continue,
         };
@@ -955,6 +1120,15 @@ pub struct Posted {
     done: bool,
     /// The id and text of the last message posted.
     last: Option<(String, String)>,
+    /// Discord did not take a message.
+    pub failed: bool,
+}
+
+impl Posted {
+    /// Sent or failed: whether it went.
+    pub fn outcome(&self) -> Option<bool> {
+        self.done.then_some(!self.failed)
+    }
 }
 
 pub type DiscordMsg = std::sync::Arc<parking_lot::Mutex<Posted>>;
@@ -986,17 +1160,20 @@ fn discord_send(req: ureq::RequestBuilder<ureq::typestate::WithBody>, body: serd
 
 /// Post a change event to a Discord webhook (in a background thread).
 /// `base`: the public address of this server, for the link to a recording.
-pub fn post_discord(webhook: &str, station: &str, base: Option<&str>, ev: &ChangeEvent) -> DiscordMsg {
+pub fn post_discord(hook: &Hook, base: Option<&str>, ev: &ChangeEvent) -> DiscordMsg {
     let posted = DiscordMsg::default();
-    let body = discord_lines(ev);
+    let body = discord_lines(ev, hook.words);
     // (only sub-channels or capacity: the Changes view has them)
-    if !webhook_ok(webhook) || body.is_empty() {
-        posted.lock().done = true;
+    if !webhook_ok(hook.url) || body.is_empty() {
+        let mut p = posted.lock();
+        p.done = true;
+        p.failed = !webhook_ok(hook.url);
+        drop(p);
         return posted;
     }
-    let mut lines = vec![discord_header(station, ev)];
+    let mut lines = vec![discord_header(hook.station, ev)];
     lines.extend(body);
-    lines.extend(recording_line(ev.recording.as_deref(), base));
+    lines.extend(recording_line(ev.recording.as_deref(), base, hook.words));
     // Discord limits messages to 2000 characters
     let mut messages = Vec::new();
     let mut cur = String::new();
@@ -1010,7 +1187,7 @@ pub fn post_discord(webhook: &str, station: &str, base: Option<&str>, ev: &Chang
     if !cur.is_empty() {
         messages.push(cur);
     }
-    let url = webhook_url(webhook, "", "wait=true");
+    let url = webhook_url(hook.url, "", "wait=true");
     let msg = posted.clone();
     std::thread::spawn(move || {
         for m in messages {
@@ -1020,7 +1197,9 @@ pub fn post_discord(webhook: &str, station: &str, base: Option<&str>, ev: &Chang
                 Ok(id) => msg.lock().last = id.map(|id| (id, m)),
                 Err(e) => {
                     log::warn!("Discord webhook failed: {e}");
-                    msg.lock().last = None;
+                    let mut p = msg.lock();
+                    p.last = None;
+                    p.failed = true;
                     break;
                 }
             }
@@ -1035,14 +1214,14 @@ pub fn post_discord(webhook: &str, station: &str, base: Option<&str>, ev: &Chang
 /// in; as a message of its own when that one did not go or the whole would
 /// be too long. `base`: the public address of this server, for the link to
 /// the recording.
-pub fn discord_report(webhook: &str, station: &str, base: Option<&str>, ev: &ChangeEvent, posted: DiscordMsg) {
+pub fn discord_report(hook: &Hook, base: Option<&str>, ev: &ChangeEvent, posted: DiscordMsg) {
     let Some(report) = ev.report.as_ref() else { return };
-    if !webhook_ok(webhook) {
+    if !webhook_ok(hook.url) {
         return;
     }
-    let lines = report_lines(report, base).join("\n");
-    let head = discord_header(station, ev);
-    let webhook = webhook.to_string();
+    let lines = report_lines(report, base, hook.words).join("\n");
+    let head = discord_header(hook.station, ev);
+    let webhook = hook.url.to_string();
     std::thread::spawn(move || {
         // (a report of a few seconds may come while its message is on its way)
         for _ in 0..30 {
@@ -1078,29 +1257,29 @@ fn flag(iso: &str) -> String {
 
 /// A report in a few lines: the signal, then the transmitters, then the
 /// recording (a link that plays it, the web's ?dxrec=).
-fn report_lines(r: &Report, base: Option<&str>) -> Vec<String> {
-    let mut head = format!("📶 SNR śr. {:.1} dB, max {:.1} dB przez {} s", r.snr_mean, r.snr_max, r.seconds);
+fn report_lines(r: &Report, base: Option<&str>, w: &Words) -> Vec<String> {
+    let mut head = format!("📶 {} {:.1} dB, max {:.1} dB {} {} s", w.snr_mean, r.snr_mean, r.snr_max, w.over, r.seconds);
     match r.ended.as_str() {
-        "lost" => head.push_str(", potem zanik"),
-        "retuned" => head.push_str(", potem przestrojony"),
+        "lost" => head.push_str(&format!(", {}", w.then_lost)),
+        "retuned" => head.push_str(&format!(", {}", w.then_retuned)),
         _ => {}
     }
     if r.fib_errors >= 0.005 {
-        head.push_str(&format!(", błędy FIC {:.0}%", r.fib_errors * 100.0));
+        head.push_str(&format!(", {} {:.0}%", w.fic_errors, r.fib_errors * 100.0));
     }
     if let Some(c) = &r.country {
         head.push_str(&format!(", {} {c}", flag(c)));
     }
     let mut lines = vec![head];
     if r.transmitters.is_empty() {
-        lines.push("📡 TII: nic nie odebrano".into());
+        lines.push(format!("📡 TII: {}", w.tii_none));
     }
     const SHOWN: usize = 10;
     for t in r.transmitters.iter().take(SHOWN) {
         let mut l = format!("📡 TII {}", t.code);
         match &t.location {
             Some(loc) => l.push_str(&format!(", {}{loc}", t.country.as_deref().map(|c| format!("{} ", flag(c))).unwrap_or_default())),
-            None => l.push_str(", nie ma w bazie"),
+            None => l.push_str(&format!(", {}", w.not_in_db)),
         }
         if let (Some(d), Some(a)) = (t.distance, t.azimuth) {
             l.push_str(&format!(", {d:.0} km, {a:.0}°"));
@@ -1114,18 +1293,18 @@ fn report_lines(r: &Report, base: Option<&str>) -> Vec<String> {
         lines.push(l);
     }
     if r.transmitters.len() > SHOWN {
-        lines.push(format!("📡 … i {} więcej", r.transmitters.len() - SHOWN));
+        lines.push(format!("📡 … {} {} {}", w.and_more, r.transmitters.len() - SHOWN, w.more));
     }
-    lines.extend(recording_line(r.recording.as_deref(), base));
+    lines.extend(recording_line(r.recording.as_deref(), base, w));
     lines
 }
 
 /// The line of a DX recording: a link that plays it (the web's ?dxrec=).
-fn recording_line(name: Option<&str>, base: Option<&str>) -> Option<String> {
+fn recording_line(name: Option<&str>, base: Option<&str>, w: &Words) -> Option<String> {
     match (name?, base) {
         // (in <>: Discord shows no preview of it)
-        (n, Some(b)) => Some(format!("🎙 nagranie: <{}/?dxrec={n}>", b.trim_end_matches('/'))),
-        (n, None) => Some(format!("🎙 nagranie: {n}")),
+        (n, Some(b)) => Some(format!("🎙 {}: <{}/?dxrec={n}>", w.recording, b.trim_end_matches('/'))),
+        (n, None) => Some(format!("🎙 {}: {n}", w.recording)),
     }
 }
 
@@ -1338,7 +1517,7 @@ mod tests {
         age(&mut t);
         let ev = t.observe("12D", &changed, true, &[], &mute).expect("reported once it lasted");
         assert!(ev.changes.iter().any(|c| c.kind == "serviceRemoved" && c.service.as_deref() == Some("S-16")));
-        let lines = discord_lines(&ev);
+        let lines = discord_lines(&ev, &PL);
         assert_eq!(lines, vec!["➖ zniknęły: **S-16**".to_string(), "🔄 **S-0**: 48 kbps → 64 kbps".to_string()]);
         // and not again
         assert!(t.observe("12D", &changed, true, &[], &mute).is_none());
@@ -1413,7 +1592,7 @@ mod tests {
         assert_eq!(due[0].channel, "12D");
         // the name A→B→C is A→C, the station added and removed never was, the
         // bitrate that went back did not change
-        assert_eq!(discord_lines(&due[0]), vec!["🔄 **C**: nazwa „A” → „C”".to_string(), "🔄 **S-3**: PTY - → Pop Music".to_string()]);
+        assert_eq!(discord_lines(&due[0], &PL), vec!["🔄 **C**: nazwa „A” → „C”".to_string(), "🔄 **S-3**: PTY - → Pop Music".to_string()]);
         assert!(b.due(t0 + s(399)).is_empty());
         assert_eq!(b.due(t0 + s(400)).len(), 1);
         assert!(b.pending.is_empty());
@@ -1524,7 +1703,7 @@ mod tests {
             ],
             recording: Some("2026-01-02_030405_12C_1234.eti".into()),
         };
-        let l = report_lines(&r, Some("https://rx.example.org/"));
+        let l = report_lines(&r, Some("https://rx.example.org/"), &PL);
         assert_eq!(l[0], "📶 SNR śr. 6.0 dB, max 9.5 dB przez 23 s, potem zanik, błędy FIC 2%, 🇨🇿 CZ");
         assert_eq!(l[1], "📡 TII 5-2, 🇨🇿 Hill A, 123 km, 250°, 5 kW, ≈4.2 dB");
         assert_eq!(l[2], "📡 TII 7-1, nie ma w bazie, ≈0.0 dB");
@@ -1552,14 +1731,14 @@ mod tests {
         let mut into = Vec::new();
         merge(&mut into, change("siLogoImage", Some("4A91"), "Radio A", None, Some("600×600")));
         merge(&mut into, change("siLogoImage", Some("4A91"), "Radio A", None, Some("32×32")));
-        assert_eq!(discord_lines(&event("8C", into)), vec!["🔄 **Radio A**: SI nowe logo 32×32, 600×600"]);
+        assert_eq!(discord_lines(&event("8C", into), &PL), vec!["🔄 **Radio A**: SI nowe logo 32×32, 600×600"]);
         let ev = event("8C", vec![change("siMediumName", Some("4A91"), "Radio A", Some("Radio A"), Some("Radio B"))]);
-        let lines = discord_lines(&ev);
+        let lines = discord_lines(&ev, &PL);
         assert_eq!(lines, vec!["🔄 **Radio A**: SI nazwa „Radio A” → „Radio B”"]);
         let ev = event("8C", vec![change("siGenres", Some("4A91"), "Radio A", Some("3.6.4.1"), Some("3.6.4.14, Jazz"))]);
-        assert_eq!(discord_lines(&ev), vec!["🔄 **Radio A**: SI gatunki: Pop → Rock, Jazz"]);
+        assert_eq!(discord_lines(&ev, &PL), vec!["🔄 **Radio A**: SI gatunki: Pop → Rock, Jazz"]);
         let ev = event("8C", vec![change("siDescription", Some("4A91"), "Radio A", Some("x"), Some(&"a".repeat(300)))]);
-        assert!(discord_lines(&ev)[0].ends_with("…”"));
+        assert!(discord_lines(&ev, &PL)[0].ends_with("…”"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1577,6 +1756,26 @@ mod tests {
     fn text_from_the_air_is_no_markdown() {
         assert_eq!(md("[a](http://a.example)"), "\\[a\\]\\(http\\://a.example\\)");
         assert_eq!(md("Radio 1"), "Radio 1");
+    }
+
+    #[test]
+    fn messages_in_the_chosen_language() {
+        let ev = ChangeEvent {
+            time: 0,
+            channel: "12C".into(),
+            eid: "C1C1".into(),
+            ensemble: "MUX A".into(),
+            changes: vec![
+                Change { kind: "test".into(), service: None, sid: None, from: None, to: None },
+                Change { kind: "label".into(), service: Some("Radio A".into()), sid: None, from: Some("A".into()), to: Some("B".into()) },
+            ],
+            report: None,
+            recording: None,
+        };
+        assert_eq!(discord_lines(&ev, Words::of(Some("en"))), vec!["🔔 webhook test, it works", "🔄 **Radio A**: name “A” → “B”"]);
+        assert_eq!(discord_lines(&ev, Words::of(Some("de")))[1], "🔄 **Radio A**: Name „A“ → „B“");
+        // (none chosen: Polish, as before)
+        assert_eq!(discord_lines(&ev, Words::of(None))[1], "🔄 **Radio A**: nazwa „A” → „B”");
     }
 
     #[test]

@@ -733,17 +733,26 @@ impl Radio {
                         channel: self.channel.clone().unwrap_or_default(),
                         eid: format!("{:04X}", self.ensemble.eid.unwrap_or(0)),
                         ensemble: self.ensemble.label.as_ref().map(|l| l.text.clone()).unwrap_or_default(),
-                        changes: vec![changes::Change {
-                            kind: "test".into(),
-                            service: None,
-                            sid: None,
-                            from: Some("MagicDAB".into()),
-                            to: Some("test webhooka".into()),
-                        }],
+                        changes: vec![changes::Change { kind: "test".into(), service: None, sid: None, from: None, to: None }],
                         report: None,
                         recording: None,
                     };
-                    changes::post_discord(&self.settings.discord_webhook, &self.settings.station_name, None, &ev);
+                    let posted = changes::post_discord(&changes::Hook::of(&self.settings), None, &ev);
+                    // (the admin learns whether it went: Discord answers in a second or so)
+                    let hub = self.hub.clone();
+                    std::thread::spawn(move || {
+                        for _ in 0..60 {
+                            if let Some(ok) = posted.lock().outcome() {
+                                let message = if ok { "discord_test_sent" } else { "discord_test_failed" };
+                                hub.send(
+                                    client,
+                                    text(&json!({"type": "notice", "level": if ok { "info" } else { "error" }, "message": message})),
+                                );
+                                return;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                        }
+                    });
                 }
             }
             // a download by an admin's page: a ticket for it, used once (hub.rs)

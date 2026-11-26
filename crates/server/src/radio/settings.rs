@@ -226,6 +226,9 @@ impl Radio {
             Some(Value::String(v)) if !v.trim().is_empty() => self.notice(client, "error", "webhook_invalid"),
             _ => {}
         }
+        if let Some(v) = s.get("discordLang").and_then(|v| v.as_str()).filter(|v| matches!(*v, "pl" | "en" | "de")) {
+            self.settings.discord_lang = Some(v.to_string());
+        }
         if let Some(v) = s.get("tunnel") {
             if let Ok(mut t) = serde_json::from_value::<crate::tunnel::TunnelConfig>(v.clone()) {
                 // (the interface never has the token: an empty one keeps it, also

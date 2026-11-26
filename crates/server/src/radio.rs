@@ -1115,7 +1115,7 @@ impl Radio {
             // (Discord gets the changes of the multiplex together, 5 minutes later
             // - tick - but a new multiplex at once: an opening may not last)
             let discord = if ev.changes.iter().any(|c| c.kind == "ensembleNew") {
-                Some(changes::post_discord(&self.settings.discord_webhook, &self.settings.station_name, None, &ev))
+                Some(changes::post_discord(&changes::Hook::of(&self.settings), None, &ev))
             } else {
                 self.changes.defer(&ev);
                 None
@@ -1274,7 +1274,7 @@ impl Radio {
         if !due.is_empty() {
             let base = crate::servermap::Target::from_settings(&self.settings).url;
             for ev in due {
-                changes::post_discord(&self.settings.discord_webhook, &self.settings.station_name, base.as_deref(), &ev);
+                changes::post_discord(&changes::Hook::of(&self.settings), base.as_deref(), &ev);
             }
         }
         if self.spi.docs_dirty {

@@ -161,6 +161,9 @@ pub struct Settings {
     pub filter_narrow_default: bool,
     /// Discord webhook URL for ensemble change notifications.
     pub discord_webhook: String,
+    /// Language of those notifications ("pl", "en", "de"); none: Polish, as
+    /// before it could be chosen (the interface sets its own with a new webhook).
+    pub discord_lang: Option<String>,
     /// Channels fed by ETI / EDI streams instead of the tuner.
     pub channel_maps: Vec<ChannelMap>,
     /// Listeners choose their own multiplex among the mapped channels: a
@@ -361,6 +364,7 @@ impl Default for Settings {
             background_pad: true,
             filter_narrow_default: true,
             discord_webhook: String::new(),
+            discord_lang: None,
             channel_maps: Vec::new(),
             listener_multiplex: true,
             listener_multiplex_limit: 4,
