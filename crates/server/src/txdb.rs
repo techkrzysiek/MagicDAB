@@ -115,16 +115,19 @@ impl TxDb {
         self.count
     }
 
-    /// Look up a transmitter by ensemble id, ECC, TII code and frequency (kHz).
-    pub fn find(&self, eid: u16, ecc: Option<u8>, main: u8, sub: u8, freq_khz: u32) -> Option<&Transmitter> {
+    /// Look up a transmitter by ensemble id, ECC, TII code and frequency (kHz);
+    /// of several with all that alike, the nearest to `near` (lat, lon): a
+    /// network reuses its codes in another region, on the same frequency.
+    pub fn find(&self, eid: u16, ecc: Option<u8>, main: u8, sub: u8, freq_khz: u32, near: Option<(f64, f64)>) -> Option<&Transmitter> {
         let list = self.by_key.get(&(eid, main, sub))?;
-        // prefer a matching ECC, then the closest frequency
+        // prefer a matching ECC, then the closest frequency, then the nearest
         list.iter().min_by_key(|t| {
             let ecc_penalty = match ecc {
                 Some(e) if t.ecc != 0 && t.ecc != e => 1_000_000i64,
                 _ => 0,
             };
-            ecc_penalty + (t.frequency as i64 - freq_khz as i64).abs()
+            let metres = near.map(|(lat, lon)| (distance_azimuth(lat, lon, t.lat, t.lon).0 * 1000.0) as i64).unwrap_or(0);
+            (ecc_penalty + (t.frequency as i64 - freq_khz as i64).abs(), metres)
         })
     }
 
@@ -148,7 +151,10 @@ impl TxDb {
     ) -> Option<(f64, Option<(u8, u8)>)> {
         let km = |t: &Transmitter| distance_azimuth(lat, lon, t.lat, t.lon).0;
         let nearest = |a: &(f64, Option<(u8, u8)>), b: &(f64, Option<(u8, u8)>)| a.0.total_cmp(&b.0);
-        let tx = heard.iter().filter_map(|&(m, s)| self.find(eid, ecc, m, s, freq_khz).map(|t| (km(t), Some((m, s))))).min_by(nearest);
+        let tx = heard
+            .iter()
+            .filter_map(|&(m, s)| self.find(eid, ecc, m, s, freq_khz, Some((lat, lon))).map(|t| (km(t), Some((m, s)))))
+            .min_by(nearest);
         tx.or_else(|| {
             self.ensemble(eid)
                 .into_iter()
@@ -192,5 +198,22 @@ mod tests {
         assert_eq!(at(&[], 215072), Some((0.0, None)));
         assert_eq!(at(&[], 174928).map(|x| x.0), Some(11.0));
         assert_eq!(at(&[], 227360), None);
+    }
+
+    /// One code on one frequency in two regions (a national network): the
+    /// transmitter near the receiver, not the first in the list.
+    #[test]
+    fn of_two_transmitters_with_one_code_the_nearer_one() {
+        let mut db = TxDb::default();
+        db.parse(
+            "id;country;channel;label;eid;tii;location;lat;lon;alt;height;pol;freq;power\n\
+             1;PL;8B;MUX;3A02;1002;Far away;49.2;19.6;0;0;V;197.648;5\n\
+             2;PL;8B;MUX;3A02;1002;Here;50.0;19.0;0;0;V;197.648;5\n",
+        );
+        let find = |near| db.find(0x3A02, Some(0xE2), 10, 2, 197648, near).map(|t| t.location.clone());
+        assert_eq!(find(Some((50.01, 19.0))).as_deref(), Some("Here"));
+        assert_eq!(find(Some((49.25, 19.6))).as_deref(), Some("Far away"));
+        // (no position of the receiver: one of them)
+        assert!(find(None).is_some());
     }
 }

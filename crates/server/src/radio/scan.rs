@@ -418,7 +418,9 @@ impl Radio {
                 r.main = Some(main);
                 r.sub = Some(sub);
                 r.level = Some(r1(level));
-                if let Some(t) = self.txdb.find(eid, ens.ecc, main, sub, self.frequency) {
+                if let Some(t) =
+                    self.txdb.find(eid, ens.ecc, main, sub, self.frequency, self.settings.location.as_ref().map(|l| (l.lat, l.lon)))
+                {
                     r.location = Some(t.location.clone());
                     r.lat = Some(t.lat);
                     r.lon = Some(t.lon);

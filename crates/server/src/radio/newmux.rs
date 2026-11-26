@@ -127,7 +127,7 @@ impl Radio {
             .iter()
             .filter(|(_, (_, k, _, _))| *k >= 3.min(p.seconds))
             .map(|(&(main, sub), &(sum, k, own, own_n))| {
-                let tx = self.txdb.find(p.eid, p.ecc, main, sub, p.frequency);
+                let tx = self.txdb.find(p.eid, p.ecc, main, sub, p.frequency, loc.as_ref().map(|l| (l.lat, l.lon)));
                 let (distance, azimuth) = match (&loc, tx) {
                     (Some(l), Some(t)) => {
                         let (d, a) = distance_azimuth(l.lat, l.lon, t.lat, t.lon);

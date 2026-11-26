@@ -428,7 +428,8 @@ impl Radio {
             }
             let label = self.ensemble.label.as_ref().map(|l| l.text.clone()).unwrap_or_default();
             for c in &self.tii_codes {
-                let tx = self.txdb.find(self.ensemble.eid.unwrap_or(0), self.ensemble.ecc, c.main, c.sub, self.frequency);
+                let near = self.settings.location.as_ref().map(|l| (l.lat, l.lon));
+                let tx = self.txdb.find(self.ensemble.eid.unwrap_or(0), self.ensemble.ecc, c.main, c.sub, self.frequency, near);
                 let _ = writeln!(
                     f,
                     "{};{};{};{:04X};{};{};{};{:.1};{:.1};{}",
@@ -454,7 +455,7 @@ pub(super) fn tii_view(txdb: &TxDb, loc: Option<&config::Location>, tii: &[TiiCo
     let codes: Vec<Value> = tii
         .iter()
         .map(|c| {
-            let tx = txdb.find(eid, ecc, c.main, c.sub, frequency);
+            let tx = txdb.find(eid, ecc, c.main, c.sub, frequency, loc.map(|l| (l.lat, l.lon)));
             let (dist, az) = match (loc, tx) {
                 (Some(l), Some(t)) => {
                     let (d, a) = distance_azimuth(l.lat, l.lon, t.lat, t.lon);

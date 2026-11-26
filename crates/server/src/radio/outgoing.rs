@@ -55,7 +55,14 @@ impl Radio {
             })
             .unwrap_or_default();
         let tx = self.tii_codes.first().and_then(|c| {
-            let t = self.txdb.find(ens.eid.unwrap_or(0), ens.ecc, c.main, c.sub, self.frequency)?;
+            let t = self.txdb.find(
+                ens.eid.unwrap_or(0),
+                ens.ecc,
+                c.main,
+                c.sub,
+                self.frequency,
+                self.settings.location.as_ref().map(|l| (l.lat, l.lon)),
+            )?;
             let (dist, azi) = match &self.settings.location {
                 Some(l) => {
                     let (d, a) = distance_azimuth(l.lat, l.lon, t.lat, t.lon);
