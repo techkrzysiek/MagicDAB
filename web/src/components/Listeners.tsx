@@ -62,7 +62,11 @@ export function ListenerTable() {
           <span className="mono">{c.address}</span>
           {c.admin && <span className="chip">{t('admin')}</span>}
           {c.tuner && <span className="chip">{t('tuner_badge')}</span>}
-          {c.gated && <span className="chip">{t('gated_badge')}</span>}
+          {c.gated && (
+            <span className="chip" title={t('gated_hint')}>
+              {t('gated_badge')}
+            </span>
+          )}
           {c.id === list?.self && <span className="chip">{t('you')}</span>}
         </div>
         <div className="hint">
