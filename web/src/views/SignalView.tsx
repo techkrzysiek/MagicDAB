@@ -36,6 +36,8 @@ function mer(pts: Float32Array[]): number | null {
 }
 
 interface Path {
+  /** taps from the strongest path */
+  offset: number
   delayUs: number
   db: number
   share: number
@@ -49,9 +51,11 @@ interface Path {
  * share of the power of all paths. Only down to 20 dB below the strongest:
  * weaker peaks are mostly the response's own side lobes, the tuner's ripple
  * and nearby reflections, not other transmitters (a multiplex with no SFN
- * showed three of them at -21 to -27 dB).
+ * showed three of them at -21 to -27 dB). A path shown before (`kept`: its
+ * offset from the strongest, in taps) stays down to 23 dB below: one right at
+ * the limit came and went with every update.
  */
-function sfnPaths(imp: Float32Array, noise: number, guard: number): Path[] {
+function sfnPaths(imp: Float32Array, noise: number, guard: number, kept: number[] = []): Path[] {
   const k = imp.length
   let max = -Infinity
   let jm = 0
@@ -62,10 +66,12 @@ function sfnPaths(imp: Float32Array, noise: number, guard: number): Path[] {
     }
   }
   const floor = Math.max(noise + 10, max - 20)
+  const held = Math.max(noise + 10, max - 23)
   const peaks: { j: number; db: number }[] = []
   for (let j = 1; j < k - 1; j++) {
     const v = imp[j]
-    if (v < floor || v < imp[j - 1] || v < imp[j + 1]) continue
+    const known = kept.some((o) => Math.abs(j - jm - o) <= 2)
+    if (v < (known ? held : floor) || v < imp[j - 1] || v < imp[j + 1]) continue
     // one peak per path: the strongest within 4 taps
     const near = peaks.find((p) => Math.abs(p.j - j) <= 4)
     if (near) {
@@ -80,6 +86,7 @@ function sfnPaths(imp: Float32Array, noise: number, guard: number): Path[] {
   const total = power.reduce((a, b) => a + b, 0)
   return peaks
     .map((p, i) => ({
+      offset: p.j - jm,
       delayUs: (p.j - jm) / SAMPLES_US,
       db: p.db - max,
       share: total > 0 ? power[i] / total : 0,
@@ -177,10 +184,13 @@ export default function SignalView() {
   }, [spectrum])
   const merDb = useMemo(() => (spectrum ? mer(cons.current) : null), [spectrum])
   const impulse = spectrum?.impulse?.length ? spectrum.impulse : null
-  const paths = useMemo(
-    () => (impulse && spectrum ? sfnPaths(impulse, spectrum.noise ?? -200, spectrum.guard ?? 504) : []),
-    [impulse, spectrum],
-  )
+  // (the paths shown last, for sfnPaths' hysteresis)
+  const shown = useRef<number[]>([])
+  const paths = useMemo(() => {
+    const p = impulse && spectrum ? sfnPaths(impulse, spectrum.noise ?? -200, spectrum.guard ?? 504, shown.current) : []
+    shown.current = p.map((x) => x.offset)
+    return p
+  }, [impulse, spectrum])
 
   const consRef = useCanvas(
     (g, w, h, dpr) => {
