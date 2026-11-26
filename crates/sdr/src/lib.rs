@@ -148,7 +148,7 @@ pub enum DeviceConfig {
         /// The tuner's filter in Hz (`rtlsdr_set_tuner_bandwidth`), 0: as
         /// librtlsdr sets it for the sample rate (about 2 MHz on an R82xx).
         /// Narrower keeps a strong multiplex in the next block out of the gain.
-        #[serde(default)]
+        #[serde(default = "default_bandwidth")]
         bandwidth: u32,
     },
     RtlTcp {
@@ -191,6 +191,15 @@ fn default_true() -> bool {
     true
 }
 
+/// The tuner's filter unless chosen otherwise: wide let a strong multiplex
+/// in the next block into the gain, and a weak one beside it lost its audio
+/// (two users' sticks, R820T); here no multiplex came out worse with it.
+pub const DEFAULT_BANDWIDTH: u32 = 1_600_000;
+
+fn default_bandwidth() -> u32 {
+    DEFAULT_BANDWIDTH
+}
+
 fn default_lna() -> u32 {
     16
 }
@@ -202,7 +211,7 @@ fn default_vga() -> u32 {
 impl Default for DeviceConfig {
     fn default() -> Self {
         // (Android too: the app opens the stick and hands it over, android_usb.rs)
-        DeviceConfig::RtlSdr { index: 0, ppm: 0, bias_tee: false, bandwidth: 0 }
+        DeviceConfig::RtlSdr { index: 0, ppm: 0, bias_tee: false, bandwidth: DEFAULT_BANDWIDTH }
     }
 }
 

@@ -186,7 +186,12 @@ async fn main() {
                 if index.is_some() {
                     i += 1;
                 }
-                device = Some(magicdab_sdr::DeviceConfig::RtlSdr { index: index.unwrap_or(0), ppm: 0, bias_tee: false, bandwidth: 0 });
+                device = Some(magicdab_sdr::DeviceConfig::RtlSdr {
+                    index: index.unwrap_or(0),
+                    ppm: 0,
+                    bias_tee: false,
+                    bandwidth: magicdab_sdr::DEFAULT_BANDWIDTH,
+                });
             }
             "--rtltcp" => {
                 let v = next(i);

@@ -155,6 +155,10 @@ pub struct Settings {
     pub radio_vis: bool,
     /// Decode DLS and slideshow of all services in the background.
     pub background_pad: bool,
+    /// Set since the tuner's filter is 1.6 MHz by default (0.3.52): an older
+    /// settings file without it has a wide filter narrowed once (Store::load).
+    #[serde(default)]
+    pub filter_narrow_default: bool,
     /// Discord webhook URL for ensemble change notifications.
     pub discord_webhook: String,
     /// Channels fed by ETI / EDI streams instead of the tuner.
@@ -355,6 +359,7 @@ impl Default for Settings {
             internet: true,
             radio_vis: true,
             background_pad: true,
+            filter_narrow_default: true,
             discord_webhook: String::new(),
             channel_maps: Vec::new(),
             listener_multiplex: true,
@@ -640,14 +645,18 @@ impl Store {
         }
         match std::fs::read_to_string(&self.path) {
             Ok(s) => {
-                serde_json::from_str(&s).map(Self::fm_off_once).map(|settings| Self::proxies_as_before(settings, &s)).unwrap_or_else(|e| {
-                    // (kept aside: the next save would overwrite the passwords and
-                    // the tunnel token in it)
-                    let aside = self.path.with_extension(format!("json.invalid-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
-                    let _ = std::fs::rename(&self.path, &aside);
-                    log::warn!("settings.json invalid ({e}), using defaults; the file is kept as {}", aside.display());
-                    Settings::default()
-                })
+                serde_json::from_str(&s)
+                    .map(Self::fm_off_once)
+                    .map(Self::filter_narrow_once)
+                    .map(|settings| Self::proxies_as_before(settings, &s))
+                    .unwrap_or_else(|e| {
+                        // (kept aside: the next save would overwrite the passwords and
+                        // the tunnel token in it)
+                        let aside = self.path.with_extension(format!("json.invalid-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+                        let _ = std::fs::rename(&self.path, &aside);
+                        log::warn!("settings.json invalid ({e}), using defaults; the file is kept as {}", aside.display());
+                        Settings::default()
+                    })
             }
             // a new installation: the admin is walked through the setup
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings { setup_pending: true, ..Settings::default() },
@@ -664,6 +673,22 @@ impl Store {
             }
             s.fm.enabled = false;
             s.fm.off_by_default = true;
+        }
+        s
+    }
+
+    /// The tuner's filter is 1.6 MHz by default since 0.3.52, also where an
+    /// older version left it wide: once, the admin can make it wide again in
+    /// Settings > Receiver.
+    fn filter_narrow_once(mut s: Settings) -> Settings {
+        if !s.filter_narrow_default {
+            if let DeviceConfig::RtlSdr { bandwidth, .. } = &mut s.device {
+                if *bandwidth == 0 {
+                    log::info!("RTL-SDR: tuner filter 1.6 MHz by default from this version on (Settings > Receiver)");
+                    *bandwidth = magicdab_sdr::DEFAULT_BANDWIDTH;
+                }
+            }
+            s.filter_narrow_default = true;
         }
         s
     }
@@ -894,6 +919,35 @@ mod tests {
         assert!(store.load().fm.enabled);
         // a new installation: off
         assert!(!Settings::default().fm.enabled);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_wide_tuner_filter_is_narrowed_once_after_the_update() {
+        let dir = std::env::temp_dir().join(format!("magicdab-filter-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(&dir);
+        let bandwidth = |s: &Settings| match s.device {
+            DeviceConfig::RtlSdr { bandwidth, .. } => bandwidth,
+            _ => u32::MAX,
+        };
+        // a file of an older version: wide, no mark
+        std::fs::write(dir.join("settings.json"), r#"{"device": {"type": "rtlSdr", "index": 1, "bandwidth": 0}}"#).unwrap();
+        let s = store.load();
+        assert_eq!(bandwidth(&s), 1_600_000);
+        assert!(s.filter_narrow_default);
+        // made wide again by the admin: it stays wide
+        let mut s = s;
+        s.device = DeviceConfig::RtlSdr { index: 1, ppm: 0, bias_tee: false, bandwidth: 0 };
+        store.save(&s);
+        assert_eq!(bandwidth(&store.load()), 0);
+        // one chosen by an older version stays; a device without the field takes the default
+        std::fs::write(dir.join("settings.json"), r#"{"device": {"type": "rtlSdr", "bandwidth": 1550000}}"#).unwrap();
+        assert_eq!(bandwidth(&store.load()), 1_550_000);
+        std::fs::write(dir.join("settings.json"), r#"{"filterNarrowDefault": true, "device": {"type": "rtlSdr"}}"#).unwrap();
+        assert_eq!(bandwidth(&store.load()), 1_600_000);
+        // a new installation
+        assert_eq!(bandwidth(&Settings::default()), 1_600_000);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
