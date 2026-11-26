@@ -6313,3 +6313,16 @@ kbd + kbd {
   white-space: nowrap;
   border: 0;
 }
+
+/* the date of a day in an SPI programme guide, and the note of an old guide */
+.spi-table .spi-day td {
+  padding-top: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  border-bottom: 1px solid var(--divider-soft);
+}
+.spi-table .spi-day .spi-old {
+  padding-top: 4px;
+  font-weight: 500;
+  color: var(--sig-mid, #f5a524);
+}

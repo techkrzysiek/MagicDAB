@@ -346,6 +346,7 @@ function ServiceInfo({ root, query }: { root: Element; query: string }) {
 
 function Programmes({ root, query }: { root: Element; query: string }) {
   const lang = useStore((s) => s.lang)
+  const t = useT()
   const progs = Array.from(root.getElementsByTagNameNS('*', 'programme'))
   const q = query.toLowerCase()
   const rows = progs
@@ -362,20 +363,38 @@ function Programmes({ root, query }: { root: Element; query: string }) {
     })
     .filter((r) => !q || `${r.name} ${r.desc}`.toLowerCase().includes(q))
     .sort((a, b) => a.start.localeCompare(b.start))
+  // (a row of the date at each new day: a guide may be old, a weekday alone hid that)
+  const day = (s: string) => (s ? new Date(s).toLocaleDateString(lang, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : '')
+  const last = rows.length ? rows[rows.length - 1].start : ''
+  const old = !!last && new Date(last).getTime() < Date.now() - 86_400_000
   return (
     <table className="spi-table">
       <tbody>
-        {rows.map((r, i) => (
+        {old && (
+          <tr className="spi-day">
+            <td colSpan={4} className="spi-old">
+              {t('spi_old_guide')}
+            </td>
+          </tr>
+        )}
+        {rows.flatMap((r, i) => [
+          ...(i === 0 || day(r.start) !== day(rows[i - 1].start)
+            ? [
+                <tr key={'d' + i} className="spi-day">
+                  <td colSpan={4}>{day(r.start)}</td>
+                </tr>,
+              ]
+            : []),
           <tr key={i}>
-            <td className="nowrap">{r.start ? new Date(r.start).toLocaleString(lang, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : ''}</td>
+            <td className="nowrap">{r.start ? new Date(r.start).toLocaleTimeString(lang, { hour: '2-digit', minute: '2-digit' }) : ''}</td>
             <td className="hint nowrap">{r.dur.replace('PT', '').toLowerCase()}</td>
             <td>
               <b>{r.name}</b>
               {r.desc && <div className="hint">{r.desc}</div>}
             </td>
             <td className="hint">{r.genres.join(', ')}</td>
-          </tr>
-        ))}
+          </tr>,
+        ])}
       </tbody>
     </table>
   )
@@ -485,6 +504,13 @@ function SpiHealth({ issues }: { issues: SpiIssue[] }) {
   )
 }
 
+/** A programme guide named as TS 102 371 names it (w<date>d<SId>c<SCIdS>.EHB):
+ *  its day and station, else null. */
+function guideOf(url: string): { day: Date; sid: number } | null {
+  const m = /^w(\d{4})(\d{2})(\d{2})d([0-9a-f]{4,8})c\d+\.EHB$/i.exec(url)
+  return m ? { day: new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])), sid: parseInt(m[4], 16) } : null
+}
+
 export default function SpiView() {
   const t = useT()
   const docs = useStore((s) => s.spiDocs)
@@ -495,6 +521,8 @@ export default function SpiView() {
     send({ type: 'getSpiDocs' })
   }, [])
   const ueid = useStore((s) => s.ensemble.ueid ?? null)
+  const lang = useStore((s) => s.lang)
+  const stations = useStore((s) => s.ensemble.services)
   const health = useStore((s) => (ueid ? s.spiHealth[ueid] : undefined))
   const doc = docs.find((d) => d.id === sel)
   // the documents of the multiplex listened to first (its ECC and EId end
@@ -570,7 +598,15 @@ export default function SpiView() {
                 <button key={d.id} className={'spi-item' + (d.id === sel ? ' on' : '')} onClick={() => setSel(d.id)}>
                   <span className={'spi-kind ' + d.kind}>{d.kind === 'epg' ? 'PI' : d.kind === 'serviceInformation' ? 'SI' : '?'}</span>
                   <span className="spi-item-txt">
-                    <span className="spi-item-name">{d.scope}</span>
+                    <span className="spi-item-name">
+                      {(() => {
+                        // (a guide: its station and day, so that guides of the same multiplex differ)
+                        const g = d.kind === 'epg' ? guideOf(d.url) : null
+                        if (!g) return d.scope
+                        const name = stations?.find((x) => x.sid === g.sid)?.label?.trim()
+                        return `${name || g.sid.toString(16).toUpperCase()}, ${g.day.toLocaleDateString(lang, { day: 'numeric', month: 'numeric', year: 'numeric' })}`
+                      })()}
+                    </span>
                     <span className="hint">
                       {d.items} {d.kind === 'epg' ? t('spi_programmes') : t('services').toLowerCase()}, {fmtSize(d.size)}, {whenShort(d.received)}
                     </span>

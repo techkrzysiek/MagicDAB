@@ -35,6 +35,7 @@ export const de = {
   spih_logoBytes: "Logo „{subject}“: {a} B (die ODR-SPI-Werkzeuge halten ältere Logos unter 5 kB)",
   spi_si: "Serviceinformationen (SI)",
   spi_pi: "Programminformationen (PI)",
+  spi_old_guide: "Veralteter Programmführer: Die letzte Sendung liegt mehr als einen Tag zurück.",
   spi_decoded: "Dekodiert",
   spi_none: "Noch keine SPI-Dokumente empfangen. Sie werden über Multiplexe mit einem SPI-Datendienst oder über RadioDNS übertragen.",
   spi_pick: "Dokument auswählen",
