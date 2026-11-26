@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
-import { useStore, useChannelAllowed, fixedChannelOf } from '../store'
+import { useStore, useChannelAllowed, fixedChannelOf, load, save } from '../store'
 import { useT } from '../i18n'
 import { send } from '../ws'
 import { downloadText, kw, mhz } from '../util'
@@ -22,18 +22,30 @@ export default function DxScanner() {
   // (listeners: the channels they may tune to)
   const allowed = useChannelAllowed()
   const all = (hello?.channels ?? []).map((c) => c.name).filter((n) => !n.endsWith('N') && allowed(n))
-  const [mode, setMode] = useState('normal')
-  const [cycles, setCycles] = useState(1)
-  const [channels, setChannels] = useState<string[]>(all)
+  // (the choices of the last scan, in this browser; channels: null for all of them)
+  const [mode, setModeState] = useState(() => load('dxScanMode', 'normal'))
+  const [cycles, setCyclesState] = useState(() => load('dxScanCycles', 1))
+  const [picked, setPicked] = useState<string[] | null>(() => load<string[] | null>('dxScanChannels', null))
+  // (none of the saved ones allowed any more: all of them again)
+  const kept = (picked ?? []).filter((c) => all.includes(c))
+  const channels = picked === null || (picked.length && !kept.length) ? all : kept
+  const setMode = (v: string) => {
+    setModeState(v)
+    save('dxScanMode', v)
+  }
+  const setCycles = (v: number) => {
+    setCyclesState(v)
+    save('dxScanCycles', v)
+  }
+  const setChannels = (v: string[]) => {
+    const next = all.length && all.every((c) => v.includes(c)) ? null : v
+    setPicked(next)
+    save('dxScanChannels', next)
+  }
   const [sel, setSel] = useState<number | null>(null)
   const mapDiv = useRef<HTMLDivElement>(null)
   const map = useRef<L.Map | null>(null)
   const layer = useRef<L.LayerGroup | null>(null)
-  useEffect(() => {
-    if (all.length && channels.length === 0) setChannels(all)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hello])
-
   const rows = useMemo(() => [...results].reverse(), [results])
 
   useEffect(() => {
