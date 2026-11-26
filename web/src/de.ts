@@ -12,6 +12,7 @@ export const de = {
   spih_level2: "Kann Empfänger zum Absturz bringen",
   spih_bits: " (Größenangabe in Bit, nicht in Byte)",
   spih_bodySize: "„{subject}“: Der MOT-Header gibt {a} B an, empfangen wurden {b} B",
+  spih_imageCut: "„{subject}“: Das Bild kam abgeschnitten oder mit einem anderen vermischt an und wird nicht angezeigt",
   spih_segmentSize: "„{subject}“: Ein Segment gibt {a} B an, seine Datengruppe enthält {b} B",
   spih_directorySize: "MOT-Verzeichnis: Das Größenfeld gibt {a} B an, tatsächlich sind es {b} B",
   spih_directoryEntries: "MOT-Verzeichnis: {a} Objekte angekündigt, {b} lesbar",

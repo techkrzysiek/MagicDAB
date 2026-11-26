@@ -205,6 +205,23 @@ impl Segments {
     fn progress(&self) -> (usize, usize) {
         (self.parts.len(), self.last.map(|l| l as usize + 1).unwrap_or(0))
     }
+
+    /// Segment `seg` was received with other bytes: another object under the
+    /// same transport id (an encoder restarted counts its ids from the start).
+    fn differs(&self, seg: u16, data: &[u8]) -> bool {
+        self.parts.get(&seg).is_some_and(|d| d.as_slice() != data)
+    }
+}
+
+/// An image whose end is missing: a JPEG without its end marker, a PNG
+/// without its IEND chunk (in the last bytes: some carry padding after it).
+fn image_cut(mime: &str, body: &[u8]) -> bool {
+    let tail = &body[body.len().saturating_sub(32)..];
+    match mime {
+        "image/jpeg" => !tail.windows(2).any(|w| w == [0xFF, 0xD9]),
+        "image/png" => !tail.windows(4).any(|w| w == b"IEND"),
+        _ => false,
+    }
 }
 
 #[derive(Default)]
@@ -453,6 +470,11 @@ impl MotDecoder {
             3 => {
                 self.last_tid = Some(tid);
                 let p = self.pending.entry(tid).or_default();
+                // (another object under this id: what came of the earlier one goes,
+                // else their segments were put together into one broken image)
+                if p.header.differs(seg, payload) {
+                    *p = Pending::default();
+                }
                 p.header.add(seg, dg.last, payload);
                 if p.parsed_header.is_none() {
                     if let Some(h) = p.header.complete() {
@@ -467,6 +489,9 @@ impl MotDecoder {
             4 => {
                 self.last_tid = Some(tid);
                 let p = self.pending.entry(tid).or_default();
+                if p.body.differs(seg, payload) {
+                    p.body = Segments::default();
+                }
                 p.body.add(seg, dg.last, payload);
                 self.try_complete(tid, out);
             }
@@ -593,6 +618,13 @@ impl MotDecoder {
             let what = if obj.content_name.is_empty() { format!("TID {tid}") } else { obj.content_name.clone() };
             self.issues.note(MotIssue::new(2, "bodySize", what).ab(obj.body_size as u64, body.len() as u64));
         }
+        // (an image put together wrong or cut: not shown, the next one will be)
+        if obj.is_image() && (obj.body_size != body.len() || image_cut(&obj.mime_type(), &body)) {
+            let what = if obj.content_name.is_empty() { format!("TID {tid}") } else { obj.content_name.clone() };
+            self.issues.note(MotIssue::new(2, "imageCut", what));
+            self.pending.remove(&tid);
+            return;
+        }
         obj.body = body;
         obj.issues = self.issues.0.clone();
         obj.directory_names = self.directory_names.clone();
@@ -640,11 +672,18 @@ mod tests {
         h
     }
 
+    /// A JPEG body of `n` bytes (its end marker last).
+    fn jpeg(n: usize, seed: u8) -> Vec<u8> {
+        let mut b: Vec<u8> = (0..n).map(|i| (i as u8).wrapping_add(seed)).collect();
+        b[n - 2..].copy_from_slice(&[0xFF, 0xD9]);
+        b
+    }
+
     #[test]
     fn progress_of_object_being_received() {
         let mut m = MotDecoder::new();
         let mut out = Vec::new();
-        let body: Vec<u8> = (0..3000).map(|i| i as u8).collect();
+        let body = jpeg(3000, 0);
         let send = |m: &mut MotDecoder, out: &mut Vec<MotObject>| {
             m.process(&dg(3, 0, true, 7, &header(3000, "a.jpg")), out);
             for (i, part) in body.chunks(1000).enumerate() {
@@ -669,6 +708,55 @@ mod tests {
         assert_eq!(m.receiving().map(|p| (p.bytes, p.size)), Some((1000, 2000)));
     }
 
+    /// An encoder restarted in the middle of a slide counts its transport ids
+    /// from the start: the next slide under the same id is not put together
+    /// with what came of the earlier one.
+    #[test]
+    fn a_new_object_under_a_reused_transport_id_starts_over() {
+        let mut m = MotDecoder::new();
+        let mut out = Vec::new();
+        let old = jpeg(3000, 1);
+        m.process(&dg(3, 0, true, 7, &header(3000, "old.jpg")), &mut out);
+        m.process(&dg(4, 0, false, 7, &old[..1000]), &mut out);
+        m.process(&dg(4, 1, false, 7, &old[1000..2000]), &mut out);
+        // (restart: the next slide gets id 7 again)
+        let new = jpeg(2500, 9);
+        m.process(&dg(3, 0, true, 7, &header(2500, "new.jpg")), &mut out);
+        m.process(&dg(4, 0, false, 7, &new[..1000]), &mut out);
+        m.process(&dg(4, 1, false, 7, &new[1000..2000]), &mut out);
+        m.process(&dg(4, 2, true, 7, &new[2000..]), &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!((out[0].content_name.as_str(), out[0].body.as_slice()), ("new.jpg", new.as_slice()));
+        // the same name and size, other pictures: the body alone starts over
+        out.clear();
+        let other = jpeg(2500, 50);
+        m.process(&dg(3, 0, true, 7, &header(2500, "new.jpg")), &mut out);
+        m.process(&dg(4, 0, false, 7, &new[..1000]), &mut out);
+        m.process(&dg(4, 0, false, 7, &other[..1000]), &mut out);
+        m.process(&dg(4, 1, false, 7, &other[1000..2000]), &mut out);
+        m.process(&dg(4, 2, true, 7, &other[2000..]), &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].body, other);
+    }
+
+    /// An image without its end (a JPEG without FFD9, a PNG without IEND, or
+    /// shorter than its header says) is not shown, and noted.
+    #[test]
+    fn an_image_cut_short_is_not_shown() {
+        let mut m = MotDecoder::new();
+        let mut out = Vec::new();
+        let mut cut = jpeg(1000, 3);
+        cut[998..].copy_from_slice(&[0x12, 0x34]);
+        m.process(&dg(3, 0, true, 5, &header(1000, "cut.jpg")), &mut out);
+        m.process(&dg(4, 0, true, 5, &cut), &mut out);
+        assert!(out.is_empty());
+        assert!(m.issues.0.iter().any(|i| i.code == "imageCut" && i.subject == "cut.jpg"));
+        let whole = jpeg(1000, 3);
+        m.process(&dg(3, 0, true, 6, &header(1000, "whole.jpg")), &mut out);
+        m.process(&dg(4, 0, true, 6, &whole), &mut out);
+        assert_eq!(out.len(), 1);
+    }
+
     /// A MOT header (core and a ContentName in character set `cs`).
     fn named(body_size: usize, name: &str, cs: u8) -> Vec<u8> {
         let mut h = header(body_size, name);
@@ -680,7 +768,10 @@ mod tests {
     fn a_size_in_bits_and_an_unsorted_directory_are_noticed() {
         // a directory saying it is sorted (SortedHeaderInformation), names
         // that are not, in ISO Latin-1, and an object whose sizes are in bits
-        let entries = [(10u16, named(1000, "b.png", 4)), (11, named(80, "a.bin", 4))];
+        // (a.bin: general data, not an image, which would not be shown at all)
+        let mut bin = named(80, "a.bin", 4);
+        bin[5] &= 0x81;
+        let entries = [(10u16, named(1000, "b.png", 4)), (11, bin)];
         let mut d = Vec::new();
         let size = 13 + 1 + entries.iter().map(|(_, h)| 2 + h.len()).sum::<usize>();
         d.extend_from_slice(&(size as u32).to_be_bytes());
