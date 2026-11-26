@@ -1,5 +1,5 @@
-// Vollständige deutsche Übersetzung für MagicDAB 0.3.42.
-// Grundlage: englischer Sprachbestand aus i18n.ts; alle Schlüssel sind abgedeckt.
+// German user interface, translated from the English texts of i18n.ts (all keys
+// of 0.3.42 and the ones added since; a key missing here falls back to English).
 export const de = {
   nav_service: "Hören",
   nav_stations: "Sender",
@@ -729,7 +729,8 @@ export const de = {
   gate_help: "Dieser Empfänger ist privat. Gib das Administratorpasswort oder das Tuning-Passwort ein, um zuzuhören.",
   gate_help_admin: "Dieser Empfänger ist privat. Gib das Administratorpasswort ein, um zuzuhören.",
   gate_enter: "Eintreten",
-  gated_badge: "vor der Zugangssperre",
+  gated_badge: "noch nicht angemeldet",
+  gated_hint: "Privater Server: Solange kein Passwort eingegeben ist, erhält dieser Besucher nichts vom Empfänger.",
   listeners_help: "„Trennen“ schließt die Verbindungen dieser Adresse (der Zuhörer kann sich erneut verbinden); eine Sperre verweigert den Zugriff, bis sie unter Einstellungen → Zugriff aufgehoben wird.",
   address: "Adresse",
   browser: "Browser",
@@ -1026,4 +1027,18 @@ export const de = {
   th_window: "Anwendungsfenster",
   th_log: "Protokoll",
   stats_threads_rest: "Alle übrigen Threads zusammen",
+  tunnel_port: "Port des Tunnelservers",
+  tunnel_port_hint: "dxserver.eu verwendet Port 7000",
+  prev_channel: "Vorheriger Kanal",
+  next_channel: "Nächster Kanal",
+  stations_show: "Sender anzeigen",
+  stations_hide: "Sender ausblenden",
+  close: "Schließen",
+  signal_sr: "Signal, SNR:",
+  latency_sr: "Verzögerung:",
+  sr_mux: "{m}, {c}, Sender: {n}",
+  raw_secs: "Länge der IQ-Aufnahme (Sekunden)",
+  ban_time: "Dauer der Sperre",
+  logo_off_spec: "Falsche Größe laut SPI-Spezifikation",
+  logo_off_spec_hint: "Dieses Logo hat {size}, die SPI-Spezifikation (ETSI TS 102 818) sieht 32×32, 112×32, 128×128, 320×240 und 600×600 vor. Es wird trotzdem angezeigt, wie es manche Empfänger tun.",
 } as const
