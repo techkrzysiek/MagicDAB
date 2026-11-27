@@ -359,12 +359,26 @@ impl ChangeTracker {
                 .map(|(k, s)| (k.clone(), s.clone()));
             // the same stations under a new EId are that multiplex renumbered;
             // others are another multiplex (an opening brings a foreign one
-            // onto the channel of a local one). Most of both line-ups: a new
-            // multiplex with two stations of an old one of nine is another one
-            // (a transmitter switched from a test multiplex to the real one).
+            // onto the channel of a local one). Every station of the new one
+            // was in the old one: regional multiplexes of one broadcaster share
+            // their national stations and differ in the regional one (reported
+            // as one renumbered when another came in). At least half of the old
+            // ones (the FIC of the new one may not be complete yet; two stations
+            // of nine were a test multiplex switched to the real one). Data
+            // services aside: their identifiers carry the EId.
             let same_stations = |ps: &Snapshot| {
-                let shared = new.services.keys().filter(|sid| ps.services.contains_key(*sid)).count();
-                shared * 2 >= new.services.len().max(ps.services.len()).max(1)
+                // (keys: the SId in hex, four digits for a programme service)
+                let audio = |ids: Vec<&String>| -> Vec<String> {
+                    let a: Vec<String> = ids.iter().filter(|sid| sid.len() <= 4).map(|sid| sid.to_string()).collect();
+                    if a.is_empty() {
+                        ids.into_iter().cloned().collect()
+                    } else {
+                        a
+                    }
+                };
+                let now = audio(new.services.keys().collect());
+                let before = audio(ps.services.keys().collect());
+                !now.is_empty() && now.iter().all(|sid| before.contains(sid)) && now.len() * 2 >= before.len()
             };
             if let Some((pk, ps)) = prev.filter(|(_, s)| s.seen > 0 && same_stations(s)) {
                 changes.push(Change {
@@ -1485,6 +1499,23 @@ mod tests {
         let mut other = ensemble(2);
         other.eid = Some(0x6A1F);
         let ev = t.observe("5D", &other, true, &[], &mute).expect("reported at once");
+        assert_eq!(ev.changes.iter().map(|c| c.kind.as_str()).collect::<Vec<_>>(), vec!["ensembleNew"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_new_eid_with_the_national_stations_and_another_regional_one_is_another_multiplex() {
+        let (mut t, dir) = tracker();
+        let mute = crate::config::NotifyMute::default();
+        t.observe("11A", &ensemble(9), true, &[], &mute);
+        // eight of the nine, the ninth another one (a regional multiplex of the
+        // same broadcaster next door): not that one renumbered
+        let mut other = ensemble(9);
+        other.eid = Some(0x6A1F);
+        let mut regional = other.services.remove(&0x7C48).unwrap();
+        regional.sid = 0x7C99;
+        other.services.insert(0x7C99, regional);
+        let ev = t.observe("11A", &other, true, &[], &mute).expect("reported at once");
         assert_eq!(ev.changes.iter().map(|c| c.kind.as_str()).collect::<Vec<_>>(), vec!["ensembleNew"]);
         let _ = std::fs::remove_dir_all(dir);
     }
