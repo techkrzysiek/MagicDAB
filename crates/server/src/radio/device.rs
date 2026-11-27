@@ -355,6 +355,13 @@ impl Radio {
         self.update_speaker();
         self.update_side_decoding();
         self.update_vis();
+        // the spectrum view, also during a scan (it stayed still when opened
+        // after the scan began); also while a DX recording keeps it: dxrec.rs
+        let spectrum = self.hub.any(|c| c.subs.spectrum && c.on_main()) || self.dxrec_recording();
+        if spectrum != self.spectrum_on {
+            self.spectrum_on = spectrum;
+            self.rx.send(RxCommand::Spectrum(spectrum));
+        }
         let wanted = self.hub.wanted_services(0);
         self.wants = wanted.iter().map(|(k, o, p)| (*k, (*o, *p))).collect();
         let mut keys: Vec<ServiceKey> = Vec::new();
@@ -425,12 +432,6 @@ impl Radio {
             self.rx.send(RxCommand::RecordEncoded(*k, false));
         }
         self.recording = rec;
-        // (also while a DX recording keeps it: dxrec.rs)
-        let spectrum = self.hub.any(|c| c.subs.spectrum && c.on_main()) || self.dxrec_recording();
-        if spectrum != self.spectrum_on {
-            self.spectrum_on = spectrum;
-            self.rx.send(RxCommand::Spectrum(spectrum));
-        }
     }
 
     /// Every 5 s: input the receiver had to throw away because it fell behind
