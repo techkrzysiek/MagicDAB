@@ -226,7 +226,7 @@ impl Radio {
             Some(Value::String(v)) if !v.trim().is_empty() => self.notice(client, "error", "webhook_invalid"),
             _ => {}
         }
-        if let Some(v) = s.get("discordLang").and_then(|v| v.as_str()).filter(|v| matches!(*v, "pl" | "en" | "de")) {
+        if let Some(v) = s.get("discordLang").and_then(|v| v.as_str()).filter(|v| matches!(*v, "pl" | "en" | "de" | "nl")) {
             self.settings.discord_lang = Some(v.to_string());
         }
         if let Some(v) = s.get("tunnel") {
@@ -264,16 +264,34 @@ impl Radio {
                     self.notice(client, "error", "recording_refused");
                 }
                 let cur = self.channel.clone();
-                let before = cur.as_deref().and_then(|c| self.mapped_source(c));
+                // (a stream or a recording)
+                let before = cur.as_deref().map(|c| (self.mapped_source(c), self.mapped_file(c)));
+                let was_mapped = self.mapped_channels();
                 self.settings.channel_maps = maps;
-                let after = cur.as_deref().and_then(|c| self.mapped_source(c));
+                let after = cur.as_deref().map(|c| (self.mapped_source(c), self.mapped_file(c)));
+                // a channel mapped no more: its multiplexes came from the stream
+                // (the air brings them back, where there is a tuner)
+                let now_mapped = self.mapped_channels();
+                let mut gone = false;
+                for c in was_mapped.iter().filter(|c| !now_mapped.contains(c)) {
+                    gone |= self.service_list.remove_channel(c);
+                }
+                if gone {
+                    self.service_list.save(&self.data_dir);
+                    self.hub.broadcast_all(text(&self.service_list_json()));
+                }
                 // the current channel changed its source: tune it again
                 if before != after {
                     if let Some(c) = cur {
                         self.channel = None;
-                        if !self.tune(&c) {
-                            if let Some(first) = self.mapped_channels().first().cloned() {
-                                self.tune(&first);
+                        if !self.tune(&c) && !self.mapped_channels().first().cloned().is_some_and(|first| self.tune(&first)) {
+                            // nothing left to receive (no tuner): the stream or
+                            // recording of the channel stops, or it would bring
+                            // its multiplex back into the station list
+                            self.eti_input = None;
+                            if self.device_running {
+                                self.device.stop();
+                                self.device_running = false;
                             }
                         }
                     }
@@ -282,8 +300,9 @@ impl Radio {
         }
         if let Some(v) = s.get("backgroundPad").and_then(|v| v.as_bool()) {
             self.settings.background_pad = v;
-            // (the main receiver only: side receivers decode their station alone)
+            // (the side receivers too: their listeners see the other stations)
             self.rx.send(RxCommand::BackgroundPad(v));
+            self.slots_background_pad(v);
         }
         if let Some(v) = s.get("listenerMultiplex").and_then(|v| v.as_bool()) {
             self.settings.listener_multiplex = v;

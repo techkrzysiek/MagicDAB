@@ -283,8 +283,12 @@ class MagicDabMeter extends AudioWorkletProcessor {
 registerProcessor('magicdab-meter', MagicDabMeter)
 `
 
-/** `gap`: frames before this one were lost (the worklet fades across). */
-type Decoder = { decode(data: Uint8Array, gap: boolean): void; close(): void }
+/** `gap`: frames before this one were lost (the worklet fades across).
+ *  `reset`: another stream follows (another station, or the same one started
+ *  anew): an Opus decoder carries its state from frame to frame, and the
+ *  state of the last station made the first frames of the next one up to
+ *  12 dB too loud for about 80 ms (a pop at every change of station). */
+type Decoder = { decode(data: Uint8Array, gap: boolean): void; reset(): void; close(): void }
 
 /**
  * Fallback output for insecure contexts (plain http on a LAN IP) and browsers
@@ -596,6 +600,13 @@ class Player {
               if (gap) this.gapTs = this.ts
               dec.decode(new (window as any).EncodedAudioChunk({ type: 'key', timestamp: this.ts, data }))
             },
+            reset: () => {
+              // (also drops what it still had to give out of the last stream)
+              if (dec.state !== 'configured') return
+              dec.reset()
+              dec.configure(cfg)
+              this.gapTs = -1
+            },
             close: () => dec.close(),
           }
           this.decoderKind = 'webcodecs'
@@ -608,8 +619,12 @@ class Player {
     const { OpusDecoder } = await import('opus-decoder')
     const dec = new OpusDecoder({ channels: 2 })
     await dec.ready
+    // (its reset starts the decoder anew, asynchronously: the frames that come
+    // meanwhile go, the player waits for its buffer anyway)
+    let ready = true
     this.decoder = {
       decode: (data, gap) => {
+        if (!ready) return
         const r = dec.decodeFrame(data)
         const n = r.samplesDecoded
         const out = new Float32Array(n * 2)
@@ -620,6 +635,14 @@ class Player {
           out[2 * i + 1] = rr[i]
         }
         post(out, gap)
+      },
+      reset: () => {
+        if (!ready) return
+        ready = false
+        dec.reset().then(
+          () => (ready = true),
+          () => (ready = true),
+        )
       },
       close: () => dec.free(),
     }
@@ -659,6 +682,8 @@ class Player {
     }
     this.lastSeq = seq
     const gap = missing > 0
+    // (a big jump: another stream of the station, its decoder state anew)
+    if (missing >= 250) this.decoder?.reset()
     if (gap && missing < 250) {
       this.lost += missing
       useStore.getState().set({ audioLost: this.lost })
@@ -678,6 +703,7 @@ class Player {
 
   flush() {
     this.lastSeq = -1
+    this.decoder?.reset()
     // the meter starts anew with the next station
     this.meter?.port.postMessage('reset')
     this.node?.port.postMessage('flush')

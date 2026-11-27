@@ -5599,6 +5599,8 @@ kbd + kbd {
 :root[data-bg] .chat-popup,
 :root[data-bg] .tii-details,
 :root[data-bg] .gallery-full-box,
+:root[data-bg] .tip-pop,
+:root[data-bg] .tip-pop::before,
 :root[data-bg] .table th,
 :root[data-bg] .st-tools {
   background: var(--bg-light-solid);

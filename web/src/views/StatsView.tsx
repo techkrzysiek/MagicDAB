@@ -6,10 +6,10 @@ import type { StatsPoint, StatsReceiver } from '../types'
 
 type Tab = 'overview' | 'advanced'
 
-/** Numbers in the language of the interface (a decimal comma in Polish). */
+/** Numbers in the language of the interface (a decimal comma in Polish, German and Dutch). */
 function useFormat() {
   const lang = useStore((s) => s.lang)
-  const locale = lang === 'pl' ? 'pl-PL' : 'en-GB'
+  const locale = { pl: 'pl-PL', de: 'de-DE', nl: 'nl-NL', en: 'en-GB' }[lang] ?? 'en-GB'
   const num = (v: number, digits = 1) => v.toLocaleString(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits })
   const bytes = (n: number) =>
     n >= 1e9 ? `${num(n / 1e9)} GB` : n >= 1e6 ? `${num(n / 1e6)} MB` : n >= 1e3 ? `${num(n / 1e3, 0)} kB` : `${num(n, 0)} B`
@@ -180,6 +180,7 @@ function Overview() {
 /** Threads by what they do. */
 const THREADS: [RegExp, string][] = [
   [/^dab-receiver$/, 'th_receivers'],
+  [/^dab-decoder$/, 'th_decoders'],
   [/^radio$/, 'th_radio'],
   [/^tokio/, 'th_web'],
   [/^(magicdab|main|magicdab\.exe)$/, 'th_main'],

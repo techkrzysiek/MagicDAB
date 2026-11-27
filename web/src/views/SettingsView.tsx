@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { androidApp, closePrefs, desktop, desktopServerMode, installApk, toHost } from '../desktop'
 import { ApkProgress, useApkBusy } from '../components/ApkProgress'
 import { useStore, save, isLocal } from '../store'
-import type { ServerMapStatus } from '../store'
-import { useT } from '../i18n'
+import type { ServerMapStatus, Lang } from '../store'
+import { useT, LANGUAGES } from '../i18n'
 import { ViewHeader } from '../components/common'
 import { importTxDb, login, logout, saveSettings, setBuffer as applyBuffer, setCodec, setNativeAudio } from '../actions'
 import { send } from '../ws'
@@ -84,18 +84,19 @@ function General() {
       {!androidApp && <p className="set-intro hint">{t('set_local_note')}</p>}
       <Card title={t('set_card_ui')}>
         <Row label={t('language')}>
-          <Choice
+          <select
             value={lang}
-            options={[
-              ['pl', 'Polski'],
-              ['en', 'English'],
-              ['de', 'Deutsch'],
-            ]}
-            onChange={(v) => {
-              set({ lang: v })
-              save('lang', v)
+            onChange={(e) => {
+              set({ lang: e.target.value as Lang })
+              save('lang', e.target.value)
             }}
-          />
+          >
+            {LANGUAGES.map(([l, name]) => (
+              <option key={l} value={l}>
+                {name}
+              </option>
+            ))}
+          </select>
         </Row>
         <Row label={t('theme')}>
           <Choice
@@ -685,7 +686,7 @@ function Receiver() {
         <Row label={t('max_services')} hint={t('set_max_services_hint')}>
           <input type="number" className="num" min={1} max={32} value={maxServices} onChange={(e) => setMaxServices(Math.max(1, Math.min(32, parseInt(e.target.value) || 1)))} />
         </Row>
-        <Row label={t('background_pad')}>
+        <Row label={t('background_pad')} hint={t('set_background_pad_hint')}>
           <Toggle checked={bgPad} onChange={setBgPad} />
         </Row>
         <Row label={t('spi')}>
@@ -998,10 +999,10 @@ function Internet() {
   // the server never sends the webhook: only that there is one
   const hasHook = !!s?.hasDiscordWebhook
   const [hook, setHook, hookChanged] = useField<string | null>('discordWebhook', '')
-  // (not chosen yet: Polish where a webhook was set before the choice, else this page's language)
+  // (not chosen yet: English where a webhook was set before the choice, else this page's language)
   const lang = useStore((st) => st.lang)
   const [hookLang, setHookLang, hookLangChanged] = useField<string | null>('discordLang', s?.discordLang ?? null)
-  const shownLang = hookLang ?? (hasHook ? 'pl' : lang)
+  const shownLang = hookLang ?? (hasHook ? 'en' : lang)
   const [chat, setChat] = useField('chatEnabled', s?.chatEnabled ?? true)
   const [noIndex, setNoIndex] = useField('noIndex', !!s?.noIndex)
   if (!s) return null
@@ -1051,15 +1052,13 @@ function Internet() {
           </div>
         </Row>
         <Row label={t('discord_lang')}>
-          <Choice
-            value={shownLang}
-            options={[
-              ['pl', 'Polski'],
-              ['en', 'English'],
-              ['de', 'Deutsch'],
-            ]}
-            onChange={setHookLang}
-          />
+          <select value={shownLang} onChange={(e) => setHookLang(e.target.value)}>
+            {LANGUAGES.map(([l, name]) => (
+              <option key={l} value={l}>
+                {name}
+              </option>
+            ))}
+          </select>
         </Row>
       </Card>
       )}

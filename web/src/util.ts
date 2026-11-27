@@ -197,7 +197,7 @@ export function downloadBlob(name: string, blob: Blob) {
 /** Short age of a unix timestamp, e.g. "5 min", "3 h", "2 d". */
 export function ageShort(ts: number, lang: string) {
   const s = Math.max(0, Date.now() / 1000 - ts)
-  if (s < 90) return lang === 'pl' ? 'teraz' : 'now'
+  if (s < 90) return ({ pl: 'teraz', de: 'jetzt', nl: 'nu' } as Record<string, string>)[lang] ?? 'now'
   if (s < 3600) return `${Math.round(s / 60)} min`
   if (s < 86400 * 2) return `${Math.round(s / 3600)} h`
   return `${Math.round(s / 86400)} d`

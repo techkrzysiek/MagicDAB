@@ -383,6 +383,22 @@ impl ServiceList {
         n != self.ensembles.len()
     }
 
+    /// Only the multiplexes of `keep`: a channel no longer mapped to a stream
+    /// had them from the stream, not from the air (and without a tuner it is
+    /// never heard again, so they stayed for good). True when the list changed.
+    pub fn keep_channels(&mut self, keep: &[String]) -> bool {
+        let n = self.ensembles.len();
+        self.ensembles.retain(|e| keep.iter().any(|c| c.eq_ignore_ascii_case(&e.channel)));
+        n != self.ensembles.len()
+    }
+
+    /// Takes out the multiplexes of `channel`. True when the list changed.
+    pub fn remove_channel(&mut self, channel: &str) -> bool {
+        let n = self.ensembles.len();
+        self.ensembles.retain(|e| !e.channel.eq_ignore_ascii_case(channel));
+        n != self.ensembles.len()
+    }
+
     pub fn remove_ensemble(&mut self, channel: &str, eid: u16) -> bool {
         let n = self.ensembles.len();
         self.ensembles.retain(|e| !(e.channel == channel && e.eid == eid));
@@ -609,5 +625,23 @@ mod tests {
         assert!(l.alone("12A", 0x4B6F));
         assert_eq!(l.ensembles.iter().map(|e| e.eid).collect::<Vec<_>>(), vec![0x4B6F]);
         assert!(!l.alone("12A", 0x4B6F));
+    }
+
+    /// A channel no longer mapped takes its multiplexes along; without a tuner
+    /// only the mapped channels keep theirs.
+    #[test]
+    fn multiplexes_of_a_channel_mapped_no_more_go() {
+        let mut l = ServiceList::default();
+        assert!(l.update("12A", 223936, &mux(), 0.0));
+        let mut other = mux();
+        other.eid = Some(0x4B6F);
+        assert!(l.update("5D", 180064, &other, 0.0));
+        assert!(l.remove_channel("12a"));
+        assert!(!l.remove_channel("12A"));
+        assert_eq!(l.ensembles.iter().map(|e| e.channel.as_str()).collect::<Vec<_>>(), vec!["5D"]);
+        assert!(l.update("12A", 223936, &mux(), 0.0));
+        assert!(l.keep_channels(&["5D".to_string(), "8B".to_string()]));
+        assert_eq!(l.ensembles.iter().map(|e| e.channel.as_str()).collect::<Vec<_>>(), vec!["5D"]);
+        assert!(!l.keep_channels(&["5D".to_string()]));
     }
 }

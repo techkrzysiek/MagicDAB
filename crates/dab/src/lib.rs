@@ -22,6 +22,7 @@ pub mod msc;
 pub mod ofdm;
 pub mod packet;
 pub mod pad;
+mod pool;
 pub mod puncture;
 pub mod receiver;
 pub mod rs;

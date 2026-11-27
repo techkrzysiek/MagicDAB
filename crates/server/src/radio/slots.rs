@@ -624,6 +624,13 @@ impl Radio {
         send_service_state(&self.hub, client, key, e.slot.services.get(&key), cached);
     }
 
+    /// The texts and slides of every station on the side receivers too.
+    pub(super) fn slots_background_pad(&self, on: bool) {
+        for e in self.slots.iter() {
+            e.slot.rx.send(RxCommand::BackgroundPad(on));
+        }
+    }
+
     /// A receiver for a mapped channel, with the settings of the main one.
     fn open_slot(&self, ch: &str, id: u32) -> Result<Slot, String> {
         let frequency = channel_frequency(ch).ok_or("unknown channel")?;
@@ -631,9 +638,10 @@ impl Radio {
         let rx = ReceiverHandle::start();
         rx.send(RxCommand::TiiMode(self.settings.tii_mode));
         rx.send(RxCommand::DataServices(self.settings.spi));
-        // (only the station listened to: the texts and slides of every other
-        // station cost two thirds of a side receiver)
-        rx.send(RxCommand::BackgroundPad(false));
+        // (the texts and slides of every other station as the setting says, the
+        // same as on the main one: a listener on another multiplex missed them;
+        // they cost two thirds of a side receiver)
+        rx.send(RxCommand::BackgroundPad(self.settings.background_pad));
         let input = if let Some(src) = self.mapped_source(ch) {
             rx.set_eti_mode(true);
             // (the receiver takes up the stream at its next start)
@@ -683,7 +691,7 @@ impl Radio {
         let rx = ReceiverHandle::start();
         rx.send(RxCommand::TiiMode(self.settings.tii_mode));
         rx.send(RxCommand::DataServices(self.settings.spi));
-        rx.send(RxCommand::BackgroundPad(false));
+        rx.send(RxCommand::BackgroundPad(self.settings.background_pad));
         rx.set_eti_mode(true);
         rx.queue.reset();
         let (side_tx, side_rx) = crossbeam_channel::bounded(64);

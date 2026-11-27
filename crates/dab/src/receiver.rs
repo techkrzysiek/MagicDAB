@@ -17,6 +17,7 @@ use crate::mot::MotObject;
 use crate::msc::SubchannelDecoder;
 use crate::ofdm::{Frame, FrameSink, MscSymbols, OfdmDemodulator, SampleSource};
 use crate::packet::PacketDecoder;
+use crate::pool::Pool;
 use crate::tii::{TiiCode, TiiDecoder, TiiMode};
 use crate::tpeg::{EventKey, TpegDecoder, TrafficEvent};
 use crossbeam_channel::{Receiver, Sender};
@@ -25,7 +26,7 @@ use parking_lot::{Condvar, Mutex};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -40,8 +41,8 @@ pub struct ServiceKey {
 /// read it now and then and take the differences).
 #[derive(Clone, Debug, Default)]
 pub struct Timing {
-    /// CPU time of the receiver thread, all of it (OFDM demodulation is what
-    /// is left after the parts below).
+    /// CPU time of the receiver thread and its decoder threads, all of it
+    /// (OFDM demodulation is what is left after the parts below).
     pub thread: Duration,
     /// FIC decoding and the ensemble information.
     pub fic: Duration,
@@ -377,6 +378,185 @@ impl ActiveService {
             let _ = events.send(RxEvent::XpadProgress { key: self.key, objects });
         }
     }
+
+    /// One frame of a station listened to: its sub-channel, the audio, the
+    /// texts and slides, now and then its statistics.
+    fn decode_listened(&mut self, msc: &[i8], pass: &Pass, took: &mut Took) {
+        let (Some(dec), Some(audio)) = (self.subch.as_mut(), self.audio.as_mut()) else { return };
+        let mut events = Vec::new();
+        for c in 0..CIFS_PER_FRAME {
+            let cif = &msc[c * CIF_BITS..(c + 1) * CIF_BITS];
+            let t = Instant::now();
+            let data = dec.push_cif(cif).map(|d| d.to_vec());
+            let t2 = Instant::now();
+            took.channel += t2 - t;
+            if let Some(data) = data {
+                audio.push(&data, &mut events);
+                for ev in events.drain(..) {
+                    let key = self.key;
+                    let e = match ev {
+                        ServiceEvent::Audio(pcm) => RxEvent::Audio { key, pcm },
+                        ServiceEvent::Encoded { data, aac } => RxEvent::Encoded { key, data, aac },
+                        ServiceEvent::Format(format) => RxEvent::AudioFormat { key, format, bitrate: self.bitrate },
+                        ServiceEvent::Label(label) => RxEvent::Label { key, label },
+                        ServiceEvent::XpadObject { app_type, object } => RxEvent::XpadObject { key, app_type, object },
+                        ServiceEvent::Journaline { objects, removed } => {
+                            RxEvent::Journaline { sid: key.sid, scids: key.scids, objects, removed }
+                        }
+                    };
+                    let _ = pass.events.send(e);
+                }
+                if pass.record {
+                    took.data.push((c, self.subch_id, data));
+                }
+                took.content += t2.elapsed();
+            }
+        }
+        // statistics every 10 frames (0.96 s of signal time)
+        if pass.frame % 10 == 0 {
+            self.last_stats = Instant::now();
+            let _ = pass.events.send(RxEvent::Stats { key: self.key, stats: audio.stats.clone(), frame: pass.frame });
+        }
+        if pass.frame % 5 == 0 {
+            self.report_xpad_progress(&pass.events);
+        }
+    }
+
+    /// One frame of a station decoded in the background: only its texts and
+    /// slides (DLS, slideshow, Journaline).
+    fn decode_background(&mut self, msc: &[i8], pass: &Pass, took: &mut Took) {
+        let (Some(dec), Some(audio)) = (self.subch.as_mut(), self.audio.as_mut()) else { return };
+        let t = Instant::now();
+        let mut events = Vec::new();
+        for c in 0..CIFS_PER_FRAME {
+            let cif = &msc[c * CIF_BITS..(c + 1) * CIF_BITS];
+            let Some(data) = dec.push_cif(cif).map(|d| d.to_vec()) else { continue };
+            audio.push(&data, &mut events);
+            for ev in events.drain(..) {
+                let key = self.key;
+                let e = match ev {
+                    ServiceEvent::Label(label) => RxEvent::Label { key, label },
+                    ServiceEvent::XpadObject { app_type, object } => RxEvent::XpadObject { key, app_type, object },
+                    ServiceEvent::Journaline { objects, removed } => {
+                        RxEvent::Journaline { sid: key.sid, scids: key.scids, objects, removed }
+                    }
+                    ServiceEvent::Format(format) => RxEvent::AudioFormat { key, format, bitrate: self.bitrate },
+                    _ => continue,
+                };
+                let _ = pass.events.send(e);
+            }
+            if pass.record {
+                took.data.push((c, self.subch_id, data));
+            }
+        }
+        took.channel += t.elapsed();
+    }
+}
+
+/// What every sub-channel of a frame needs besides its decoder.
+#[derive(Clone)]
+struct Pass {
+    events: Sender<RxEvent>,
+    frame: u64,
+    /// The ETI recording is on: the sub-channels' data comes back for it.
+    record: bool,
+}
+
+/// A decoder of a sub-channel, for one frame.
+enum Work {
+    Listened(ActiveService),
+    Background(ActiveService),
+    Data(PacketChannel),
+}
+
+impl Work {
+    fn decode(&mut self, msc: &[i8], pass: &Pass) -> Took {
+        let mut took = Took::default();
+        match self {
+            Work::Listened(s) => s.decode_listened(msc, pass, &mut took),
+            Work::Background(s) => s.decode_background(msc, pass, &mut took),
+            Work::Data(p) => p.decode(msc, pass, &mut took),
+        }
+        took
+    }
+
+    /// About how much processor a frame of it takes: its size, twice for a
+    /// station listened to (the audio).
+    fn cost(&self) -> u32 {
+        let size = |d: &Option<SubchannelDecoder>| d.as_ref().map(|d| d.subch.size as u32).unwrap_or(0);
+        match self {
+            Work::Listened(s) => 2 * size(&s.subch),
+            Work::Background(s) => size(&s.subch),
+            Work::Data(p) => size(&p.subch),
+        }
+    }
+
+    /// The order of the ETI recording's data (EtiRecorder::add takes the
+    /// first of a sub-channel), as on one thread: stations listened to,
+    /// in the background, data services.
+    fn rank(&self) -> u8 {
+        match self {
+            Work::Listened(_) => 0,
+            Work::Background(_) => 1,
+            Work::Data(_) => 2,
+        }
+    }
+}
+
+/// What a frame of a sub-channel took besides the events it sent.
+#[derive(Default)]
+struct Took {
+    /// Time of the sub-channel (deinterleaving, Viterbi; all of it in the
+    /// background and for data) and of the audio in it, on the clock.
+    channel: Duration,
+    content: Duration,
+    /// For the ETI recording: (CIF, sub-channel, its data).
+    data: Vec<(usize, u8, Vec<u8>)>,
+}
+
+/// A decoder of a sub-channel on its way to a decoder thread with the
+/// frame's soft bits, and back (Core::decode_msc).
+struct Job {
+    at: usize,
+    work: Work,
+    msc: Arc<Vec<i8>>,
+    pass: Pass,
+}
+
+struct Done {
+    at: usize,
+    work: Work,
+    took: Took,
+}
+
+fn decode_job(job: Job) -> Done {
+    let Job { at, mut work, msc, pass } = job;
+    let took = work.decode(&msc, &pass);
+    Done { at, work, took }
+}
+
+/// Threads that decode the sub-channels of a frame, the receiver thread among
+/// them: one per core, at most 4 (a Raspberry Pi has 4, and the biggest
+/// sub-channel takes a part of one core). MAGICDAB_DECODERS sets another
+/// number, 1 keeps everything on the receiver thread.
+fn decoder_threads() -> usize {
+    static N: OnceLock<usize> = OnceLock::new();
+    *N.get_or_init(|| {
+        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        std::env::var("MAGICDAB_DECODERS").ok().and_then(|v| v.parse().ok()).unwrap_or(cores.min(4)).max(1)
+    })
+}
+
+/// Takes the decoders `ready` for this frame out of `v` as work, leaving
+/// their places empty (Core::decode_msc puts them back).
+fn lend<T>(v: &mut Vec<T>, ready: impl Fn(&T) -> bool, work: fn(T) -> Work, jobs: &mut Vec<(usize, Work)>) -> Vec<Option<T>> {
+    let mut slots: Vec<Option<T>> = std::mem::take(v).into_iter().map(Some).collect();
+    for (at, slot) in slots.iter_mut().enumerate() {
+        if slot.as_ref().is_some_and(&ready) {
+            jobs.extend(slot.take().map(|t| (at, work(t))));
+        }
+    }
+    slots
 }
 
 struct PacketChannel {
@@ -410,6 +590,20 @@ impl PacketChannel {
             tpeg: HashMap::new(),
             last_expire: Instant::now(),
         }
+    }
+
+    /// One frame of the sub-channel: its packets.
+    fn decode(&mut self, msc: &[i8], pass: &Pass, took: &mut Took) {
+        let t = Instant::now();
+        for c in 0..CIFS_PER_FRAME {
+            let cif = &msc[c * CIF_BITS..(c + 1) * CIF_BITS];
+            let Some(data) = self.subch.as_mut().and_then(|d| d.push_cif(cif)).map(|d| d.to_vec()) else { continue };
+            self.feed(&data, &pass.events);
+            if pass.record {
+                took.data.push((c, self.subch_id, data));
+            }
+        }
+        took.channel += t.elapsed();
     }
 
     /// One logical frame of the sub-channel: its packets to the decoders of
@@ -499,6 +693,11 @@ struct Core {
     timing: Arc<Mutex<Timing>>,
     /// The ETI recording of the multiplex (etirec.rs) while one is wanted.
     eti_rec: Option<EtiRecorder>,
+    /// Threads decoding sub-channels next to this one, from the first frame
+    /// with more than one (see decoder_threads).
+    decoders: Option<Pool<Job, Done>>,
+    /// The frame's MSC soft bits for them.
+    msc: Arc<Vec<i8>>,
 }
 
 impl Core {
@@ -515,7 +714,7 @@ impl Core {
         t.tii += spent.tii;
         t.recording += spent.recording;
         if let Some(cpu) = thread_cpu_time() {
-            t.thread = cpu;
+            t.thread = cpu + self.decoders.as_ref().map(|d| d.cpu()).unwrap_or_default();
         }
     }
 
@@ -878,107 +1077,7 @@ impl FrameSink for Core {
         spent.fic = started.elapsed();
 
         // MSC
-        // (a decoder made for this frame, demodulated before it was there, starts with the next one)
-        let covered = |d: &SubchannelDecoder| MscSymbols::covers(&frame.msc_mask, d.subch.start as usize, d.subch.size as usize);
-        for svc in self.services.iter_mut() {
-            let (Some(dec), Some(audio)) = (svc.subch.as_mut(), svc.audio.as_mut()) else { continue };
-            if !covered(dec) {
-                continue;
-            }
-            let (mut channel, mut decoding) = (Duration::ZERO, Duration::ZERO);
-            for c in 0..CIFS_PER_FRAME {
-                let cif = &frame.msc[c * CIF_BITS..(c + 1) * CIF_BITS];
-                let t = Instant::now();
-                let data = dec.push_cif(cif).map(|d| d.to_vec());
-                let t2 = Instant::now();
-                channel += t2 - t;
-                if let Some(data) = data {
-                    if let Some(rec) = self.eti_rec.as_mut() {
-                        rec.add(c, svc.subch_id, &data);
-                    }
-                    self.service_events.clear();
-                    audio.push(&data, &mut self.service_events);
-                    for ev in self.service_events.drain(..) {
-                        let key = svc.key;
-                        let e = match ev {
-                            ServiceEvent::Audio(pcm) => RxEvent::Audio { key, pcm },
-                            ServiceEvent::Encoded { data, aac } => RxEvent::Encoded { key, data, aac },
-                            ServiceEvent::Format(format) => RxEvent::AudioFormat { key, format, bitrate: svc.bitrate },
-                            ServiceEvent::Label(label) => RxEvent::Label { key, label },
-                            ServiceEvent::XpadObject { app_type, object } => RxEvent::XpadObject { key, app_type, object },
-                            ServiceEvent::Journaline { objects, removed } => {
-                                RxEvent::Journaline { sid: key.sid, scids: key.scids, objects, removed }
-                            }
-                        };
-                        let _ = self.events.send(e);
-                    }
-                    decoding += t2.elapsed();
-                }
-            }
-            spent.services.push((svc.key, channel, decoding));
-            // statistics every 10 frames (0.96 s of signal time)
-            if self.frame_counter % 10 == 0 {
-                svc.last_stats = Instant::now();
-                let _ = self.events.send(RxEvent::Stats { key: svc.key, stats: audio.stats.clone(), frame: self.frame_counter });
-            }
-            if self.frame_counter % 5 == 0 {
-                svc.report_xpad_progress(&self.events);
-            }
-        }
-
-        // background PAD decoding (DLS / slideshow of all services)
-        let t = Instant::now();
-        for svc in self.background.iter_mut() {
-            let (Some(dec), Some(audio)) = (svc.subch.as_mut(), svc.audio.as_mut()) else { continue };
-            if !covered(dec) {
-                continue;
-            }
-            for c in 0..CIFS_PER_FRAME {
-                let cif = &frame.msc[c * CIF_BITS..(c + 1) * CIF_BITS];
-                if let Some(data) = dec.push_cif(cif) {
-                    let data = data.to_vec();
-                    if let Some(rec) = self.eti_rec.as_mut() {
-                        rec.add(c, svc.subch_id, &data);
-                    }
-                    self.service_events.clear();
-                    audio.push(&data, &mut self.service_events);
-                    for ev in self.service_events.drain(..) {
-                        let key = svc.key;
-                        let e = match ev {
-                            ServiceEvent::Label(label) => RxEvent::Label { key, label },
-                            ServiceEvent::XpadObject { app_type, object } => RxEvent::XpadObject { key, app_type, object },
-                            ServiceEvent::Journaline { objects, removed } => {
-                                RxEvent::Journaline { sid: key.sid, scids: key.scids, objects, removed }
-                            }
-                            ServiceEvent::Format(format) => RxEvent::AudioFormat { key, format, bitrate: svc.bitrate },
-                            _ => continue,
-                        };
-                        let _ = self.events.send(e);
-                    }
-                }
-            }
-        }
-
-        spent.background = t.elapsed();
-
-        // packet mode data services (SPI, slideshow, Journaline, TPEG)
-        let t = Instant::now();
-        for pc in self.packet_channels.iter_mut() {
-            let Some(dec) = pc.subch.as_mut() else { continue };
-            if !covered(dec) {
-                continue;
-            }
-            for c in 0..CIFS_PER_FRAME {
-                let cif = &frame.msc[c * CIF_BITS..(c + 1) * CIF_BITS];
-                let Some(data) = pc.subch.as_mut().and_then(|d| d.push_cif(cif)).map(|d| d.to_vec()) else { continue };
-                if let Some(rec) = self.eti_rec.as_mut() {
-                    rec.add(c, pc.subch_id, &data);
-                }
-                pc.feed(&data, &self.events);
-            }
-        }
-
-        spent.data = t.elapsed();
+        self.decode_msc(frame, &mut spent);
         if self.frame_counter % 20 == 0 {
             self.send_data_progress();
         }
@@ -1060,6 +1159,79 @@ impl FrameSink for Core {
 }
 
 impl Core {
+    /// The sub-channels of a frame: the stations listened to, the texts and
+    /// slides of the others, the data services. Each is decoded on its own,
+    /// so they are spread over the decoder threads.
+    fn decode_msc(&mut self, frame: &Frame, spent: &mut FrameTime) {
+        // (a decoder made for this frame, demodulated before it was there, starts with the next one)
+        let covered = |d: &Option<SubchannelDecoder>| {
+            d.as_ref().is_some_and(|d| MscSymbols::covers(&frame.msc_mask, d.subch.start as usize, d.subch.size as usize))
+        };
+        let mut jobs = Vec::new();
+        let mut services = lend(&mut self.services, |s| s.audio.is_some() && covered(&s.subch), Work::Listened, &mut jobs);
+        let mut background = lend(&mut self.background, |s| s.audio.is_some() && covered(&s.subch), Work::Background, &mut jobs);
+        let mut data = lend(&mut self.packet_channels, |p| covered(&p.subch), Work::Data, &mut jobs);
+        let pass = Pass { events: self.events.clone(), frame: self.frame_counter, record: self.eti_rec.is_some() };
+        if jobs.len() > 1 && self.decoders.is_none() && decoder_threads() > 1 {
+            self.decoders = Some(Pool::new(decoder_threads() - 1, "dab-decoder", decode_job));
+        }
+        let mut done = Vec::with_capacity(jobs.len());
+        match self.decoders.as_ref().filter(|_| jobs.len() > 1) {
+            Some(pool) => {
+                // the soft bits for the other threads (the last frame's
+                // copy is free again: its jobs are back)
+                match Arc::get_mut(&mut self.msc) {
+                    Some(m) => {
+                        m.clear();
+                        m.extend_from_slice(&frame.msc);
+                    }
+                    None => self.msc = Arc::new(frame.msc.clone()),
+                }
+                // the biggest first, each to the thread with the least so far:
+                // the same sub-channels to the same threads every frame
+                jobs.sort_by_key(|(_, w)| std::cmp::Reverse(w.cost()));
+                let mut shares: Vec<(u32, Vec<Job>)> = (0..pool.threads().min(jobs.len())).map(|_| (0, Vec::new())).collect();
+                for (at, work) in jobs {
+                    let Some(share) = shares.iter_mut().min_by_key(|s| s.0) else { break };
+                    share.0 += work.cost().max(1);
+                    share.1.push(Job { at, work, msc: self.msc.clone(), pass: pass.clone() });
+                }
+                pool.run(shares.into_iter().map(|s| s.1).collect(), &mut done);
+            }
+            None => {
+                for (at, mut work) in jobs {
+                    let took = work.decode(&frame.msc, &pass);
+                    done.push(Done { at, work, took });
+                }
+            }
+        }
+        done.sort_by_key(|d| (d.work.rank(), d.at));
+        for Done { at, work, took } in done {
+            if let Some(rec) = self.eti_rec.as_mut() {
+                for (c, id, data) in &took.data {
+                    rec.add(*c, *id, data);
+                }
+            }
+            match work {
+                Work::Listened(s) => {
+                    spent.services.push((s.key, took.channel, took.content));
+                    services[at] = Some(s);
+                }
+                Work::Background(s) => {
+                    spent.background += took.channel;
+                    background[at] = Some(s);
+                }
+                Work::Data(p) => {
+                    spent.data += took.channel;
+                    data[at] = Some(p);
+                }
+            }
+        }
+        self.services = services.into_iter().flatten().collect();
+        self.background = background.into_iter().flatten().collect();
+        self.packet_channels = data.into_iter().flatten().collect();
+    }
+
     /// Process one frame of an ETI / EDI stream.
     fn eti_frame(&mut self, f: &EtiFrame) {
         self.handle_commands();
@@ -1298,6 +1470,8 @@ impl ReceiverHandle {
                     service_events: Vec::new(),
                     timing: tm,
                     eti_rec: None,
+                    decoders: None,
+                    msc: Arc::default(),
                 };
                 while !st.load(Ordering::Relaxed) {
                     let generation = q.generation();

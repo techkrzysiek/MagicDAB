@@ -39,7 +39,7 @@ export interface ChatState {
   unread: number
 }
 export type Theme = 'auto' | 'light' | 'dark'
-export type Lang = 'pl' | 'en' | 'de'
+export type Lang = 'pl' | 'en' | 'de' | 'nl'
 
 export interface SlideProgress {
   bytes: number
@@ -104,8 +104,21 @@ export function save(key: string, v: unknown) {
   }
 }
 
+/** Login tokens outlive the browser (the server forgets one unused for 30
+ * days, a logout ends it): no password again after a restart. Passwords are
+ * never kept beyond the tab. */
+const KEPT = new Set(['magicdab.session', 'magicdab.tunesession'])
+
 /** Session storage, which the browser may block (site data off): nothing is kept then. */
 export function sessionGet(key: string): string | null {
+  if (KEPT.has(key)) {
+    try {
+      const v = localStorage.getItem(key)
+      if (v !== null) return v
+    } catch {
+      /* storage may be unavailable */
+    }
+  }
   try {
     return sessionStorage.getItem(key)
   } catch {
@@ -114,8 +127,19 @@ export function sessionGet(key: string): string | null {
 }
 
 export function sessionSet(key: string, v: string | null) {
+  let kept = false
+  if (KEPT.has(key)) {
+    try {
+      if (v === null) localStorage.removeItem(key)
+      else localStorage.setItem(key, v)
+      kept = v !== null
+    } catch {
+      /* storage may be unavailable: the tab keeps it */
+    }
+  }
   try {
-    if (v === null) sessionStorage.removeItem(key)
+    // (a kept token: only there, the copy of the tab goes)
+    if (v === null || kept) sessionStorage.removeItem(key)
     else sessionStorage.setItem(key, v)
   } catch {
     /* storage may be unavailable */
@@ -127,7 +151,7 @@ export function isLocal() {
 }
 
 const browserLang = (navigator.language || 'en').toLowerCase()
-const defaultLang: Lang = browserLang.startsWith('pl') ? 'pl' : browserLang.startsWith('de') ? 'de' : 'en'
+const defaultLang: Lang = (['pl', 'de', 'nl'] as Lang[]).find((l) => browserLang.startsWith(l)) ?? 'en'
 
 /** Listing on the public server map (admins). */
 export interface ServerMapStatus {

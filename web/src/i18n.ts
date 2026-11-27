@@ -1,5 +1,6 @@
-import { useStore } from './store'
+import { useStore, type Lang } from './store'
 import { de } from './de'
+import { nl } from './nl'
 
 const en = {
   nav_service: 'Listen',
@@ -551,6 +552,7 @@ const en = {
   slideshow: 'Slideshow',
   no_slide: 'No slide',
   background_pad: 'Decode DLS and slides of all services in the background',
+  set_background_pad_hint: 'Decodes the whole multiplex all the time.',
   epg_empty: 'No programme information received yet (SPI EPG).',
   programmes: 'programmes',
   current_mux: 'current',
@@ -1007,7 +1009,7 @@ const en = {
   stats_chart_cpu: 'The computer\'s processor, last hour',
   stats_chart_net: 'Sent to listeners, last hour',
   stats_receivers: 'Receivers',
-  stats_hint_core: 'Percent of one processor core: 100% is one core fully busy. Opus is encoded on the radio thread, the rest on the receiver thread.',
+  stats_hint_core: 'Percent of one processor core: 100% is one core fully busy. Opus is encoded on the radio thread, the rest on the receiver thread and its decoder threads, so a receiver can take more than one core.',
   stats_main_rx: 'Main receiver',
   stats_side_rx: 'A listener\'s receiver',
   stats_input_stream: 'EDI/ETI stream',
@@ -1040,6 +1042,7 @@ const en = {
   stats_uptime_pc_k: 'The computer running for',
   stats_version: 'Version',
   th_receivers: 'DAB receivers',
+  th_decoders: 'DAB decoders (sub-channels)',
   th_radio: 'Radio thread (Opus, control)',
   th_web: 'Web server and connections',
   th_main: 'Main thread',
@@ -1609,6 +1612,7 @@ const pl: Record<Key, string> = {
   slideshow: 'Pokaz slajdów',
   no_slide: 'Brak slajdu',
   background_pad: 'Dekoduj DLS i slajdy wszystkich stacji w tle',
+  set_background_pad_hint: 'Cały multipleks jest wtedy dekodowany bez przerwy.',
   epg_empty: 'Nie odebrano jeszcze informacji o programie (SPI EPG).',
   programmes: 'audycji',
   current_mux: 'obecny',
@@ -2064,7 +2068,7 @@ const pl: Record<Key, string> = {
   stats_chart_cpu: 'Procesor komputera, ostatnia godzina',
   stats_chart_net: 'Wysyłane do słuchaczy, ostatnia godzina',
   stats_receivers: 'Odbiorniki',
-  stats_hint_core: 'Procent jednego rdzenia procesora: 100% to jeden rdzeń zajęty w całości. Opus koduje wątek radia, resztę wątek odbiornika.',
+  stats_hint_core: 'Procent jednego rdzenia procesora: 100% to jeden rdzeń zajęty w całości. Opus koduje wątek radia, resztę wątek odbiornika i jego wątki dekoderów, więc odbiornik może zająć więcej niż jeden rdzeń.',
   stats_main_rx: 'Odbiornik główny',
   stats_side_rx: 'Odbiornik słuchacza',
   stats_input_stream: 'strumień EDI/ETI',
@@ -2097,6 +2101,7 @@ const pl: Record<Key, string> = {
   stats_uptime_pc_k: 'Komputer działa od',
   stats_version: 'Wersja',
   th_receivers: 'Odbiorniki DAB',
+  th_decoders: 'Dekodery DAB (podkanały)',
   th_radio: 'Wątek radia (Opus, sterowanie)',
   th_web: 'Serwer WWW i połączenia',
   th_main: 'Wątek główny',
@@ -2114,7 +2119,15 @@ const pl: Record<Key, string> = {
   stats_threads_rest: 'Pozostałe wątki razem',
 }
 
-const dicts = { en, pl, de }
+const dicts = { en, pl, de, nl }
+
+/** The languages of the interface, by their own names (the choices in Settings and the setup). */
+export const LANGUAGES: [Lang, string][] = [
+  ['de', 'Deutsch'],
+  ['en', 'English'],
+  ['nl', 'Nederlands'],
+  ['pl', 'Polski'],
+]
 
 export function useT() {
   const lang = useStore((s) => s.lang)
@@ -2131,8 +2144,9 @@ const weekdays = {
   en: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
   pl: ['niedziela', 'poniedziałek', 'wtorek', 'środa', 'czwartek', 'piątek', 'sobota'],
   de: ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'],
+  nl: ['zondag', 'maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag'],
 }
 
-export function weekday(lang: 'en' | 'pl' | 'de', d: number) {
+export function weekday(lang: Lang, d: number) {
   return weekdays[lang][d]
 }

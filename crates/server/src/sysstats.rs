@@ -116,6 +116,60 @@ pub fn uptime() -> Option<u64> {
     os::uptime()
 }
 
+/// Why this computer is too slow to decode every station of a multiplex all
+/// the time next to the one heard, if it is: a Raspberry Pi 3 or older, or an
+/// ARM processor of small cores only (Cortex-A53 and the like, as in the Pi 3).
+/// Read from what the system says about the processor, not measured: a
+/// computer busy at that moment would measure slow.
+pub fn too_slow_for_every_station() -> Option<String> {
+    if !cfg!(any(target_os = "linux", target_os = "android")) {
+        return None;
+    }
+    let cpuinfo = std::fs::read_to_string("/proc/cpuinfo").unwrap_or_default();
+    // (hidden in a container: /proc/cpuinfo names the Pi there)
+    let tree = std::fs::read_to_string("/sys/firmware/devicetree/base/model").ok();
+    slow_board(&cpuinfo, tree.as_deref())
+}
+
+/// ARM's small in-order cores (CPU part of implementer 0x41), as in a
+/// Raspberry Pi 3 (Cortex-A53) or older.
+const SMALL_ARM_CORES: [(&str, &str); 5] =
+    [("0xc05", "Cortex-A5"), ("0xc07", "Cortex-A7"), ("0xd03", "Cortex-A53"), ("0xd04", "Cortex-A35"), ("0xd05", "Cortex-A55")];
+
+/// too_slow_for_every_station from the text of /proc/cpuinfo and the model
+/// of the device tree.
+fn slow_board(cpuinfo: &str, tree_model: Option<&str>) -> Option<String> {
+    let field =
+        |key: &'static str| cpuinfo.lines().filter_map(|l| l.split_once(':')).filter(move |(k, _)| k.trim() == key).map(|(_, v)| v.trim());
+    let model = field("Model").next().map(str::to_string).or_else(|| tree_model.map(|m| m.trim_end_matches('\0').trim().to_string()));
+    if let Some(model) = model.filter(|m| older_pi(m)) {
+        return Some(model);
+    }
+    let parts: Vec<&str> = field("CPU part").collect();
+    if parts.is_empty() || !field("CPU implementer").all(|v| v == "0x41") {
+        return None;
+    }
+    // (one big core among them: not slow)
+    let mut names =
+        parts.iter().map(|p| SMALL_ARM_CORES.iter().find(|(part, _)| part == p).map(|(_, name)| *name)).collect::<Option<Vec<_>>>()?;
+    names.sort_unstable();
+    names.dedup();
+    Some(format!("{} cores only", names.join(" and ")))
+}
+
+/// A Raspberry Pi 3 or older by its model: 1, 2, 3, Zero, Zero 2 and the
+/// Compute Modules 1 and 3 (not the 4, 400, 5, 500, Compute Modules 4 and 5).
+fn older_pi(model: &str) -> bool {
+    let Some(rest) = model.strip_prefix("Raspberry Pi") else { return false };
+    let rest = rest.trim_start();
+    let rest = rest.strip_prefix("Compute Module").map(str::trim_start).unwrap_or(rest);
+    match rest.chars().next() {
+        Some(c) if c.is_ascii_digit() => c <= '3',
+        // the first ("Model B Rev 2"), the Zeros, the first Compute Module ("Rev 1.0")
+        _ => rest.starts_with("Model") || rest.starts_with("Zero") || rest.starts_with("Rev"),
+    }
+}
+
 pub fn machine() -> Machine {
     let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
     Machine { cpu_model: os::cpu_model().unwrap_or_default(), cores, os: os::name() }
@@ -523,5 +577,40 @@ mod os {
 
     pub fn counters() -> Counters {
         Counters::default()
+    }
+}
+
+#[cfg(test)]
+mod slow_tests {
+    use super::*;
+
+    #[test]
+    fn a_raspberry_pi_3_and_older_or_small_arm_cores_only_are_too_slow() {
+        let pi3 = "processor\t: 0\nBogoMIPS\t: 38.40\nCPU implementer\t: 0x41\nCPU part\t: 0xd03\n\nprocessor\t: 1\nCPU implementer\t: 0x41\nCPU part\t: 0xd03\n\nRevision\t: a020d3\nModel\t\t: Raspberry Pi 3 Model B Plus Rev 1.3\n";
+        assert_eq!(slow_board(pi3, None).as_deref(), Some("Raspberry Pi 3 Model B Plus Rev 1.3"));
+        let pi4 = "processor\t: 0\nCPU implementer\t: 0x41\nCPU part\t: 0xd08\nModel\t\t: Raspberry Pi 4 Model B Rev 1.4\n";
+        assert_eq!(slow_board(pi4, None), None);
+        // the device tree only (no Model line), a board of Cortex-A55 cores
+        assert_eq!(slow_board("", Some("Raspberry Pi Zero 2 W Rev 1.0\0")).as_deref(), Some("Raspberry Pi Zero 2 W Rev 1.0"));
+        let rk3566 =
+            "processor\t: 0\nCPU implementer\t: 0x41\nCPU part\t: 0xd05\n\nprocessor\t: 1\nCPU implementer\t: 0x41\nCPU part\t: 0xd05\n";
+        assert_eq!(slow_board(rk3566, Some("Radxa ROCK 3C")).as_deref(), Some("Cortex-A55 cores only"));
+        // big and small cores, a PC
+        let rk3588 = "CPU implementer\t: 0x41\nCPU part\t: 0xd05\nCPU implementer\t: 0x41\nCPU part\t: 0xd0b\n";
+        assert_eq!(slow_board(rk3588, None), None);
+        assert_eq!(slow_board("processor\t: 0\nvendor_id\t: GenuineIntel\nmodel name\t: Intel(R) Core(TM) i5-14500T\n", None), None);
+        for (model, old) in [
+            ("Raspberry Pi Model B Rev 2", true),
+            ("Raspberry Pi 2 Model B Rev 1.1", true),
+            ("Raspberry Pi 3 Model A Plus Rev 1.0", true),
+            ("Raspberry Pi Zero W Rev 1.1", true),
+            ("Raspberry Pi Compute Module Rev 1.0", true),
+            ("Raspberry Pi Compute Module 3 Plus Rev 1.0", true),
+            ("Raspberry Pi Compute Module 4 Rev 1.0", false),
+            ("Raspberry Pi 400 Rev 1.0", false),
+            ("Raspberry Pi 5 Model B Rev 1.0", false),
+        ] {
+            assert_eq!(older_pi(model), old, "{model}");
+        }
     }
 }

@@ -1015,14 +1015,47 @@ pub const DE: Words = Words {
     recording: "Aufnahme",
 };
 
+pub const NL: Words = Words {
+    open: "‘",
+    close: "’",
+    new_mux: "🆕 nieuwe multiplex",
+    eid: "🆔 EId van de multiplex",
+    mux_label: "✏️ naam van de multiplex",
+    added: "➕ nieuw",
+    removed: "➖ verdwenen",
+    label: "naam",
+    short: "korte naam",
+    apps: "toepassingen",
+    si_short: "SI korte naam",
+    si_name: "SI naam",
+    si_long: "SI lange naam",
+    si_no_desc: "SI zonder beschrijving",
+    si_desc: "SI beschrijving",
+    si_genres: "SI genres",
+    si_links: "SI links",
+    si_logos: "SI logo",
+    si_new_logo: "SI nieuw logo",
+    test: "🔔 webhooktest, het werkt",
+    snr_mean: "SNR gem.",
+    over: "over",
+    then_lost: "daarna weg",
+    then_retuned: "daarna omgeschakeld",
+    fic_errors: "FIC-fouten",
+    tii_none: "niets ontvangen",
+    not_in_db: "niet in de database",
+    and_more: "en",
+    more: "meer",
+    recording: "opname",
+};
+
 impl Words {
-    /// By the language code of the settings; Polish as before the choice
-    /// existed.
+    /// By the language code of the settings; English when none is chosen.
     pub fn of(lang: Option<&str>) -> &'static Words {
         match lang {
-            Some("en") => &EN,
+            Some("pl") => &PL,
             Some("de") => &DE,
-            _ => &PL,
+            Some("nl") => &NL,
+            _ => &EN,
         }
     }
 
@@ -1805,8 +1838,10 @@ mod tests {
         };
         assert_eq!(discord_lines(&ev, Words::of(Some("en"))), vec!["🔔 webhook test, it works", "🔄 **Radio A**: name “A” → “B”"]);
         assert_eq!(discord_lines(&ev, Words::of(Some("de")))[1], "🔄 **Radio A**: Name „A“ → „B“");
-        // (none chosen: Polish, as before)
-        assert_eq!(discord_lines(&ev, Words::of(None))[1], "🔄 **Radio A**: nazwa „A” → „B”");
+        assert_eq!(discord_lines(&ev, Words::of(Some("nl")))[1], "🔄 **Radio A**: naam ‘A’ → ‘B’");
+        assert_eq!(discord_lines(&ev, Words::of(Some("pl")))[1], "🔄 **Radio A**: nazwa „A” → „B”");
+        // (none chosen: English)
+        assert_eq!(discord_lines(&ev, Words::of(None))[1], "🔄 **Radio A**: name “A” → “B”");
     }
 
     #[test]

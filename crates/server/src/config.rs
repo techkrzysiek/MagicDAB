@@ -1,5 +1,6 @@
 //! Persistent settings.
 
+use crate::sysstats::too_slow_for_every_station;
 use magicdab_dab::tii::TiiMode;
 use magicdab_sdr::{DeviceConfig, GainMode};
 use serde::{Deserialize, Serialize};
@@ -155,14 +156,18 @@ pub struct Settings {
     pub radio_vis: bool,
     /// Decode DLS and slideshow of all services in the background.
     pub background_pad: bool,
+    /// The computer was checked for background_pad (Store::load): too slow
+    /// for it, it was turned off once; the admin may turn it on again.
+    #[serde(default)]
+    pub background_pad_checked: bool,
     /// Set since the tuner's filter is 1.6 MHz by default (0.3.52): an older
     /// settings file without it has a wide filter narrowed once (Store::load).
     #[serde(default)]
     pub filter_narrow_default: bool,
     /// Discord webhook URL for ensemble change notifications.
     pub discord_webhook: String,
-    /// Language of those notifications ("pl", "en", "de"); none: Polish, as
-    /// before it could be chosen (the interface sets its own with a new webhook).
+    /// Language of those notifications ("pl", "en", "de", "nl"); none:
+    /// English (the interface sets its own with a new webhook).
     pub discord_lang: Option<String>,
     /// Channels fed by ETI / EDI streams instead of the tuner.
     pub channel_maps: Vec<ChannelMap>,
@@ -362,6 +367,7 @@ impl Default for Settings {
             internet: true,
             radio_vis: true,
             background_pad: true,
+            background_pad_checked: false,
             filter_narrow_default: true,
             discord_webhook: String::new(),
             discord_lang: None,
@@ -653,6 +659,7 @@ impl Store {
                     .map(Self::fm_off_once)
                     .map(Self::filter_narrow_once)
                     .map(|settings| Self::proxies_as_before(settings, &s))
+                    .map(|settings| Self::background_pad_once(settings, too_slow_for_every_station))
                     .unwrap_or_else(|e| {
                         // (kept aside: the next save would overwrite the passwords and
                         // the tunnel token in it)
@@ -663,7 +670,9 @@ impl Store {
                     })
             }
             // a new installation: the admin is walked through the setup
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings { setup_pending: true, ..Settings::default() },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Settings { setup_pending: true, ..Self::background_pad_once(Settings::default(), too_slow_for_every_station) }
+            }
             Err(_) => Settings::default(),
         }
     }
@@ -693,6 +702,24 @@ impl Store {
                 }
             }
             s.filter_narrow_default = true;
+        }
+        s
+    }
+
+    /// The texts and slides of every station need the whole multiplex decoded
+    /// all the time, more than a Raspberry Pi 3 or a computer as slow can do
+    /// next to the station heard (sysstats::too_slow_for_every_station): there
+    /// they are off, once, also where an older version left them on; the
+    /// admin may turn them on again in Settings > Decoding.
+    fn background_pad_once(mut s: Settings, too_slow: impl FnOnce() -> Option<String>) -> Settings {
+        if !s.background_pad_checked {
+            if s.background_pad && !cfg!(target_os = "android") {
+                if let Some(why) = too_slow() {
+                    log::info!("texts and slides of every station: off on this computer ({why}), Settings > Decoding turns them on");
+                    s.background_pad = false;
+                }
+            }
+            s.background_pad_checked = true;
         }
         s
     }
@@ -924,6 +951,20 @@ mod tests {
         // a new installation: off
         assert!(!Settings::default().fm.enabled);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_station_in_the_background_is_off_once_on_a_slow_computer() {
+        let slow = || Some("Raspberry Pi 3 Model B Plus Rev 1.3".to_string());
+        // an older version left it on: off once
+        let s = Store::background_pad_once(Settings::default(), slow);
+        assert!(!s.background_pad && s.background_pad_checked);
+        // turned on again by the admin (saved checked): it stays on
+        let again = Settings { background_pad: true, ..s };
+        assert!(Store::background_pad_once(again, || panic!("not checked again")).background_pad);
+        // a computer fast enough
+        let s = Store::background_pad_once(Settings::default(), || None);
+        assert!(s.background_pad && s.background_pad_checked);
     }
 
     #[test]

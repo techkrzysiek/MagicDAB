@@ -499,7 +499,16 @@ impl Radio {
         }
         store.save(&settings);
         crate::access::get().load(&settings.access);
-        let service_list = ServiceList::load(&data_dir);
+        let mut service_list = ServiceList::load(&data_dir);
+        // without a tuner only the mapped channels are heard: the multiplexes of
+        // channels mapped no more (versions before kept them for good) go
+        if matches!(settings.device, DeviceConfig::None) {
+            let mapped: Vec<String> = settings.channel_maps.iter().map(|m| m.channel.clone()).collect();
+            if service_list.keep_channels(&mapped) {
+                log::info!("station list: multiplexes of channels no longer mapped removed");
+                service_list.save(&data_dir);
+            }
+        }
         let fig_cache = FigCache::load(&data_dir);
         let data_dir_for_tunnel = data_dir.clone();
         let server_map = crate::servermap::ServerMap::start(settings.server_map.entry.clone(), crate::servermap::Identity::load(&data_dir));

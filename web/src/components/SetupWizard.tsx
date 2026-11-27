@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import { Eye, EyeOff, LocateFixed, WandSparkles, X } from 'lucide-react'
 import { useStore, save, sessionGet, sessionSet, type Lang, type Theme } from '../store'
-import { useT } from '../i18n'
+import { useT, LANGUAGES } from '../i18n'
 import { saveSettings } from '../actions'
 import { send } from '../ws'
 import { desktop } from '../desktop'
@@ -245,19 +245,20 @@ function Wizard() {
               <h2>{t('setup_welcome')}</h2>
               <p>{t('setup_welcome_text')}</p>
               <div className="setup-choice">
-                {(['pl', 'en'] as Lang[]).map((l) => (
-                  <button
-                    type="button"
-                    key={l}
-                    className={'btn' + (lang === l ? ' primary' : '')}
-                    onClick={() => {
-                      set({ lang: l })
-                      save('lang', l)
-                    }}
-                  >
-                    {l === 'pl' ? 'Polski' : 'English'}
-                  </button>
-                ))}
+                <select
+                  value={lang}
+                  aria-label={t('language')}
+                  onChange={(e) => {
+                    set({ lang: e.target.value as Lang })
+                    save('lang', e.target.value)
+                  }}
+                >
+                  {LANGUAGES.map(([l, name]) => (
+                    <option key={l} value={l}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
                 <select
                   value={theme}
                   aria-label={t('theme')}
