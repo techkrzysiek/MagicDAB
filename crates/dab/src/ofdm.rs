@@ -305,6 +305,9 @@ pub struct OfdmDemodulator {
     cpe: bool,
     /// Channel impulse response of the current phase reference symbol.
     cir: Vec<Complex32>,
+    /// Spectrum of the null symbol for the noise floor (the window of
+    /// NOISE_BACK; the frame's `null_fft` is that of TII, null_window_back).
+    null_noise: Vec<Complex32>,
     /// Smoothed power delay profile (aligned to the FFT window).
     pdp: Vec<f32>,
     pdp_frames: u32,
@@ -387,6 +390,7 @@ impl OfdmDemodulator {
             cpe: std::env::var("MAGICDAB_CPE").map(|v| v != "0").unwrap_or(true),
             soft_mode: std::env::var("MAGICDAB_SOFTMODE").ok().and_then(|v| v.parse().ok()).unwrap_or(3),
             cir: vec![Complex32::new(0.0, 0.0); T_U],
+            null_noise: vec![Complex32::new(0.0, 0.0); T_U],
             pdp: vec![0.0; T_U],
             pdp_frames: 0,
             pdp_shift: 0,
@@ -765,11 +769,21 @@ impl OfdmDemodulator {
 
         // null symbol level vs signal level, null symbol spectrum (TII, noise
         // floor); skipped when a realignment moved the null symbol out of the buffer
-        let null_valid = base >= -(T_NULL as isize - T_U as isize - 64);
+        let null_valid = base >= -((T_NULL - T_U - NOISE_BACK) as isize);
         if null_valid {
-            let s = self.buf.slice(at(T_NULL - T_U - 64), T_U);
-            self.frame.null_fft.copy_from_slice(s);
-            self.fft.process_with_scratch(&mut self.frame.null_fft, &mut self.scratch);
+            let s = self.buf.slice(at(T_NULL - T_U - NOISE_BACK), T_U);
+            self.null_noise.copy_from_slice(s);
+            self.fft.process_with_scratch(&mut self.null_noise, &mut self.scratch);
+            // TII from a window clear of the phase reference symbol of early
+            // paths and of the symbol before from late ones, where the buffer has it
+            let back = null_window_back(&self.cir, adv as i32);
+            if back != NOISE_BACK && base >= -((T_NULL - T_U - back) as isize) {
+                let s = self.buf.slice(at(T_NULL - T_U - back), T_U);
+                self.frame.null_fft.copy_from_slice(s);
+                self.fft.process_with_scratch(&mut self.frame.null_fft, &mut self.scratch);
+            } else {
+                self.frame.null_fft.copy_from_slice(&self.null_noise);
+            }
         }
 
         // fractional frequency offset from the cyclic prefix
@@ -785,7 +799,7 @@ impl OfdmDemodulator {
         let fine_offset = -cp.arg() / (2.0 * PI) * CARRIER_SPACING;
 
         // noise floor from the null symbol (median of active carriers, TII carriers are a minority)
-        let mut noise: Vec<f32> = self.active.iter().map(|&b| self.frame.null_fft[b].norm_sqr()).collect();
+        let mut noise: Vec<f32> = self.active.iter().map(|&b| self.null_noise[b].norm_sqr()).collect();
         let mid = noise.len() / 2;
         noise.select_nth_unstable_by(mid, |a, b| a.total_cmp(b));
         let noise_pw = noise[mid] / std::f32::consts::LN_2;
@@ -1083,7 +1097,9 @@ impl OfdmDemodulator {
         let t_tail = Instant::now();
 
         // Displayed SNR follows the common convention of comparing the carrier
-        // power with the total null symbol power (TII carriers included).
+        // power with the total null symbol power (TII carriers included), in
+        // the window of TII: the one of the noise floor takes in the phase
+        // reference symbol of pre-echoes (5 dB too low on a network with them).
         let null_mean: f32 = self.active.iter().map(|&b| self.frame.null_fft[b].norm_sqr()).sum::<f32>() / K as f32;
         let noise_pw = if self.snr_mode == 1 { noise_pw } else { null_mean };
         let carrier_pw = (sig_power / (detected.max(1) * K) as f64) as f32;
@@ -1245,6 +1261,50 @@ fn proj(c: Complex32, m: usize) -> f32 {
     }
 }
 
+/// End of the null symbol window for the noise floor, in samples before the
+/// phase reference symbol: as it always was (the floor sets the thresholds of
+/// the channel estimate, the timing and the soft decisions).
+const NOISE_BACK: usize = 64;
+
+/// Where the FFT window of the null symbol for TII ends, in samples before
+/// the phase reference symbol, from the impulse response of the frame (`cir`,
+/// T_U taps from the start of the FFT window, the second half meaning
+/// negative delays; `adv` the tap of a path at the timing). A path `d`
+/// samples later sends the phase reference symbol from T_NULL + d on, the
+/// same in every frame: a window ending `back` samples before T_NULL takes
+/// -back - d samples of it when d < -back, and that adds up in the TII pairs
+/// like a code (pre-echoes of 260 and 310 samples hid four of six codes of a
+/// network). A late path brings the last symbol of the frame before,
+/// d - (T_NULL - T_U - back) samples of it. Paths are the taps 10 dB over the
+/// median tap and at most 30 dB under the strongest; the end with the least
+/// power times overlap, the middle one where several are as good.
+fn null_window_back(cir: &[Complex32], adv: i32) -> usize {
+    const STEP: usize = 16;
+    let slack = (T_NULL - T_U) as i32;
+    let n = cir.len() as i32;
+    let mut p: Vec<f32> = cir.iter().map(|v| v.norm_sqr()).collect();
+    let peak = p.iter().cloned().fold(0.0, f32::max);
+    let mid = p.len() / 2;
+    let median = *p.clone().select_nth_unstable_by(mid, |a, b| a.total_cmp(b)).1;
+    let th = (10.0 * median).max(1e-3 * peak);
+    let paths: Vec<(i32, f32)> = p
+        .drain(..)
+        .enumerate()
+        .filter(|&(_, v)| v > th && v > 0.0)
+        .map(|(i, v)| (if i as i32 >= n / 2 { i as i32 - n } else { i as i32 } - adv, v - median))
+        .collect();
+    if paths.is_empty() {
+        return slack as usize / 2;
+    }
+    let total: f32 = paths.iter().map(|p| p.1).sum();
+    let cost = |back: i32| -> f32 { paths.iter().map(|&(d, w)| w * ((-back - d).max(0) + (d - (slack - back)).max(0)) as f32).sum() };
+    let costs: Vec<(i32, f32)> = (0..=slack).step_by(STEP).map(|b| (b, cost(b))).collect();
+    let min = costs.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
+    // (within all power overlapping by one sample of the best)
+    let best: Vec<i32> = costs.iter().filter(|c| c.1 <= min + total).map(|c| c.0).collect();
+    best[best.len() / 2] as usize
+}
+
 /// The window shift with the least intersymbol interference for a power
 /// delay profile (`pdp`, T_U taps from the start of the FFT window, the second
 /// half meaning negative delays) and the noise power of a tap: the cost of a
@@ -1303,6 +1363,38 @@ fn best_window_shift(pdp: &[f32], noise: f32) -> Option<i32> {
 #[cfg(test)]
 mod window_tests {
     use super::*;
+
+    /// An impulse response with paths (delay from the timing, power) over a
+    /// little noise, the timing at tap `adv`.
+    fn cir(paths: &[(i32, f32)], adv: i32) -> Vec<Complex32> {
+        let mut seed = 0x2545_f491u64;
+        let mut v: Vec<Complex32> = (0..T_U)
+            .map(|_| {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                Complex32::from_polar(1e-3, (seed >> 40) as f32)
+            })
+            .collect();
+        for &(d, p) in paths {
+            v[(adv + d).rem_euclid(T_U as i32) as usize] = Complex32::new(p.sqrt(), 0.0);
+        }
+        v
+    }
+
+    #[test]
+    fn the_null_window_for_tii_keeps_clear_of_the_paths() {
+        let adv = 48;
+        // one path: the middle of the null symbol
+        assert_eq!(null_window_back(&cir(&[(0, 1.0)], adv), adv), 304);
+        // pre-echoes of 260 and 310 samples (-14 and -24 dB) and a late path of
+        // 185: clear of all of them (310..423), about the middle
+        let b = null_window_back(&cir(&[(0, 1.0), (-260, 0.04), (-310, 0.004), (185, 0.02)], adv), adv);
+        assert!((320..=416).contains(&b), "{b}");
+        // a late path of 400: the window starts after the symbol before ends
+        let b = null_window_back(&cir(&[(0, 1.0), (400, 0.1)], adv), adv);
+        assert!(b <= 208, "{b}");
+        // a path 40 dB down does not count
+        assert_eq!(null_window_back(&cir(&[(0, 1.0), (-500, 1e-4)], adv), adv), 304);
+    }
 
     // the version of before (a sum over the paths for every shift), as it was
     fn old_shift(pdp: &[f32], noise: f32) -> Option<i32> {
