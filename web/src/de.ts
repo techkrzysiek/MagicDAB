@@ -57,6 +57,7 @@ export const de = {
   tunnel_state_connecting: "Verbindung wird hergestellt …",
   tunnel_state_online: "Online",
   tunnel_state_error: "Fehler",
+  tunnel_blocked_hint: "Windows oder ein Virenscanner blockiert frpc.exe, das Programm des Tunnels (Virenscanner führen es als Hacktool, weil es einen Tunnel öffnet). Erlauben Sie es unter Windows-Sicherheit > Viren- & Bedrohungsschutz > Schutzverlauf („Auf Gerät zulassen“) oder in Ihrem Virenscanner und schalten Sie den Tunnel dann aus und wieder ein. Die Datei: {path}",
   map_title: "Öffentliche Serverkarte",
   map_enable: "Diesen Server auf der Karte anzeigen",
   map_public_url: "Öffentliche Adresse dieses Servers",

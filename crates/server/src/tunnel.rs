@@ -85,6 +85,18 @@ pub struct TunnelStatus {
     pub state: String,
     pub message: String,
     pub url: Option<String>,
+    /// frpc that Windows or an antivirus does not let run (blocked): where it
+    /// is, for the page to tell how to allow it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<String>,
+}
+
+/// Windows (Defender) or an antivirus stops frpc: virus scanners know the frp
+/// releases as a "hack tool" (they open a tunnel). Starting it is refused
+/// (os error 5), or its file is gone (quarantined) or refused as a virus
+/// (os error 225) the moment it is written.
+fn blocked_error(e: &std::io::Error) -> bool {
+    cfg!(windows) && (matches!(e.raw_os_error(), Some(5) | Some(225)) || e.kind() == std::io::ErrorKind::NotFound)
 }
 
 /// The frpc running now, with the tunnel generation that started it: one per
@@ -138,14 +150,16 @@ impl Tunnel {
         let Some((cfg, port)) = wanted else { return };
         let gen = self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         let (data_dir, status, generation) = (self.data_dir.clone(), self.status.clone(), self.generation.clone());
-        *status.lock() = TunnelStatus { state: "starting".into(), message: String::new(), url: cfg.url() };
+        *status.lock() = TunnelStatus { state: "starting".into(), message: String::new(), url: cfg.url(), blocked: None };
         let _ = std::thread::Builder::new().name("tunnel".into()).spawn(move || {
             let current = || generation.load(std::sync::atomic::Ordering::SeqCst) == gen;
-            let set = |state: &str, message: String| {
+            let set_blocked = |state: &str, message: String, blocked: Option<String>| {
                 if current() {
-                    *status.lock() = TunnelStatus { state: state.into(), message, url: cfg.url() };
+                    *status.lock() = TunnelStatus { state: state.into(), message, url: cfg.url(), blocked };
                 }
             };
+            let set = |state: &str, message: String| set_blocked(state, message, None);
+            let bin = || data_dir.join("bin").join(exe_name()).display().to_string();
             let frpc = match find_frpc(&data_dir) {
                 // the frpc this program downloaded before, of another release:
                 // the one of FRP_VERSION replaces it (it runs on with the old
@@ -164,7 +178,9 @@ impl Tunnel {
                         Ok(p) => p,
                         Err(e) => {
                             log::error!("tunnel: cannot get frpc: {e}");
-                            set("error", format!("frpc: {e}"));
+                            // (refused while it is written: os error 5 or 225)
+                            let blocked = cfg!(windows) && (e.contains("os error 5)") || e.contains("os error 225)"));
+                            set_blocked("error", format!("frpc: {e}"), blocked.then(bin));
                             return;
                         }
                     }
@@ -198,7 +214,14 @@ impl Tunnel {
                     Ok(c) => c,
                     Err(e) => {
                         log::error!("tunnel: cannot start {}: {e}", frpc.display());
-                        set("error", format!("frpc: {e}"));
+                        let blocked = blocked_error(&e).then(|| frpc.display().to_string());
+                        if blocked.is_some() {
+                            log::warn!(
+                                "tunnel: Windows or an antivirus blocks {}: allow it there (Windows Security > Protection history)",
+                                frpc.display()
+                            );
+                        }
+                        set_blocked("error", format!("frpc: {e}"), blocked);
                         return;
                     }
                 };

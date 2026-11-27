@@ -1166,6 +1166,7 @@ function Tunnel() {
                 {url}
               </a>
             )}
+            {state === 'error' && status?.blocked && <span className="hint">{t('tunnel_blocked_hint').replace('{path}', status.blocked)}</span>}
           </div>
         </Row>
         {/* (the port of the tunnel server, not of this receiver: 3222 there only times out) */}

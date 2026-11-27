@@ -59,6 +59,7 @@ export const nl = {
   tunnel_state_connecting: "verbinden…",
   tunnel_state_online: "online",
   tunnel_state_error: "fout",
+  tunnel_blocked_hint: "Windows of een virusscanner blokkeert frpc.exe, het programma van de tunnel (virusscanners zien het als hacktool omdat het een tunnel opent). Sta het toe via Windows-beveiliging > Virus- en bedreigingsbeveiliging > Beveiligingsgeschiedenis (‘Toestaan op apparaat’) of in je virusscanner, en zet de tunnel daarna uit en weer aan. Het bestand: {path}",
   map_title: "Openbare serverkaart",
   map_enable: "Deze server op de kaart zetten",
   map_public_url: "Openbaar adres van deze server",

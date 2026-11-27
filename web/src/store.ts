@@ -274,7 +274,8 @@ export interface Store {
   dataProgress: DataProgress[]
   uiUpdate: boolean
   loginOpen: boolean
-  tunnelStatus: { state: string; message: string; url: string | null } | null
+  /** blocked: the path of frpc that Windows or an antivirus does not let run */
+  tunnelStatus: { state: string; message: string; url: string | null; blocked?: string } | null
   serverMapStatus: ServerMapStatus | null
   loginError: boolean
   audioUnderruns: number
