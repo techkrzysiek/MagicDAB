@@ -23,6 +23,7 @@ listeners in the browser, each on the station of their choice.
   <a href="https://github.com/techkrzysiek/MagicDAB/releases/latest"><img alt="Download for Linux (x64, arm64)" src="https://img.shields.io/badge/Linux_x64,_arm64-download-FCC624?style=for-the-badge&logo=linux&logoColor=black"></a>
   <a href="https://github.com/techkrzysiek/MagicDAB/releases/latest"><img alt="Download for Android" src="https://img.shields.io/badge/Android-download-3DDC84?style=for-the-badge&logo=android&logoColor=white"></a>
   <a href="https://github.com/techkrzysiek/MagicDAB/pkgs/container/magicdab"><img alt="Docker image" src="https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=for-the-badge&logo=docker&logoColor=white"></a>
+  <a href="https://dab.dxserver.eu/discord"><img alt="Join the MagicDAB Discord" src="https://img.shields.io/badge/Discord-join-5865F2?style=for-the-badge&logo=discord&logoColor=white"></a>
 </p>
 
 ![Listening: the station with its slideshow and text, the stations of the multiplex and of all multiplexes](docs/screenshots/listen.png)
@@ -30,6 +31,10 @@ listeners in the browser, each on the station of their choice.
 | Ensemble | Spectrum |
 |---|---|
 | ![Ensemble: the multiplex, its capacity units and services](docs/screenshots/ensemble.png) | ![Spectrum, SNR, constellation, impulse response](docs/screenshots/spectrum.png) |
+
+## Community
+
+Help, ideas, tunnels for your server and the multiplex changes heard by MagicDAB servers: [the MagicDAB Discord](https://dab.dxserver.eu/discord). Bugs go to [GitHub issues](https://github.com/techkrzysiek/MagicDAB/issues).
 
 ## Star History
 
