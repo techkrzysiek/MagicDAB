@@ -1,6 +1,7 @@
 import { useStore, type Lang } from './store'
 import { de } from './de'
 import { nl } from './nl'
+import { fr } from './fr'
 
 const en = {
   nav_service: 'Listen',
@@ -2119,12 +2120,13 @@ const pl: Record<Key, string> = {
   stats_threads_rest: 'Pozostałe wątki razem',
 }
 
-const dicts = { en, pl, de, nl }
+const dicts = { en, pl, de, nl, fr }
 
 /** The languages of the interface, by their own names (the choices in Settings and the setup). */
 export const LANGUAGES: [Lang, string][] = [
   ['de', 'Deutsch'],
   ['en', 'English'],
+  ['fr', 'Français'],
   ['nl', 'Nederlands'],
   ['pl', 'Polski'],
 ]
@@ -2145,6 +2147,7 @@ const weekdays = {
   pl: ['niedziela', 'poniedziałek', 'wtorek', 'środa', 'czwartek', 'piątek', 'sobota'],
   de: ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'],
   nl: ['zondag', 'maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag'],
+  fr: ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'],
 }
 
 export function weekday(lang: Lang, d: number) {

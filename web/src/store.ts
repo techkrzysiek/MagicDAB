@@ -39,7 +39,7 @@ export interface ChatState {
   unread: number
 }
 export type Theme = 'auto' | 'light' | 'dark'
-export type Lang = 'pl' | 'en' | 'de' | 'nl'
+export type Lang = 'pl' | 'en' | 'de' | 'nl' | 'fr'
 
 export interface SlideProgress {
   bytes: number
@@ -151,7 +151,7 @@ export function isLocal() {
 }
 
 const browserLang = (navigator.language || 'en').toLowerCase()
-const defaultLang: Lang = (['pl', 'de', 'nl'] as Lang[]).find((l) => browserLang.startsWith(l)) ?? 'en'
+const defaultLang: Lang = (['pl', 'de', 'nl', 'fr'] as Lang[]).find((l) => browserLang.startsWith(l)) ?? 'en'
 
 /** Listing on the public server map (admins). */
 export interface ServerMapStatus {

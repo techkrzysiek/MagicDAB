@@ -226,7 +226,7 @@ impl Radio {
             Some(Value::String(v)) if !v.trim().is_empty() => self.notice(client, "error", "webhook_invalid"),
             _ => {}
         }
-        if let Some(v) = s.get("discordLang").and_then(|v| v.as_str()).filter(|v| matches!(*v, "pl" | "en" | "de" | "nl")) {
+        if let Some(v) = s.get("discordLang").and_then(|v| v.as_str()).filter(|v| matches!(*v, "pl" | "en" | "de" | "nl" | "fr")) {
             self.settings.discord_lang = Some(v.to_string());
         }
         if let Some(v) = s.get("tunnel") {

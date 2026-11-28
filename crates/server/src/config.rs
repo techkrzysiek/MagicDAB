@@ -166,7 +166,7 @@ pub struct Settings {
     pub filter_narrow_default: bool,
     /// Discord webhook URL for ensemble change notifications.
     pub discord_webhook: String,
-    /// Language of those notifications ("pl", "en", "de", "nl"); none:
+    /// Language of those notifications ("pl", "en", "de", "nl", "fr"); none:
     /// English (the interface sets its own with a new webhook).
     pub discord_lang: Option<String>,
     /// Channels fed by ETI / EDI streams instead of the tuner.
