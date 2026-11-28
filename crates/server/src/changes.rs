@@ -1048,6 +1048,39 @@ pub const NL: Words = Words {
     recording: "opname",
 };
 
+pub const FR: Words = Words {
+    open: "« ",
+    close: " »",
+    new_mux: "🆕 nouveau multiplex",
+    eid: "🆔 EId du multiplex",
+    mux_label: "✏️ nom du multiplex",
+    added: "➕ nouveau",
+    removed: "➖ disparu",
+    label: "nom",
+    short: "nom court",
+    apps: "applications",
+    si_short: "SI nom court",
+    si_name: "SI nom",
+    si_long: "SI nom long",
+    si_no_desc: "SI sans description",
+    si_desc: "SI description",
+    si_genres: "SI genres",
+    si_links: "SI liens",
+    si_logos: "SI logo",
+    si_new_logo: "SI nouveau logo",
+    test: "🔔 test du webhook, ça fonctionne",
+    snr_mean: "SNR moy.",
+    over: "sur",
+    then_lost: "puis perdu",
+    then_retuned: "puis changement de canal",
+    fic_errors: "erreurs FIC",
+    tii_none: "rien reçu",
+    not_in_db: "absent de la base",
+    and_more: "et",
+    more: "de plus",
+    recording: "enregistrement",
+};
+
 impl Words {
     /// By the language code of the settings; English when none is chosen.
     pub fn of(lang: Option<&str>) -> &'static Words {
@@ -1055,6 +1088,7 @@ impl Words {
             Some("pl") => &PL,
             Some("de") => &DE,
             Some("nl") => &NL,
+            Some("fr") => &FR,
             _ => &EN,
         }
     }
@@ -1839,6 +1873,7 @@ mod tests {
         assert_eq!(discord_lines(&ev, Words::of(Some("en"))), vec!["🔔 webhook test, it works", "🔄 **Radio A**: name “A” → “B”"]);
         assert_eq!(discord_lines(&ev, Words::of(Some("de")))[1], "🔄 **Radio A**: Name „A“ → „B“");
         assert_eq!(discord_lines(&ev, Words::of(Some("nl")))[1], "🔄 **Radio A**: naam ‘A’ → ‘B’");
+        assert_eq!(discord_lines(&ev, Words::of(Some("fr")))[1], "🔄 **Radio A**: nom « A » → « B »");
         assert_eq!(discord_lines(&ev, Words::of(Some("pl")))[1], "🔄 **Radio A**: nazwa „A” → „B”");
         // (none chosen: English)
         assert_eq!(discord_lines(&ev, Words::of(None))[1], "🔄 **Radio A**: name “A” → “B”");

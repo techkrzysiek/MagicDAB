@@ -6,13 +6,15 @@ import type { StatsPoint, StatsReceiver } from '../types'
 
 type Tab = 'overview' | 'advanced'
 
-/** Numbers in the language of the interface (a decimal comma in Polish, German and Dutch). */
+/** Numbers in the language of the interface (a decimal comma in Polish, German, Dutch and French). */
 function useFormat() {
   const lang = useStore((s) => s.lang)
-  const locale = { pl: 'pl-PL', de: 'de-DE', nl: 'nl-NL', en: 'en-GB' }[lang] ?? 'en-GB'
+  const locale = { pl: 'pl-PL', de: 'de-DE', nl: 'nl-NL', fr: 'fr-FR', en: 'en-GB' }[lang] ?? 'en-GB'
   const num = (v: number, digits = 1) => v.toLocaleString(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits })
+  // (volumes in bytes: octets in French; the rates below stay in bits)
+  const [B, kB, MB, GB] = lang === 'fr' ? ['o', 'ko', 'Mo', 'Go'] : ['B', 'kB', 'MB', 'GB']
   const bytes = (n: number) =>
-    n >= 1e9 ? `${num(n / 1e9)} GB` : n >= 1e6 ? `${num(n / 1e6)} MB` : n >= 1e3 ? `${num(n / 1e3, 0)} kB` : `${num(n, 0)} B`
+    n >= 1e9 ? `${num(n / 1e9)} ${GB}` : n >= 1e6 ? `${num(n / 1e6)} ${MB}` : n >= 1e3 ? `${num(n / 1e3, 0)} ${kB}` : `${num(n, 0)} ${B}`
   // (networks are counted in bits)
   const rate = (bytesPerSecond: number) => {
     const b = bytesPerSecond * 8
